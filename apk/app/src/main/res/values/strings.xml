@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Matrix Companion</string>
+    <string name="accessibility_service_label">Matrix Companion (无障碍)</string>
+    <string name="status_idle">未启动</string>
+    <string name="status_running">运行中 · 端口 8765</string>
+    <string name="status_pairing">配对中…</string>
+    <string name="status_paired">已配对</string>
+    <string name="enable_accessibility">开启无障碍服务</string>
+    <string name="pair_code">配对码（主控给出）</string>
+    <string name="pair">配对</string>
+    <string name="start_service">启动主控</string>
+    <string name="stop_service">停止主控</string>
+    <string name="notif_channel">matrix_companion_main</string>
+    <string name="notif_title">Matrix Companion</string>
+    <string name="notif_text">设备代理正在运行</string>
+</resources>

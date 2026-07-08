@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# Node / Tauri
+node_modules/
+target/
+*.node
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+*.local
+
+# Secrets / Local config
+.env
+.env.local
+*.pem
+*.key
+config.local.yaml
+secrets/
+
+# Local matrix data
+.matrix/
+*.log
+
+# Build artifacts
+*.app
+*.exe
+*.dmg
+*.deb
+*.apk
+*.aab
+
+# Backups
+*.bak
+*.sql.gz
+*.dump
+
+# OS
+Thumbs.db
+
+# Docker
+.docker-data/
+
+# CodeGraph（本地索引，不入库）
+.codegraph/
+
+# Tauri / 前端构建产物
+shell/dist/

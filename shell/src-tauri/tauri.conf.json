@@ -1,0 +1,71 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Matrix Master",
+  "version": "0.4.0",
+  "identifier": "com.matrix.master",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Matrix Master",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 1024,
+        "minHeight": 768,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "transparent": false,
+        "alwaysOnTop": false,
+        "skipTaskbar": false,
+        "center": true,
+        "label": "main"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' http://localhost:8666 ws://localhost:1420; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' http://localhost:8666 ws://localhost:1420 ipc: http://ipc.localhost",
+      "assetProtocol": {
+        "enable": true,
+        "scope": []
+      },
+      "freezePrototype": true
+    },
+    "trayIcon": {
+      "id": "main-tray",
+      "iconPath": "icons/tray.png",
+      "iconAsTemplate": true,
+      "tooltip": "Matrix Master"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "msi", "deb", "appimage"],
+    "category": "Productivity",
+    "shortDescription": "Matrix Master - AI-native self-media matrix controller",
+    "longDescription": "AI-native self-media matrix controller. Manages multiple physical Android phones via Tailscale mesh and runs an autonomous content operation agent.",
+    "copyright": "Copyright (c) 2026 Matrix Master",
+    "publisher": "Matrix Master Team",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [],
+    "externalBin": [],
+    "python": {
+      "enabled": false
+    }
+  },
+  "plugins": {
+    "notification": {
+      "all": true
+    }
+  }
+}

@@ -1,0 +1,101 @@
+[project]
+name = "matrix-master"
+version = "0.4.0"
+description = "AI-Native 自媒体矩阵主控系统 - 后端"
+authors = [
+    {name = "Matrix Team"}
+]
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+
+dependencies = [
+    # Web 框架
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    "pydantic>=2.6.0",
+    "pydantic-settings>=2.2.0",
+
+    # 数据库
+    "sqlalchemy[asyncio]>=2.0.0",
+    "asyncpg>=0.29.0",
+    "alembic>=1.13.0",
+    "pgvector>=0.2.0",
+
+    # LLM / Agent
+    "langgraph>=0.0.30",
+    "langchain>=0.1.0",
+    "langchain-anthropic>=0.1.0",
+    "langchain-openai>=0.0.5",
+    "anthropic>=0.20.0",
+    "openai>=1.10.0",
+    "tiktoken>=0.5.0",
+
+    # 调度 / 异步
+    "asyncio-throttle>=1.0.2",
+    "tenacity>=8.2.0",
+
+    # 监控
+    "opentelemetry-api>=1.24.0",
+    "opentelemetry-sdk>=1.24.0",
+    "opentelemetry-instrumentation-fastapi>=0.45b0",
+    "prometheus-client>=0.20.0",
+
+    # 工具
+    "httpx>=0.27.0",
+    "structlog>=24.1.0",
+    "python-multipart>=0.0.9",
+    "tenacity>=8.2.0",
+    "pyyaml>=6.0.1",
+    "keyring>=24.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "pytest-mock>=3.12.0",
+    "httpx>=0.27.0",  # for TestClient
+    "ruff>=0.3.0",
+    "mypy>=1.8.0",
+    "freezegun>=1.4.0",
+    "respx>=0.21.0",
+]
+
+[project.scripts]
+matrix-dev = "matrix.dev:main"
+matrix-api = "matrix.api.app:main"
+
+[tool.poetry]
+name = "matrix-master"
+version = "0.4.0"
+description = "AI-Native 自媒体矩阵主控系统 - 后端"
+authors = ["Matrix Team"]
+license = "MIT"
+readme = "README.md"
+packages = [{include = "matrix", from = "backend"}]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "RET", "SIM"]
+ignore = ["E501"]  # line-too-long handled by formatter
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

@@ -1,0 +1,545 @@
+"""LLM 客户端层测试。全部使用 mock，不发真实网络请求。"""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from matrix.llm import (
+    AnthropicClient,
+    AuthError,
+    CachedBlock,
+    CachedMessages,
+    CompletionCache,
+    CompletionResult,
+    EmbeddingClient,
+    InMemoryUsageTracker,
+    InvalidRequestError,
+    LLMError,
+    LLMTimeoutError,
+    OpenAIClient,
+    RateLimitError,
+    UsageRecord,
+    calculate_cost_usd,
+    get_client,
+    reset_client_cache,
+    resolve_model,
+    retry_with_backoff,
+)
+from matrix.llm.errors import TimeoutError as ErrorsTimeout
+from matrix.llm.prompt_caching import openai_prompt_caching_enabled
+
+
+# ---------------------------------------------------------------------------
+# 辅助：构造 SDK 风格的 mock response
+# ---------------------------------------------------------------------------
+
+
+def _make_anthropic_response(text: str = "Hello", *, input_tokens: int = 10, output_tokens: int = 5):
+    block = SimpleNamespace(text=text)
+    usage = SimpleNamespace(input_tokens=input_tokens, output_tokens=output_tokens)
+    return SimpleNamespace(
+        content=[block],
+        usage=usage,
+        stop_reason="end_turn",
+        model="claude-sonnet-4-5",
+    )
+
+
+def _make_openai_response(text: str = "Hello", *, prompt_tokens: int = 10, completion_tokens: int = 5):
+    msg = SimpleNamespace(content=text)
+    choice = SimpleNamespace(message=msg, finish_reason="stop")
+    usage = SimpleNamespace(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
+    return SimpleNamespace(
+        choices=[choice],
+        usage=usage,
+        model="gpt-5",
+    )
+
+
+def _make_openai_embedding_response(vectors: list[list[float]]):
+    data = [SimpleNamespace(index=i, embedding=v) for i, v in enumerate(vectors)]
+    return SimpleNamespace(data=data, model="text-embedding-3-small", usage=SimpleNamespace(prompt_tokens=0, total_tokens=0))
+
+
+# ---------------------------------------------------------------------------
+# errors
+# ---------------------------------------------------------------------------
+
+
+class TestErrors:
+    def test_llm_error_carries_provider_and_model(self):
+        exc = LLMError("boom", provider="openai", model="gpt-5")
+        assert exc.provider == "openai"
+        assert exc.model == "gpt-5"
+        assert "boom" in str(exc)
+
+    def test_specialized_errors_inherit(self):
+        assert issubclass(RateLimitError, LLMError)
+        assert issubclass(LLMTimeoutError, LLMError)
+        assert issubclass(AuthError, LLMError)
+        assert issubclass(InvalidRequestError, LLMError)
+
+    def test_timeout_alias(self):
+        assert ErrorsTimeout is LLMTimeoutError
+
+
+# ---------------------------------------------------------------------------
+# 模型别名 & 定价
+# ---------------------------------------------------------------------------
+
+
+class TestModelResolution:
+    @pytest.mark.parametrize(
+        "alias,expected",
+        [
+            ("sonnet", "claude-sonnet-4-5"),
+            ("haiku", "claude-haiku-4-5"),
+            ("gpt5", "gpt-5"),
+            ("mini", "gpt-5-mini"),
+        ],
+    )
+    def test_alias_resolves(self, alias, expected):
+        assert resolve_model(alias) == expected
+
+    def test_unknown_passthrough(self):
+        assert resolve_model("custom-model") == "custom-model"
+
+
+class TestCost:
+    def test_sonnet_4_5(self):
+        # 1M input + 1M output => 3 + 15 = 18 USD
+        cost = calculate_cost_usd("claude-sonnet-4-5", 1_000_000, 1_000_000)
+        assert cost == pytest.approx(18.0)
+
+    def test_haiku_4_5(self):
+        # 1M input + 1M output => 0.8 + 4 = 4.8 USD
+        cost = calculate_cost_usd("claude-haiku-4-5", 1_000_000, 1_000_000)
+        assert cost == pytest.approx(4.8)
+
+    def test_gpt5(self):
+        # 1M input + 1M output => 2.5 + 10 = 12.5 USD
+        cost = calculate_cost_usd("gpt-5", 1_000_000, 1_000_000)
+        assert cost == pytest.approx(12.5)
+
+    def test_gpt5_mini(self):
+        # 1M input + 1M output => 0.4 + 1.6 = 2.0 USD
+        cost = calculate_cost_usd("gpt-5-mini", 1_000_000, 1_000_000)
+        assert cost == pytest.approx(2.0)
+
+    def test_embedding_input_only(self):
+        # text-embedding-3-small: 0.02 / M input, 0 output
+        cost = calculate_cost_usd("text-embedding-3-small", 1_000_000, 0)
+        assert cost == pytest.approx(0.02)
+
+    def test_unknown_model_zero(self):
+        assert calculate_cost_usd("unknown-model", 1000, 1000) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# 缓存
+# ---------------------------------------------------------------------------
+
+
+class TestCompletionCache:
+    async def test_set_and_get(self):
+        cache = CompletionCache()
+        result = CompletionResult(
+            text="hi", model="m", prompt_tokens=1, completion_tokens=1,
+            latency_ms=10, provider="p",
+        )
+        key = cache.make_key("hello", model="m", max_tokens=10, temperature=0.5)
+        assert await cache.get(key) is None
+        await cache.set(key, result)
+        got = await cache.get(key)
+        assert got is result
+
+    async def test_key_includes_all_params(self):
+        cache = CompletionCache()
+        k1 = cache.make_key("p", model="m", max_tokens=10, temperature=0.5)
+        k2 = cache.make_key("p", model="m", max_tokens=20, temperature=0.5)
+        k3 = cache.make_key("p", model="m", max_tokens=10, temperature=0.7)
+        k4 = cache.make_key("p", model="m", max_tokens=10, temperature=0.5, system="sys")
+        assert len({k1, k2, k3, k4}) == 4
+
+    async def test_lru_eviction(self):
+        cache = CompletionCache(max_size=2)
+        r1 = CompletionResult(text="1", model="m", prompt_tokens=1, completion_tokens=1, latency_ms=1, provider="p")
+        r2 = CompletionResult(text="2", model="m", prompt_tokens=1, completion_tokens=1, latency_ms=1, provider="p")
+        r3 = CompletionResult(text="3", model="m", prompt_tokens=1, completion_tokens=1, latency_ms=1, provider="p")
+        await cache.set("k1", r1)
+        await cache.set("k2", r2)
+        await cache.set("k3", r3)
+        assert await cache.get("k1") is None  # 被淘汰
+        assert await cache.get("k2") is r2
+        assert await cache.get("k3") is r3
+
+    async def test_ttl_expiry(self):
+        cache = CompletionCache(ttl_seconds=0.05)
+        r = CompletionResult(text="x", model="m", prompt_tokens=1, completion_tokens=1, latency_ms=1, provider="p")
+        await cache.set("k", r)
+        assert await cache.get("k") is r
+        await asyncio.sleep(0.1)
+        assert await cache.get("k") is None
+
+    async def test_clear(self):
+        cache = CompletionCache()
+        r = CompletionResult(text="x", model="m", prompt_tokens=1, completion_tokens=1, latency_ms=1, provider="p")
+        await cache.set("k", r)
+        await cache.clear()
+        assert await cache.get("k") is None
+
+
+# ---------------------------------------------------------------------------
+# 重试
+# ---------------------------------------------------------------------------
+
+
+class TestRetry:
+    async def test_success_first_try(self):
+        calls = 0
+
+        @retry_with_backoff(max_attempts=3, backoff=(0.001, 0.001, 0.001))
+        async def fn():
+            nonlocal calls
+            calls += 1
+            return "ok"
+
+        assert await fn() == "ok"
+        assert calls == 1
+
+    async def test_retry_on_retryable_then_success(self):
+        calls = 0
+
+        @retry_with_backoff(max_attempts=3, backoff=(0.001, 0.001, 0.001))
+        async def fn():
+            nonlocal calls
+            calls += 1
+            if calls < 3:
+                raise LLMError("transient")
+            return "ok"
+
+        assert await fn() == "ok"
+        assert calls == 3
+
+    async def test_retry_exhausted_raises_last(self):
+        calls = 0
+
+        @retry_with_backoff(max_attempts=3, backoff=(0.001, 0.001, 0.001))
+        async def fn():
+            nonlocal calls
+            calls += 1
+            raise LLMError(f"fail-{calls}")
+
+        with pytest.raises(LLMError) as ei:
+            await fn()
+        assert "fail-3" in str(ei.value)
+        assert calls == 3
+
+    async def test_non_retryable_raises_immediately(self):
+        calls = 0
+
+        @retry_with_backoff(max_attempts=3, backoff=(0.001, 0.001, 0.001), retry_on=(RateLimitError,))
+        async def fn():
+            nonlocal calls
+            calls += 1
+            raise AuthError("nope")
+
+        with pytest.raises(AuthError):
+            await fn()
+        assert calls == 1
+
+    async def test_respects_retry_after_header(self):
+        seen_sleeps: list[float] = []
+
+        real_sleep = asyncio.sleep
+
+        async def fake_sleep(d):
+            seen_sleeps.append(d)
+            await real_sleep(0)
+
+        exc = RateLimitError("rate")
+        # 构造一个带 response.headers 的对象
+        exc.response = SimpleNamespace(headers={"retry-after": "0.5"})
+
+        with patch("matrix.llm.retry.asyncio.sleep", side_effect=fake_sleep):
+
+            @retry_with_backoff(max_attempts=3, backoff=(0.001, 0.001, 0.001), jitter=0)
+            async def fn():
+                raise exc
+
+            with pytest.raises(RateLimitError):
+                await fn()
+
+        # 第一次退避应该 >= retry-after
+        assert any(s >= 0.5 for s in seen_sleeps[:2])
+
+
+# ---------------------------------------------------------------------------
+# UsageTracker
+# ---------------------------------------------------------------------------
+
+
+class TestUsageTracker:
+    def test_record_and_summary(self):
+        tracker = InMemoryUsageTracker()
+        tracker.record(UsageRecord(
+            model="claude-sonnet-4-5", call_type="generation",
+            prompt_tokens=1000, completion_tokens=200,
+            cost_usd=0.006, latency_ms=500, run_id="r1",
+        ))
+        tracker.record(UsageRecord(
+            model="claude-haiku-4-5", call_type="decision",
+            prompt_tokens=500, completion_tokens=100,
+            cost_usd=0.0008, latency_ms=200, run_id="r1",
+        ))
+        s = tracker.summary()
+        assert s["total_calls"] == 2
+        assert s["total_prompt_tokens"] == 1500
+        assert s["total_completion_tokens"] == 300
+        assert s["total_cost_usd"] == pytest.approx(0.0068)
+        assert "claude-sonnet-4-5" in s["by_model"]
+        assert "generation" in s["by_call_type"]
+
+    def test_summary_since_filter(self):
+        tracker = InMemoryUsageTracker()
+        old = UsageRecord(
+            model="m", call_type="t", prompt_tokens=1, completion_tokens=1,
+            cost_usd=0.0, latency_ms=1,
+            timestamp=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        )
+        new = UsageRecord(
+            model="m", call_type="t", prompt_tokens=10, completion_tokens=5,
+            cost_usd=0.0, latency_ms=1,
+        )
+        tracker.record(old)
+        tracker.record(new)
+        s = tracker.summary(since=datetime(2025, 1, 1, tzinfo=timezone.utc))
+        assert s["total_calls"] == 1
+        assert s["total_prompt_tokens"] == 10
+
+
+# ---------------------------------------------------------------------------
+# AnthropicClient
+# ---------------------------------------------------------------------------
+
+
+class TestAnthropicClient:
+    async def test_complete_parses_response(self):
+        client = AnthropicClient(api_key="test")
+        mock_response = _make_anthropic_response("Hello world", input_tokens=20, output_tokens=8)
+        client._client.messages.create = AsyncMock(return_value=mock_response)
+
+        result = await client.complete(
+            "Hi", model="sonnet", max_tokens=100, temperature=0.7,
+        )
+
+        assert result.text == "Hello world"
+        assert result.model == "claude-sonnet-4-5"
+        assert result.prompt_tokens == 20
+        assert result.completion_tokens == 8
+        assert result.provider == "anthropic"
+        assert result.latency_ms >= 0
+        assert result.stop_reason == "end_turn"
+
+        # 验证 SDK 调用参数
+        call = client._client.messages.create.await_args
+        assert call.kwargs["model"] == "claude-sonnet-4-5"
+        assert call.kwargs["max_tokens"] == 100
+        assert call.kwargs["messages"] == [{"role": "user", "content": "Hi"}]
+
+    async def test_complete_passes_system(self):
+        client = AnthropicClient(api_key="test")
+        client._client.messages.create = AsyncMock(return_value=_make_anthropic_response())
+
+        await client.complete("p", model="sonnet", system="be brief")
+        call = client._client.messages.create.await_args
+        assert call.kwargs["system"] == "be brief"
+
+    async def test_complete_maps_timeout(self):
+        client = AnthropicClient(api_key="test")
+
+        # 模拟 anthropic APITimeoutError
+        from anthropic import APITimeoutError
+
+        client._client.messages.create = AsyncMock(side_effect=APITimeoutError(request=MagicMock()))
+
+        with pytest.raises(LLMTimeoutError):
+            await client.complete("p", model="sonnet", timeout=0.01)
+
+    async def test_complete_maps_rate_limit(self):
+        client = AnthropicClient(api_key="test")
+        from anthropic import RateLimitError as AnthropicRL
+
+        err = AnthropicRL(
+            message="rate",
+            response=MagicMock(headers={"retry-after": "0.5"}),
+            body=None,
+        )
+        client._client.messages.create = AsyncMock(side_effect=err)
+        with pytest.raises(RateLimitError):
+            await client.complete("p", model="sonnet")
+
+    async def test_complete_maps_auth_error(self):
+        client = AnthropicClient(api_key="test")
+        from anthropic import AuthenticationError
+
+        err = AuthenticationError(message="bad key", response=MagicMock(), body=None)
+        client._client.messages.create = AsyncMock(side_effect=err)
+        with pytest.raises(AuthError):
+            await client.complete("p", model="sonnet")
+
+
+# ---------------------------------------------------------------------------
+# OpenAIClient
+# ---------------------------------------------------------------------------
+
+
+class TestOpenAIClient:
+    async def test_complete_parses_response(self):
+        client = OpenAIClient(api_key="test")
+        client._client.chat.completions.create = AsyncMock(
+            return_value=_make_openai_response("Hello", prompt_tokens=15, completion_tokens=7)
+        )
+
+        result = await client.complete("Hi", model="gpt-5", max_tokens=100, temperature=0.5)
+
+        assert result.text == "Hello"
+        assert result.model == "gpt-5"
+        assert result.prompt_tokens == 15
+        assert result.completion_tokens == 7
+        assert result.provider == "openai"
+        assert result.stop_reason == "stop"
+
+    async def test_complete_with_system(self):
+        client = OpenAIClient(api_key="test")
+        client._client.chat.completions.create = AsyncMock(
+            return_value=_make_openai_response()
+        )
+        await client.complete("p", model="gpt-5", system="be brief")
+        call = client._client.chat.completions.create.await_args
+        msgs = call.kwargs["messages"]
+        assert msgs[0] == {"role": "system", "content": "be brief"}
+        assert msgs[1] == {"role": "user", "content": "p"}
+
+    async def test_complete_maps_bad_request(self):
+        client = OpenAIClient(api_key="test")
+        from openai import BadRequestError
+
+        err = BadRequestError(message="bad", response=MagicMock(), body=None)
+        client._client.chat.completions.create = AsyncMock(side_effect=err)
+        with pytest.raises(InvalidRequestError):
+            await client.complete("p", model="gpt-5")
+
+
+# ---------------------------------------------------------------------------
+# EmbeddingClient
+# ---------------------------------------------------------------------------
+
+
+class TestEmbeddingClient:
+    async def test_embed_returns_vectors(self):
+        client = EmbeddingClient(api_key="test")
+        vectors = [[0.1] * 1536, [0.2] * 1536]
+        client._client.embeddings.create = AsyncMock(
+            return_value=_make_openai_embedding_response(vectors)
+        )
+
+        result = await client.embed(["hello", "world"])
+        assert len(result) == 2
+        assert len(result[0]) == 1536
+        assert result[0] == vectors[0]
+        assert result[1] == vectors[1]
+
+    async def test_embed_empty_returns_empty(self):
+        client = EmbeddingClient(api_key="test")
+        result = await client.embed([])
+        assert result == []
+
+    async def test_embed_unsupported_model(self):
+        client = EmbeddingClient(api_key="test")
+        with pytest.raises(LLMError):
+            await client.embed(["x"], model="gpt-5")
+
+    def test_dimensions_lookup(self):
+        from matrix.llm.embeddings import get_embedding_dimensions
+        assert get_embedding_dimensions("text-embedding-3-small") == 1536
+        assert get_embedding_dimensions("text-embedding-3-large") == 3072
+        with pytest.raises(LLMError):
+            get_embedding_dimensions("nope")
+
+
+# ---------------------------------------------------------------------------
+# Router
+# ---------------------------------------------------------------------------
+
+
+class TestRouter:
+    def setup_method(self):
+        reset_client_cache()
+
+    def teardown_method(self):
+        reset_client_cache()
+
+    def test_anthropic_alias(self):
+        with patch("matrix.llm.router.AnthropicClient") as mock_cls:
+            mock_cls.return_value = MagicMock()
+            client = get_client("sonnet")
+            mock_cls.assert_called_once()
+            assert client is mock_cls.return_value
+
+    def test_openai_model(self):
+        with patch("matrix.llm.router.OpenAIClient") as mock_cls:
+            mock_cls.return_value = MagicMock()
+            client = get_client("gpt-5")
+            mock_cls.assert_called_once()
+            assert client is mock_cls.return_value
+
+    def test_unknown_model_raises(self):
+        with pytest.raises(ValueError):
+            get_client("mystery-model")
+
+    def test_caches_instance(self):
+        with patch("matrix.llm.router.AnthropicClient") as mock_cls:
+            mock_cls.return_value = MagicMock()
+            c1 = get_client("sonnet")
+            c2 = get_client("claude-sonnet-4-5")
+            assert c1 is c2
+            assert mock_cls.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Prompt Caching helpers
+# ---------------------------------------------------------------------------
+
+
+class TestPromptCaching:
+    def test_cached_block_to_anthropic(self):
+        block = CachedBlock(text="hello", cache_type="ephemeral")
+        payload = block.to_anthropic()
+        assert payload == {
+            "type": "text",
+            "text": "hello",
+            "cache_control": {"type": "ephemeral"},
+        }
+
+    def test_cached_messages_build_with_system(self):
+        msgs = CachedMessages(system="persona")
+        msgs.add_user("hi", cache=True)
+        sys_payload, messages = msgs.build()
+        assert sys_payload[0]["cache_control"] == {"type": "ephemeral"}
+        assert messages[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_cached_messages_no_system_cache(self):
+        msgs = CachedMessages(system="x", system_cache=False)
+        msgs.add_user("hi")
+        sys_payload, _ = msgs.build()
+        assert sys_payload == "x"
+
+    def test_openai_cache_threshold(self):
+        assert openai_prompt_caching_enabled("a" * 1024) is True
+        assert openai_prompt_caching_enabled("short") is False

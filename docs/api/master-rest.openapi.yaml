@@ -1,0 +1,696 @@
+openapi: 3.1.0
+info:
+  title: 主控内部 REST API
+  version: 0.1.0
+  description: |
+    主控 Python 后端暴露的内部 REST API，由 Tauri shell 调用。
+
+    注意：此 API 不对外暴露，仅本地监听 `localhost:8666`。
+    鉴权：Tauri 通过 Unix socket 或共享 secret 鉴权；外部不可达。
+  contact:
+    name: AI-Native 矩阵主控
+servers:
+  - url: http://localhost:8666/api/v1
+
+paths:
+  /health:
+    get:
+      summary: 健康检查
+      operationId: getHealth
+      responses:
+        '200':
+          description: 正常
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+
+  /devices:
+    get:
+      summary: 设备列表
+      operationId: listDevices
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: tag
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Device'
+    post:
+      summary: 注册新设备（仅首次）
+      operationId: registerDevice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceRegisterRequest'
+      responses:
+        '201':
+          description: 注册成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+
+  /devices/{id}:
+    get:
+      summary: 设备详情
+      operationId: getDevice
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+
+  /devices/{id}/pair:
+    post:
+      summary: 密钥配对
+      description: 配对码验证后下发 HMAC 密钥。
+      operationId: pairDevice
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pair_code, hmac_key_id]
+              properties:
+                pair_code:
+                  type: string
+                  description: 6 位数字配对码
+                hmac_key_id:
+                  type: string
+                  description: 主控生成的密钥 ID
+      responses:
+        '200':
+          description: 配对成功，body 包含一次性 HMAC 密钥
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  hmac_key:
+                    type: string
+                    description: base64 编码的密钥，APK 收到后立即用 Keystore 加密保存
+
+  /accounts:
+    get:
+      summary: 账号列表
+      operationId: listAccounts
+      parameters:
+        - name: device_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: persona_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Account'
+    post:
+      summary: 创建账号
+      operationId: createAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountCreate'
+      responses:
+        '201':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+
+  /accounts/{id}:
+    get:
+      summary: 账号详情
+      operationId: getAccount
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+
+  /personas:
+    get:
+      summary: 人设列表
+      operationId: listPersonas
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Persona'
+    post:
+      summary: 创建人设
+      operationId: createPersona
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PersonaCreate'
+      responses:
+        '201':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Persona'
+
+  /notes:
+    get:
+      summary: 笔记列表
+      operationId: listNotes
+      parameters:
+        - name: account_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Note'
+                  total:
+                    type: integer
+
+  /notes/{id}:
+    get:
+      summary: 笔记详情
+      operationId: getNote
+      parameters:
+        - $ref: '#/components/parameters/NoteId'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Note'
+
+  /goals:
+    get:
+      summary: 目标列表
+      operationId: listGoals
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Goal'
+    post:
+      summary: 创建目标
+      description: 触发 Agent 开始新的 run。
+      operationId: createGoal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GoalCreate'
+      responses:
+        '201':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Goal'
+
+  /agent/runs:
+    get:
+      summary: Agent 运行列表
+      operationId: listAgentRuns
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AgentRun'
+
+  /agent/runs/{id}/cancel:
+    post:
+      summary: 取消 Agent 运行
+      operationId: cancelAgentRun
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: 取消请求已接收
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+
+  /chat:
+    post:
+      summary: 自然语言指令
+      description: 运营者通过自然语言下目标 / 干预 Agent。
+      operationId: chat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+                session_id:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reply:
+                    type: string
+                  action:
+                    type: object
+                    description: 触发的操作（创建 goal / 暂停 / 接管等）
+
+  /metrics/summary:
+    get:
+      summary: 监控指标汇总
+      operationId: getMetricsSummary
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsSummary'
+
+components:
+  parameters:
+    DeviceId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    AccountId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    NoteId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    RunId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    Health:
+      type: object
+      required: [status, version, uptime_sec]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, down]
+        version:
+          type: string
+        uptime_sec:
+          type: integer
+        db:
+          type: string
+          enum: [ok, error]
+        tailscale:
+          type: string
+          enum: [connected, disconnected]
+
+    OkResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+
+    Device:
+      type: object
+      required: [id, nickname, model, android_version, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        nickname:
+          type: string
+        model:
+          type: string
+        android_version:
+          type: string
+        apk_version:
+          type: string
+        tailnet_ip:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum: [pending, active, offline, tailscale_degraded, disabled]
+        last_heartbeat:
+          type: string
+          format: date-time
+        bound_accounts:
+          type: integer
+
+    DeviceRegisterRequest:
+      type: object
+      required: [nickname, model, android_version, apk_version, tailnet_ip]
+      properties:
+        nickname:
+          type: string
+        model:
+          type: string
+        android_version:
+          type: string
+        apk_version:
+          type: string
+        tailnet_ip:
+          type: string
+        adb_serial:
+          type: string
+
+    Account:
+      type: object
+      required: [id, handle, status, risk_score]
+      properties:
+        id:
+          type: string
+          format: uuid
+        handle:
+          type: string
+        persona_id:
+          type: string
+          format: uuid
+        device_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending, active, suspended, banned, disabled]
+        last_active:
+          type: string
+          format: date-time
+        risk_score:
+          type: number
+          minimum: 0
+          maximum: 1
+
+    AccountCreate:
+      type: object
+      required: [handle, device_id, persona_id]
+      properties:
+        handle:
+          type: string
+        device_id:
+          type: string
+          format: uuid
+        persona_id:
+          type: string
+          format: uuid
+
+    Persona:
+      type: object
+      required: [id, name, tone, style_guide, version]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        tone:
+          type: string
+        style_guide:
+          type: string
+        forbidden_words:
+          type: array
+          items:
+            type: string
+        sample_note_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        version:
+          type: integer
+
+    PersonaCreate:
+      type: object
+      required: [name, tone, style_guide]
+      properties:
+        name:
+          type: string
+        tone:
+          type: string
+        style_guide:
+          type: string
+        forbidden_words:
+          type: array
+          items:
+            type: string
+        sample_note_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+
+    Note:
+      type: object
+      required: [id, account_id, title, content, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        account_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        content:
+          type: string
+        images:
+          type: array
+          items:
+            type: string
+        tags:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum: [draft, reviewing, scheduled, publishing, published, failed, deleted]
+        platform_note_id:
+          type: string
+        platform_url:
+          type: string
+        scheduled_at:
+          type: string
+          format: date-time
+        published_at:
+          type: string
+          format: date-time
+
+    Goal:
+      type: object
+      required: [id, type, target, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+        target:
+          type: object
+        deadline:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [active, achieved, failed, cancelled]
+
+    GoalCreate:
+      type: object
+      required: [type, target]
+      properties:
+        type:
+          type: string
+        target:
+          type: object
+        deadline:
+          type: string
+          format: date-time
+
+    AgentRun:
+      type: object
+      required: [id, current_state, status, started_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        goal_id:
+          type: string
+          format: uuid
+        current_state:
+          type: string
+        status:
+          type: string
+          enum: [running, success, failed, cancelled, timeout]
+        started_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+
+    MetricsSummary:
+      type: object
+      properties:
+        devices:
+          type: object
+          properties:
+            total:
+              type: integer
+            active:
+              type: integer
+            offline:
+              type: integer
+        accounts:
+          type: object
+          properties:
+            total:
+              type: integer
+            active:
+              type: integer
+            high_risk:
+              type: integer
+        tasks:
+          type: object
+          properties:
+            pending:
+              type: integer
+            running:
+              type: integer
+            success_24h:
+              type: integer
+            failed_24h:
+              type: integer
+        llm_cost_24h_usd:
+          type: number

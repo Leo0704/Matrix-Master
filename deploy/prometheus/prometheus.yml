@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  # 主控后端 metrics（开发用：host.docker.internal 通向宿主）
+  - job_name: 'master-backend'
+    static_configs:
+      - targets: ['host.docker.internal:9091']
+
+  # Headscale 自带 metrics
+  - job_name: 'headscale'
+    static_configs:
+      - targets: ['headscale:9090']

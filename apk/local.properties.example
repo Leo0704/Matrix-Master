@@ -1,0 +1,5 @@
+# Copy to local.properties and fill in your values.
+sdk.dir=/Users/lylyyds/Library/Android/sdk
+# Optional: bootstrap pair server, used on first launch only.
+matrix.master.url=http://127.0.0.1:8666
+matrix.pair.code=

@@ -1,0 +1,85 @@
+version: '3.8'
+
+# Matrix Master 开发环境
+# 启动 PostgreSQL + Headscale + 自建 DERP
+# 主控后端在本地跑（poetry run），不放在容器里，方便热重载
+
+services:
+  # PostgreSQL + pgvector
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: matrix-postgres
+    environment:
+      POSTGRES_DB: matrix
+      POSTGRES_USER: matrix
+      POSTGRES_PASSWORD: matrix_dev
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # schema.sql 表顺序有 bug（accounts 引用 personas，但 personas 还没建）
+      # 改用 alembic 迁移建表
+      # - ./docs/database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U matrix"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Headscale 控制面（开发用内存数据库）
+  headscale:
+    image: headscale/headscale:0.23.0
+    container_name: matrix-headscale
+    command: headscale serve
+    environment:
+      HEADSCALE_DEBUG: "true"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./deploy/headscale/config.yaml:/etc/headscale/config.yaml:ro
+      - headscale_data:/var/lib/headscale
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 自建 DERP 中继
+  derp:
+    image: ghcr.io/tailscale/derper:latest
+    container_name: matrix-derp
+    command: >
+      /derper
+      --hostname=derp.local
+      --verify-clients=false
+      --certmode=letsencrypt
+    ports:
+      - "3478:3478/udp"  # STUN
+    depends_on:
+      - headscale
+
+  # 监控栈（开发用）
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: matrix-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    profiles: ["monitoring"]  # 默认不启动，需要时 --profile monitoring
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: matrix-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    profiles: ["monitoring"]
+
+volumes:
+  postgres_data:
+  headscale_data:

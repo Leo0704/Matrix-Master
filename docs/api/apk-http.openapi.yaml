@@ -1,0 +1,480 @@
+openapi: 3.1.0
+info:
+  title: Companion APK HTTP API
+  version: 0.1.0
+  description: |
+    APK 端暴露的 HTTP API，由主控通过 Tailscale mesh 调用。
+
+    通用约定：
+    - 所有请求必须带 HMAC-SHA256 签名（Header `X-Signature`）
+    - 签名内容：`{timestamp}\n{request_id}\n{body_sha256}`
+    - 密钥从主控经 Tailscale 通道单次下发
+    - 所有时间戳为 UTC ISO 8601
+    - 写操作必须带 `request_id`（UUID），保证幂等
+  contact:
+    name: AI-Native 矩阵主控
+servers:
+  - url: http://{device_tailnet_ip}:8765
+    variables:
+      device_tailnet_ip:
+        default: 100.64.0.1
+        description: 设备的 Tailscale 分配的 IP
+security:
+  - HMAC: []
+
+paths:
+  /device/status:
+    get:
+      summary: 设备状态
+      description: 返回设备当前状态、电量、信号、前台 App 等。
+      operationId: getDeviceStatus
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /app/open:
+    post:
+      summary: 打开 App
+      operationId: openApp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [package, request_id]
+              properties:
+                package:
+                  type: string
+                  description: Android 包名
+                  example: com.xingin.xhs
+                request_id:
+                  $ref: '#/components/schemas/RequestId'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '404':
+          description: App 未安装
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /action/tap:
+    post:
+      summary: 点击
+      operationId: tap
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/TapByCoord'
+                - $ref: '#/components/schemas/TapBySelector'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '404':
+          description: 选择器未找到
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /action/input:
+    post:
+      summary: 输入文本
+      operationId: inputText
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text, request_id]
+              properties:
+                text:
+                  type: string
+                request_id:
+                  $ref: '#/components/schemas/RequestId'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+
+  /action/swipe:
+    post:
+      summary: 滑动
+      operationId: swipe
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [from, to, request_id]
+              properties:
+                from:
+                  $ref: '#/components/schemas/Coord'
+                to:
+                  $ref: '#/components/schemas/Coord'
+                duration_ms:
+                  type: integer
+                  default: 300
+                request_id:
+                  $ref: '#/components/schemas/RequestId'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+
+  /screen/screenshot:
+    get:
+      summary: 截屏
+      operationId: screenshot
+      parameters:
+        - name: region
+          in: query
+          schema:
+            type: string
+            description: '可选，格式: x,y,w,h'
+      responses:
+        '200':
+          description: 成功
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+
+  /xhs/publish:
+    post:
+      summary: 发布笔记
+      operationId: publishNote
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublishRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishResponse'
+        '400':
+          description: 草稿失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 上传被拒
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: 触发平台风控
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /xhs/interact:
+    post:
+      summary: 互动（点赞 / 评论 / 关注）
+      operationId: interact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InteractRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '429':
+          description: 触发平台风控 / 限速
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /xhs/collect_metrics:
+    post:
+      summary: 回采数据
+      operationId: collectMetrics
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scope, request_id]
+              properties:
+                scope:
+                  type: string
+                  enum: [recent_24h, recent_7d, all]
+                request_id:
+                  $ref: '#/components/schemas/RequestId'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/NoteMetric'
+
+components:
+  securitySchemes:
+    HMAC:
+      type: apiKey
+      in: header
+      name: X-Signature
+      description: |
+        HMAC-SHA256 签名。Header 包含：
+        - `X-Signature`: base64 编码的 HMAC
+        - `X-Timestamp`: Unix 时间戳（秒），5 分钟内有效
+        - `X-Request-Id`: UUID，每次调用唯一
+        签名内容：`{timestamp}\n{request_id}\n{body_sha256}`
+
+  responses:
+    Unauthorized:
+      description: HMAC 校验失败或时间戳过期
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    RequestId:
+      type: string
+      format: uuid
+      description: 幂等 key，同一 request_id 重试不重复执行
+
+    Coord:
+      type: object
+      required: [x, y]
+      properties:
+        x:
+          type: integer
+          minimum: 0
+        y:
+          type: integer
+          minimum: 0
+
+    DeviceStatus:
+      type: object
+      required: [online, busy, app, battery, network]
+      properties:
+        online:
+          type: boolean
+        busy:
+          type: boolean
+        app:
+          type: string
+          description: 当前前台 App 包名
+        battery:
+          type: integer
+          minimum: 0
+          maximum: 100
+        network:
+          type: string
+          enum: [4G, 5G, none]
+        signal_dbm:
+          type: integer
+        tailscale_state:
+          type: string
+          enum: [connected, disconnected, connecting]
+        uptime_sec:
+          type: integer
+
+    TapByCoord:
+      type: object
+      required: [coord, request_id]
+      properties:
+        coord:
+          $ref: '#/components/schemas/Coord'
+        request_id:
+          $ref: '#/components/schemas/RequestId'
+
+    TapBySelector:
+      type: object
+      required: [selector, request_id]
+      properties:
+        selector:
+          type: object
+          required: [type, value]
+          properties:
+            type:
+              type: string
+              enum: [resource_id, content_desc, text, xpath]
+            value:
+              type: string
+        fallback_vlm:
+          type: boolean
+          default: false
+          description: 选择器失败时是否回退到 VLM 读屏
+        request_id:
+          $ref: '#/components/schemas/RequestId'
+
+    PublishRequest:
+      type: object
+      required: [title, content, images, tags, request_id]
+      properties:
+        title:
+          type: string
+          maxLength: 64
+        content:
+          type: string
+          maxLength: 2000
+        images:
+          type: array
+          items:
+            type: string
+            format: uri
+        tags:
+          type: array
+          items:
+            type: string
+          maxItems: 10
+        visibility:
+          type: string
+          enum: [public, friends, private]
+          default: public
+        request_id:
+          $ref: '#/components/schemas/RequestId'
+
+    PublishResponse:
+      type: object
+      required: [ok, data]
+      properties:
+        ok:
+          type: boolean
+        data:
+          type: object
+          required: [platform_note_id, url]
+          properties:
+            platform_note_id:
+              type: string
+            url:
+              type: string
+              format: uri
+
+    InteractRequest:
+      type: object
+      required: [action, target, request_id]
+      properties:
+        action:
+          type: string
+          enum: [like, comment, follow, collect, share]
+        target:
+          type: object
+          oneOf:
+            - properties:
+                note_id:
+                  type: string
+              required: [note_id]
+            - properties:
+                user_id:
+                  type: string
+              required: [user_id]
+        content:
+          type: string
+          description: 评论内容（仅 action=comment）
+        request_id:
+          $ref: '#/components/schemas/RequestId'
+
+    NoteMetric:
+      type: object
+      properties:
+        note_id:
+          type: string
+        views:
+          type: integer
+        likes:
+          type: integer
+        collects:
+          type: integer
+        comments:
+          type: integer
+        follows_gained:
+          type: integer
+        ts:
+          type: string
+          format: date-time
+
+    OkResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+        data:
+          type: object
+
+    ErrorResponse:
+      type: object
+      required: [ok, error]
+      properties:
+        ok:
+          type: boolean
+          enum: [false]
+        error:
+          type: object
+          required: [code, message, retryable]
+          properties:
+            code:
+              type: string
+              enum:
+                - DEVICE_OFFLINE
+                - APP_NOT_FOUND
+                - SELECTOR_NOT_FOUND
+                - TIMEOUT
+                - IME_ERROR
+                - DRAFT_FAILED
+                - UPLOAD_FAILED
+                - RISK_BLOCKED
+                - RATE_LIMITED
+                - PARSE_FAILED
+                - INVALID_PARAMS
+                - INTERNAL_ERROR
+            message:
+              type: string
+            retryable:
+              type: boolean
