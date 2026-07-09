@@ -47,7 +47,12 @@ class TaskLike(Protocol):
 
 @dataclass
 class _DailyCounter:
-    """单 (scope, key) 的按日计数器。"""
+    """单 (scope, key) 的按日计数器。
+
+    TODO: 多进程部署（uvicorn workers>1）下每个 worker 独立计数会绕过日上限。
+    应替换为走 DB 的原子 ``UPDATE ... RETURNING counter``，或接 Redis INCR。
+    详见 plan §"不在本 PR 范围"。本期保持进程内内存实现。
+    """
 
     counts: dict[date, dict[str, int]] = field(default_factory=lambda: defaultdict(lambda: defaultdict(int)))
 

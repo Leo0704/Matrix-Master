@@ -136,6 +136,34 @@ class AgentRunWatchdog:
         self._stop_event = asyncio.Event()
         self._task: asyncio.Task | None = None
 
+    async def configure_from_config_reader(
+        self,
+        config_reader: Callable[[str, Any], Any] | None,
+    ) -> None:
+        """从 ``app_config`` 表读 watchdog 配置覆盖默认值。
+
+        P2-1：让运维能在不重启的情况下通过 PATCH /settings 调阈值。
+        不传 config_reader 时保留硬编码默认（生产老路径兼容）。
+        """
+        if config_reader is None:
+            return
+        try:
+            self.config.dry_run = await config_reader(
+                "agent_watchdog.dry_run", self.config.dry_run
+            )
+            self.config.stuck_threshold_sec = int(
+                await config_reader(
+                    "agent_watchdog.stuck_threshold_sec", self.config.stuck_threshold_sec
+                )
+            )
+            self.config.poll_interval_sec = float(
+                await config_reader(
+                    "agent_watchdog.poll_interval_sec", self.config.poll_interval_sec
+                )
+            )
+        except Exception:
+            logger.exception("watchdog.configure_from_config_reader failed; keep defaults")
+
     async def _scan_once(self) -> int:
         """一次扫描，返回标 timeout 的 run 数。"""
         now = _utcnow()
