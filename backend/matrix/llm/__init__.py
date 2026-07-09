@@ -36,6 +36,16 @@ from .errors import (
     LLMTimeoutError,
     RateLimitError,
 )
+from .image_gen import (  # v0.7 Phase 3
+    DoubaoSeedreamClient,
+    ImageGenClient,
+    ImageGenError,
+    ImageGenResult,
+    InMemoryImageGenClient,
+    TongyiWanxiangClient,
+    ZhipuCogViewClient,
+    get_image_gen_client,
+)
 from .prompt_caching import CachedBlock, CachedMessages
 from .retry import retry_with_backoff
 from .router import get_client, get_default_client, reset_client_cache
@@ -76,4 +86,13 @@ __all__ = [
     "LLMTimeoutError",
     "AuthError",
     "InvalidRequestError",
+    # image gen (v0.7)
+    "ImageGenClient",
+    "ImageGenResult",
+    "ImageGenError",
+    "InMemoryImageGenClient",
+    "TongyiWanxiangClient",
+    "ZhipuCogViewClient",
+    "DoubaoSeedreamClient",
+    "get_image_gen_client",
 ]

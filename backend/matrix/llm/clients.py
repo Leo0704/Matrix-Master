@@ -55,6 +55,19 @@ PRICING: dict[str, dict[str, float]] = {
     # OpenAI
     "gpt-5": {"input": 2.50, "output": 10.00},
     "gpt-5-mini": {"input": 0.40, "output": 1.60},
+    # DeepSeek（人民币 ≈ USD 占位，上线改用合同价）
+    "deepseek-chat": {"input": 0.00027, "output": 0.0011},
+    "deepseek-reasoner": {"input": 0.00055, "output": 0.0022},
+    # 通义千问（OpenAI 兼容模式，单位 USD/百万 token）
+    "qwen-plus": {"input": 0.0008, "output": 0.002},
+    "qwen-max": {"input": 0.0024, "output": 0.008},
+    "qwen-turbo": {"input": 0.0003, "output": 0.0006},
+    # 智谱 GLM
+    "glm-4-plus": {"input": 0.007, "output": 0.007},
+    "glm-4-flash": {"input": 0.0001, "output": 0.0001},
+    # 豆包
+    "doubao-pro-32k": {"input": 0.0008, "output": 0.001},
+    "doubao-lite-32k": {"input": 0.0003, "output": 0.0006},
     # Embedding（input-only）
     "text-embedding-3-small": {"input": 0.02, "output": 0.0},
     "text-embedding-3-large": {"input": 0.13, "output": 0.0},
@@ -72,6 +85,24 @@ MODEL_ALIASES: dict[str, str] = {
     "gpt5": "gpt-5",
     "gpt-5": "gpt-5",
     "mini": "gpt-5-mini",
+    # v0.7 Phase 1：国产 LLM 别名
+    # DeepSeek
+    "deepseek": "deepseek-chat",
+    "deepseek-chat": "deepseek-chat",
+    "deepseek-reasoner": "deepseek-reasoner",
+    # 通义千问
+    "qwen": "qwen-plus",
+    "qwen-plus": "qwen-plus",
+    "qwen-max": "qwen-max",
+    "qwen-turbo": "qwen-turbo",
+    # 智谱 GLM
+    "glm": "glm-4-plus",
+    "glm-4-plus": "glm-4-plus",
+    "glm-4-flash": "glm-4-flash",
+    # 豆包
+    "doubao": "doubao-pro-32k",
+    "doubao-pro-32k": "doubao-pro-32k",
+    "doubao-lite-32k": "doubao-lite-32k",
 }
 
 

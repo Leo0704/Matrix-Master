@@ -110,6 +110,28 @@ def create_app(
             worker.start()
             set_worker(worker)
             app.state.agent_worker = worker
+
+            # v0.7 Phase 4：watchdog 兜底卡死 run（每 30s 扫一次）
+            try:
+                from matrix.agent.watcher import (
+                    AgentRunScanner,
+                    AgentRunWatchdog,
+                    WatchdogConfig,
+                )
+
+                scanner = AgentRunScanner(app.state.db_session_factory)
+                watchdog = AgentRunWatchdog(
+                    scanner,
+                    config=WatchdogConfig(
+                        poll_interval_sec=30.0,
+                        stuck_threshold_sec=600,
+                        dry_run=True,  # 默认观察一周再切真实
+                    ),
+                )
+                watchdog.start()
+                app.state.agent_watchdog = watchdog
+            except Exception:  # pragma: no cover
+                logger.warning("agent_watchdog setup failed", exc_info=True)
         except Exception as e:  # pragma: no cover
             logger.warning(
                 "agent services / worker setup failed; "
@@ -130,6 +152,14 @@ def create_app(
             try:
                 await worker.stop()
             except Exception:  # pragma: no cover
+                logger.warning("agent worker stop failed", exc_info=True)
+        # v0.7 Phase 4: 停 watchdog
+        watchdog = getattr(app.state, "agent_watchdog", None)
+        if watchdog is not None:
+            try:
+                await watchdog.stop()
+            except Exception:  # pragma: no cover
+                logger.warning("agent watchdog stop failed", exc_info=True)
                 logger.exception("agent worker stop failed")
         try:
             shutdown_tracing()

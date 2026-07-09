@@ -174,6 +174,30 @@ def can_publish_to_interact(state: AgentState, cfg: GuardConfig) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# IMAGE_GEN (v0.7 Phase 3)：fallback 决定路径
+# ---------------------------------------------------------------------------
+
+
+def image_gen_to_review(state: AgentState, cfg: GuardConfig) -> bool:
+    """IMAGE_GEN → REVIEW：fallback=no_image（默认）或 draft.images 非空就放行。"""
+    last_err = state.get("last_error") or {}
+    if last_err.get("code", "").startswith("IMAGE_GEN_") and last_err.get("__force_alert"):
+        return False
+    draft = state.get("draft") or {}
+    if draft.get("images"):
+        return True
+    # fallback=no_image 时 draft.images==[] 也放行（发纯文）
+    return state.get("image_gen_fallback", "no_image") != "idle"
+
+
+def route_after_image_gen(state: AgentState, cfg: GuardConfig) -> State:
+    """IMAGE_GEN 的下个状态。"""
+    if image_gen_to_review(state, cfg):
+        return State.REVIEW
+    return State.ALERT
+
+
+# ---------------------------------------------------------------------------
 # INTERACT → COLLECT / ALERT
 # ---------------------------------------------------------------------------
 

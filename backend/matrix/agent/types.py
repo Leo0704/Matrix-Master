@@ -26,6 +26,7 @@ class State(str, Enum):
     IDLE = "IDLE"
     RESEARCH = "RESEARCH"
     DRAFT = "DRAFT"
+    IMAGE_GEN = "IMAGE_GEN"  # v0.7 Phase 3：生图（DRAFT→IMAGE_GEN→REVIEW）
     REVIEW = "REVIEW"
     REVISE = "REVISE"
     SCHEDULE = "SCHEDULE"

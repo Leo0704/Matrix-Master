@@ -511,6 +511,66 @@ class TestRouter:
             assert c1 is c2
             assert mock_cls.call_count == 1
 
+    # --- v0.7 Phase 1：国产 LLM model → OpenAIClient 复用 ---
+
+    def test_deepseek_resolves_to_openai_with_base_url(self):
+        with patch("matrix.llm.router.OpenAIClient") as mock_cls:
+            mock_cls.return_value = MagicMock()
+            client = get_client("deepseek-chat", api_key="sk-test")
+            mock_cls.assert_called_once()
+            call_kwargs = mock_cls.call_args.kwargs
+            assert "deepseek.com" in call_kwargs.get("base_url", "")
+            assert call_kwargs.get("api_key") == "sk-test"
+
+    def test_tongyi_alias_resolves_to_qwen_plus(self):
+        """'qwen' alias → qwen-plus → tongyi provider → OpenAIClient。"""
+        with patch("matrix.llm.router.OpenAIClient") as mock_cls:
+            mock_cls.return_value = MagicMock()
+            client = get_client("qwen", api_key="sk-tongyi")
+            mock_cls.assert_called_once()
+            call_kwargs = mock_cls.call_args.kwargs
+            assert "dashscope" in call_kwargs.get("base_url", "")
+
+    def test_glm_provider_routing(self):
+        with patch("matrix.llm.router.OpenAIClient") as mock_cls:
+            mock_cls.return_value = MagicMock()
+            client = get_client("glm-4-flash", api_key="sk-zhipu")
+            mock_cls.assert_called_once()
+            call_kwargs = mock_cls.call_args.kwargs
+            assert "bigmodel.cn" in call_kwargs.get("base_url", "")
+
+    def test_doubao_provider_routing(self):
+        with patch("matrix.llm.router.OpenAIClient") as mock_cls:
+            mock_cls.return_value = MagicMock()
+            client = get_client("doubao-pro-32k", api_key="sk-doubao")
+            mock_cls.assert_called_once()
+            call_kwargs = mock_cls.call_args.kwargs
+            assert "volces.com" in call_kwargs.get("base_url", "")
+
+    def test_provider_for_unknown_model_raises(self):
+        with pytest.raises(ValueError):
+            get_client("totally-fake-model-123")
+
+    def test_pricing_known_for_domestic_models(self):
+        from matrix.llm.clients import calculate_cost_usd, resolve_model
+
+        # DeepSeek 应有定价
+        assert calculate_cost_usd(resolve_model("deepseek-chat"), 1000, 500) > 0
+        # 通义
+        assert calculate_cost_usd(resolve_model("qwen-plus"), 1000, 500) > 0
+        # 智谱
+        assert calculate_cost_usd(resolve_model("glm-4-flash"), 1000, 500) > 0
+        # 豆包
+        assert calculate_cost_usd(resolve_model("doubao-pro-32k"), 1000, 500) > 0
+
+    def test_model_aliases_resolve_to_full_names(self):
+        from matrix.llm.clients import resolve_model
+
+        assert resolve_model("deepseek") == "deepseek-chat"
+        assert resolve_model("qwen") == "qwen-plus"
+        assert resolve_model("glm") == "glm-4-plus"
+        assert resolve_model("doubao") == "doubao-pro-32k"
+
 
 # ---------------------------------------------------------------------------
 # Prompt Caching helpers

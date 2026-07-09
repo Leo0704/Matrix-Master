@@ -61,6 +61,7 @@ dev = [
     "mypy>=1.8.0",
     "freezegun>=1.4.0",
     "respx>=0.21.0",
+    "aiosqlite>=0.20.0",  # v0.7 Phase 4: in-memory sqlite for watchdog DB tests
 ]
 
 [project.scripts]

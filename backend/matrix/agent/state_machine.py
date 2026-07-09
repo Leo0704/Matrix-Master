@@ -27,6 +27,7 @@ from .guards import (
     GuardConfig,
     route_after_collect,
     route_after_dispatch,
+    route_after_image_gen,  # v0.7 Phase 3
     route_after_interact,
     route_after_publish,
     route_after_research,
@@ -41,6 +42,7 @@ from .nodes import (
     collect_node,
     dispatch_node,
     draft_node,
+    image_gen_node,  # v0.7 Phase 3
     interact_node,
     publish_node,
     research_node,
@@ -100,11 +102,14 @@ class StateMachine:
         """构造并返回编译后的 langgraph 图。"""
         g = StateGraph(AgentState)
 
-        # 注册 12 个节点（10 主 + REVISE / ALERT）；每个节点用包装器自动
+        # 注册 13 个节点（11 主 + REVISE / ALERT）；每个节点用包装器自动
         # 在 partial update 末尾注入 ``current_state``，便于读 checkpoint。
         g.add_node(State.IDLE.value, _wrap(State.IDLE.value, _idle_entry))
         g.add_node(State.RESEARCH.value, _wrap(State.RESEARCH.value, research_node))
         g.add_node(State.DRAFT.value, _wrap(State.DRAFT.value, draft_node))
+        g.add_node(
+            State.IMAGE_GEN.value, _wrap(State.IMAGE_GEN.value, image_gen_node)
+        )  # v0.7 Phase 3
         g.add_node(State.REVIEW.value, _wrap(State.REVIEW.value, review_node))
         g.add_node(State.REVISE.value, _wrap(State.REVISE.value, revise_node))
         g.add_node(State.SCHEDULE.value, _wrap(State.SCHEDULE.value, schedule_node))
@@ -140,8 +145,18 @@ class StateMachine:
             },
         )
 
-        # DRAFT → REVIEW
-        g.add_edge(State.DRAFT.value, State.REVIEW.value)
+        # DRAFT → IMAGE_GEN（v0.7 Phase 3：生图插入 DRAFT 后）
+        g.add_edge(State.DRAFT.value, State.IMAGE_GEN.value)
+
+        # IMAGE_GEN → REVIEW | ALERT（按 fallback 决定走纯文还是 ALERT）
+        g.add_conditional_edges(
+            State.IMAGE_GEN.value,
+            lambda s: route_after_image_gen(s, cfg),
+            {
+                State.REVIEW.value: State.REVIEW.value,
+                State.ALERT.value: State.ALERT.value,
+            },
+        )
 
         # REVIEW → SCHEDULE | REVISE | ALERT
         g.add_conditional_edges(
