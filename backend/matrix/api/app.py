@@ -141,6 +141,17 @@ def create_app(
                         dry_run=True,  # 默认观察一周再切真实
                     ),
                 )
+                # v0.7 P2-1：从 app_config 表覆盖 watchdog 配置（运维可在线调阈值）
+                try:
+                    from matrix.api._agent_factory import _LazyConfigReader
+
+                    await watchdog.configure_from_config_reader(
+                        _LazyConfigReader(app.state.db_session_factory)
+                    )
+                except Exception:  # pragma: no cover
+                    logger.warning(
+                        "watchdog configure_from_config_reader failed", exc_info=True
+                    )
                 watchdog.start()
                 app.state.agent_watchdog = watchdog
             except Exception:  # pragma: no cover

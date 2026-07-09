@@ -20,11 +20,28 @@ from matrix.monitoring.logging import bind_context, clear_context
 from matrix.monitoring.metrics import http_request_latency_seconds, http_requests_total
 
 # 用模板替换高基数 path（UUID 等），避免 Prometheus label 爆炸
+# 按资源类型保留不同的 label 维度（devices/{device_id}, accounts/{account_id} 等），
+# 这样 Prometheus 能按资源类型聚合，又不会因 UUID 基数爆炸。
+_UUID_RE = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 _PATH_TEMPLATE_RE = re.compile(r"/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
+_PATH_NORMALIZERS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(rf"^/api/v1/devices/{_UUID_RE}(?P<rest>.*)$", re.I), "/api/v1/devices/{{device_id}}{rest}"),
+    (re.compile(rf"^/api/v1/accounts/{_UUID_RE}(?P<rest>.*)$", re.I), "/api/v1/accounts/{{account_id}}{rest}"),
+    (re.compile(rf"^/api/v1/personas/{_UUID_RE}(?P<rest>.*)$", re.I), "/api/v1/personas/{{persona_id}}{rest}"),
+    (re.compile(rf"^/api/v1/notes/{_UUID_RE}(?P<rest>.*)$", re.I), "/api/v1/notes/{{note_id}}{rest}"),
+    (re.compile(rf"^/api/v1/goals/{_UUID_RE}(?P<rest>.*)$", re.I), "/api/v1/goals/{{goal_id}}{rest}"),
+    (re.compile(rf"^/api/v1/agent-runs/{_UUID_RE}(?P<rest>.*)$", re.I), "/api/v1/agent-runs/{{run_id}}{rest}"),
+    (re.compile(rf"^/api/v1/interactions/{_UUID_RE}(?P<rest>.*)$", re.I), "/api/v1/interactions/{{interaction_id}}{rest}"),
+    (re.compile(rf"^/api/v1/kb/documents/{_UUID_RE}(?P<rest>.*)$", re.I), "/api/v1/kb/documents/{{doc_id}}{rest}"),
+)
 
 
 def _normalize_path(path: str) -> str:
-    """把动态段（UUID 等）折叠成 ``{id}``，避免高基数 label。"""
+    """按资源类型归一化 UUID 段；无法匹配的折叠成 ``{id}``。"""
+    for pattern, template in _PATH_NORMALIZERS:
+        m = pattern.match(path)
+        if m:
+            return template.format(**m.groupdict())
     return _PATH_TEMPLATE_RE.sub("/{id}", path)
 
 

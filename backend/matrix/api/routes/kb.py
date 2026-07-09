@@ -35,6 +35,7 @@ from matrix.api.schemas import (
     KbSearchResponse,
 )
 from matrix.db.models import KbDocument as KbDocumentORM
+from matrix.kb._singleton import get_embedder
 from matrix.kb.embedding import EmbeddingService
 from matrix.kb.promotion import ReviewGate
 from matrix.kb.retrieval import Retriever
@@ -52,10 +53,9 @@ router = APIRouter(prefix="/kb", tags=["kb"])
 # ---------------------------------------------------------------------------
 
 
-def _get_embedder() -> EmbeddingService:
-    """构造 embedding 服务。生产依赖 OPENAI_API_KEY 环境变量。"""
-    client = EmbeddingClient()
-    return EmbeddingService(client)
+async def _get_embedder() -> EmbeddingService:
+    """返回进程级缓存的 embedding 服务。生产依赖 OPENAI_API_KEY 环境变量。"""
+    return await get_embedder(EmbeddingClient)
 
 
 def _to_schema(d: KbDocumentORM) -> KbDocument:
@@ -148,7 +148,7 @@ async def create_document(
             status.HTTP_400_BAD_REQUEST, "content must be non-empty"
         )
 
-    store = KbStore(session, _get_embedder())
+    store = KbStore(session, await _get_embedder())
     doc = await store.create_document(
         type=body.type,
         content=body.content,
@@ -173,7 +173,7 @@ async def update_document(
     session: AsyncSession = Depends(get_db),
 ) -> KbDocument:
     try:
-        store = KbStore(session, _get_embedder())
+        store = KbStore(session, await _get_embedder())
         doc = await store.update_document(
             doc_id,
             content=body.content,
@@ -191,7 +191,7 @@ async def update_document(
 async def delete_document(
     doc_id: uuid.UUID, session: AsyncSession = Depends(get_db)
 ) -> None:
-    store = KbStore(session, _get_embedder())
+    store = KbStore(session, await _get_embedder())
     ok = await store.soft_delete(doc_id)
     if not ok:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "kb document not found")
@@ -236,7 +236,7 @@ async def search_kb(
     if not body.query or not body.query.strip():
         return KbSearchResponse(items=[])
 
-    retriever = Retriever(session, _get_embedder())
+    retriever = Retriever(session, await _get_embedder())
     try:
         results = await retriever.retrieve(
             body.query,
