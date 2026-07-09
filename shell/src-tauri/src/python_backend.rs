@@ -22,6 +22,7 @@ use tokio::task::JoinHandle;
 
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
+use tracing::Instrument;
 
 const DEFAULT_PYTHON_BIN: &str = "python";
 const DEFAULT_API_MODULE: &str = "matrix.api.app";
@@ -100,6 +101,7 @@ pub fn build_command(cfg: &BackendConfig) -> Command {
 }
 
 /// 拉起 Python 后端；返回子进程句柄。**不**等待 ready，由 `wait_ready` 单独处理。
+#[tracing::instrument(skip_all, fields(base_url = %cfg.base_url, python_bin = %cfg.python_bin))]
 pub async fn spawn_backend(cfg: &BackendConfig) -> AppResult<Child> {
     let cmd = build_command(cfg);
     cmd.kill_on_drop(true)
@@ -108,6 +110,7 @@ pub async fn spawn_backend(cfg: &BackendConfig) -> AppResult<Child> {
 }
 
 /// 等待 `/api/v1/health` 连续返回 200，最多等 [`READY_TIMEOUT_SECS`] 秒。
+#[tracing::instrument(skip_all, fields(base_url = %cfg.base_url, timeout_secs = READY_TIMEOUT_SECS))]
 pub async fn wait_ready(cfg: &BackendConfig) -> AppResult<()> {
     let url = format!("{}{}", cfg.base_url, HEALTH_PATH);
     let client = reqwest::Client::builder()
@@ -130,6 +133,7 @@ pub async fn wait_ready(cfg: &BackendConfig) -> AppResult<()> {
 }
 
 /// 主动探活一次。
+#[tracing::instrument(skip_all, fields(base_url = %cfg.base_url))]
 pub async fn probe_health(cfg: &BackendConfig) -> BackendHealth {
     let url = format!("{}{}", cfg.base_url, HEALTH_PATH);
     let client = reqwest::Client::builder()
@@ -160,49 +164,55 @@ pub async fn probe_health(cfg: &BackendConfig) -> BackendHealth {
 }
 
 /// 拉起 Python 后端 → 等待 ready → 启动探活任务。返回子进程 + health 句柄。
+#[tracing::instrument(skip_all, fields(base_url = %cfg.base_url))]
 pub async fn start_with_health_loop(app: &AppHandle) -> AppResult<(Child, BackendHandle)> {
     let cfg = BackendConfig::from_env();
 
     // 如果配置 / 端口已被占用，先 try 检测；没问题再 spawn
     if probe_health(&cfg).await.reachable {
-        log::info!("Python backend already reachable at {}", cfg.base_url);
+        tracing::info!(base_url = %cfg.base_url, "python.backend.already_reachable");
     }
 
     let child = spawn_backend(&cfg).await?;
     wait_ready(&cfg).await?;
 
-    log::info!("Python backend ready at {}", cfg.base_url);
+    tracing::info!(base_url = %cfg.base_url, "python.backend.ready");
 
-    // 启动探活 loop（独立 task，oneshot 取消）
+    // 启动探活 loop（独立 task，oneshot 取消）。
+    // 同上：spawned task 不继承父 span，手动 .instrument。
     let (cancel_tx, mut cancel_rx) = oneshot::channel();
     let cfg_for_loop = cfg.clone();
     let app_for_loop = app.clone();
-    let task = tauri::async_runtime::spawn(async move {
-        loop {
-            tokio::select! {
-                _ = &mut cancel_rx => {
-                    log::info!("backend health probe loop cancelled");
-                    break;
-                }
-                _ = tokio::time::sleep(Duration::from_secs(HEALTH_PROBE_INTERVAL_SECS)) => {
-                    let h = probe_health(&cfg_for_loop).await;
-                    if !h.reachable {
-                        log::warn!("backend health probe failed: {:?}", h.error);
+    let task = tauri::async_runtime::spawn(
+        async move {
+            loop {
+                tokio::select! {
+                    _ = &mut cancel_rx => {
+                        tracing::info!("backend.health_loop.cancelled");
+                        break;
                     }
-                    // 广播事件给前端
-                    let _ = app_for_loop.emit("backend://health", &h);
+                    _ = tokio::time::sleep(Duration::from_secs(HEALTH_PROBE_INTERVAL_SECS)) => {
+                        let h = probe_health(&cfg_for_loop).await;
+                        if !h.reachable {
+                            tracing::warn!(error = ?h.error, "backend.health_probe.failed");
+                        }
+                        // 广播事件给前端
+                        let _ = app_for_loop.emit("backend://health", &h);
+                    }
                 }
             }
         }
-    });
+        .instrument(tracing::info_span!("backend.health_loop")),
+    );
 
     Ok((child, BackendHandle { cancel: cancel_tx, task }))
 }
 
 /// 优雅地 kill 子进程（先 SIGTERM，等 2s 再 SIGKILL）。
+#[tracing::instrument(skip_all)]
 pub async fn kill_child(child: &mut Child) {
     if let Some(pid) = child.id() {
-        log::info!("killing python backend pid={}", pid);
+        tracing::info!(pid = pid, "killing python backend");
     }
     let _ = child.start_kill();
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
@@ -222,6 +232,7 @@ pub async fn kill_child(child: &mut Child) {
 }
 
 /// 关闭并清理 backend：取消探活 + kill 子进程。
+#[tracing::instrument(skip_all)]
 pub async fn shutdown(state: &AppState) {
     if let Some(handle) = state.backend_handle.lock().await.take() {
         handle.cancel();
@@ -235,6 +246,7 @@ pub async fn shutdown(state: &AppState) {
 /// 重启：先 kill 旧进程，再 spawn 新进程 + 等待 ready。
 ///
 /// 适用于 IPC `restart_python_backend` 命令——用户主动触发。
+#[tracing::instrument(skip_all)]
 pub async fn restart(state: &AppState) -> AppResult<()> {
     shutdown(state).await;
     let cfg = BackendConfig::from_env();

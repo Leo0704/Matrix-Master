@@ -20,15 +20,19 @@ pub mod state;
 pub mod system_tray;
 
 use tauri::Manager;
+use tracing::Instrument;
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use crate::state::AppState;
 
 /// Tauri 2.x 应用启动入口。被 `main.rs` 调用（同时也是 mobile entry point）。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[tracing::instrument]
 pub fn run() {
-    // 1. 日志初始化（设不到 RUST_LOG 就走默认级别）。
-    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .format_timestamp_secs()
+    // 1. 日志初始化（设不到 RUST_LOG 就走默认级别；JSON 输出便于聚合）。
+    let _ = tracing_subscriber::registry()
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with(fmt::layer().json().with_current_span(true).with_span_list(false))
         .try_init();
 
     tauri::Builder::default()
@@ -51,28 +55,32 @@ pub fn run() {
 
             // 注册系统托盘
             if let Err(e) = system_tray::setup(&handle) {
-                log::warn!("tray setup failed: {}", e);
+                tracing::warn!(error = %e, "tray setup failed");
             }
 
-            // 异步拉起 Python 后端（不阻塞 Tauri setup）
-            tauri::async_runtime::spawn(async move {
-                match python_backend::start_with_health_loop(&handle).await {
-                    Ok((child, h)) => {
-                        let state = handle.state::<AppState>();
-                        state.python_backend.lock().await.child = Some(child);
-                        *state.backend_handle.lock().await = Some(h);
-                        log::info!("Python backend & health loop started");
-                    }
-                    Err(e) => {
-                        log::error!("failed to start python backend: {}", e);
-                        let _ = notifications::show_notification(
-                            &handle,
-                            "Matrix Master — 后端启动失败",
-                            &format!("请检查 Python 环境（{}）。可在监控控制台手动重启。", e),
-                        );
+            // 异步拉起 Python 后端（不阻塞 Tauri setup）。
+            // spawned task 不会自动继承 run() 的 span —— 手动 .instrument。
+            tauri::async_runtime::spawn(
+                async move {
+                    match python_backend::start_with_health_loop(&handle).await {
+                        Ok((child, h)) => {
+                            let state = handle.state::<AppState>();
+                            state.python_backend.lock().await.child = Some(child);
+                            *state.backend_handle.lock().await = Some(h);
+                            tracing::info!("python.backend.health_loop.started");
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "python.backend.startup_failed");
+                            let _ = notifications::show_notification(
+                                &handle,
+                                "Matrix Master — 后端启动失败",
+                                &format!("请检查 Python 环境（{}）。可在监控控制台手动重启。", e),
+                            );
+                        }
                     }
                 }
-            });
+                .instrument(tracing::info_span!("backend.startup")),
+            );
 
             Ok(())
         })

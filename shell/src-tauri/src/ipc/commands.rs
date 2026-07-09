@@ -23,6 +23,7 @@ use crate::state::{AppInfo, AppState};
 /// db_status / tailscale_status 是给前端展示用，真实数据由 Python 后端在
 /// `/api/v1/health` 返回；这里为减少前端→Python 的握手，先尝试一次轻量探活。
 #[tauri::command]
+#[tracing::instrument(skip_all, fields(version = %state.version))]
 pub async fn get_app_info(state: State<'_, AppState>) -> AppResult<AppInfo> {
     let cfg = python_backend::BackendConfig::from_env();
     let h: BackendHealth = python_backend::probe_health(&cfg).await;
@@ -68,12 +69,14 @@ pub async fn get_app_info(state: State<'_, AppState>) -> AppResult<AppInfo> {
 
 /// 重启 Python 后端（用户在 UI 上触发）。
 #[tauri::command]
+#[tracing::instrument(skip_all)]
 pub async fn restart_python_backend(state: State<'_, AppState>) -> AppResult<()> {
     python_backend::restart(state.inner()).await
 }
 
 /// 主动探活一次。前端用于「刷新状态」按钮。
 #[tauri::command]
+#[tracing::instrument]
 pub async fn probe_backend() -> AppResult<BackendHealth> {
     let cfg = python_backend::BackendConfig::from_env();
     Ok(python_backend::probe_health(&cfg).await)
@@ -123,7 +126,7 @@ pub async fn generate_hmac_key(device_id: String) -> AppResult<String> {
     .await
     .map_err(|e| AppError::Internal(format!("join error: {}", e)))??;
 
-    log::info!("generated hmac key for device={}", device_id);
+    tracing::info!(device_id = %device_id, "generated hmac key");
     Ok(encoded)
 }
 
@@ -147,7 +150,7 @@ pub async fn revoke_hmac_key(device_id: String) -> AppResult<()> {
     tokio::task::spawn_blocking(move || keyring_store::delete_secret(KEYRING_SERVICE, &account))
         .await
         .map_err(|e| AppError::Internal(format!("join error: {}", e)))??;
-    log::info!("revoked hmac key for device={}", device_id);
+    tracing::info!(device_id = %device_id, "revoked hmac key");
     Ok(())
 }
 
