@@ -354,12 +354,118 @@ class TestMiddleware:
     def test_middleware_injects_trace_id_header(self, memory_exporter):
         """当请求线程里有活跃 span 且 trace_id 非 0 时，middleware 写入 X-Trace-Id header。
 
-        跳过：Starlette ``BaseHTTPMiddleware`` 在 ``TestClient`` 的 portal
-        模式下跨线程运行，OTel contextvar 不会自动传播，因此这里无法
-        用 TestClient 验证。生产环境配合 ``opentelemetry-instrumentation-asgi``
+        实现：用 httpx.AsyncClient + ASGITransport 直接调 ASGI，绕过 TestClient
+        portal 跨线程问题。生产环境配合 ``opentelemetry-instrumentation-asgi``
         使用即可生效。
         """
-        pytest.skip("TestClient portal 不传播 OTel context；生产靠 ASGI instrumentation")
+        import asyncio
+
+        from httpx import ASGITransport, AsyncClient
+        from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
+
+        fake_trace_id = 0x1234567890ABCDEF1234567890ABCDEF
+        fake_span_id = 0xFEDCBA0987654321
+        span_ctx = SpanContext(
+            trace_id=fake_trace_id,
+            span_id=fake_span_id,
+            is_remote=False,
+            trace_flags=TraceFlags(TraceFlags.SAMPLED),
+        )
+
+        app = FastAPI()
+        app.add_middleware(MonitoringMiddleware)
+
+        @app.get("/hello")
+        async def hello():
+            return {"ok": True}
+
+        async def run_request() -> str:
+            transport = ASGITransport(app=app)
+            # 把 span 附着到当前 context，middleware 在同一 task 里读
+            token = trace.context_api.attach(
+                trace.set_span_in_context(NonRecordingSpan(span_ctx))
+            )
+            try:
+                async with AsyncClient(transport=transport, base_url="http://test") as ac:
+                    resp = await ac.get("/hello")
+                    return resp.headers.get("X-Trace-Id", "")
+            finally:
+                trace.context_api.detach(token)
+
+        trace_id_header = asyncio.run(run_request())
+        assert trace_id_header == format(fake_trace_id, "032x")
+
+    def test_middleware_trace_id_appears_in_jsonl_logs(self, tmp_path):
+        """端到端：发起 HTTP 请求 → jsonl 日志里能 grep 到该 trace_id。
+
+        验证 PR 3 全链路串联：HTTP 请求 → middleware 注入 X-Trace-Id +
+        bind_context → structlog JSON 输出 → 写到 ~/.matrix/logs/*.jsonl。
+
+        用 ASGITransport + 临时 log_dir 隔离测试输出。
+        """
+        import asyncio
+
+        from httpx import ASGITransport, AsyncClient
+        from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
+
+        # 配置 logging 写到 tmp_path（不走默认 ~/.matrix/logs）
+        configure_logging(log_dir=tmp_path, level="INFO", console=False)
+
+        fake_trace_id = 0xABCDEF0123456789ABCDEF0123456789
+        fake_span_id = 0x1122334455667788
+        span_ctx = SpanContext(
+            trace_id=fake_trace_id,
+            span_id=fake_span_id,
+            is_remote=False,
+            trace_flags=TraceFlags(TraceFlags.SAMPLED),
+        )
+
+        app = FastAPI()
+        app.add_middleware(MonitoringMiddleware)
+
+        @app.get("/probe")
+        async def probe():
+            # 在请求处理函数里记一条日志，触发 trace_id 注入
+            log = get_logger(__name__)
+            log.info("trace.probe.received", path="/probe")
+            return {"ok": True}
+
+        async def run_request() -> None:
+            transport = ASGITransport(app=app)
+            token = trace.context_api.attach(
+                trace.set_span_in_context(NonRecordingSpan(span_ctx))
+            )
+            try:
+                async with AsyncClient(transport=transport, base_url="http://test") as ac:
+                    resp = await ac.get("/probe")
+                    assert resp.headers.get("X-Trace-Id") == format(fake_trace_id, "032x")
+            finally:
+                trace.context_api.detach(token)
+            # 强制 flush
+            for h in logging.getLogger().handlers:
+                h.flush()
+
+        asyncio.run(run_request())
+
+        # 验证 jsonl 里能找到该 trace_id
+        files = list(tmp_path.glob("*.jsonl"))
+        assert len(files) == 1, f"expected 1 jsonl file, got {files}"
+        content = files[0].read_text(encoding="utf-8").strip()
+        assert content, "expected at least one log line"
+
+        expected_trace_id = format(fake_trace_id, "032x")
+        found = False
+        for line in content.splitlines():
+            record = json.loads(line)
+            if record.get("trace_id") == expected_trace_id:
+                found = True
+                # 同时验证事件名是 structlog 字段（不是字符串里的占位符）
+                assert record["event"] == "trace.probe.received"
+                break
+        assert found, (
+            f"trace_id {expected_trace_id} not found in jsonl. "
+            f"Lines:\n{content}"
+        )
 
 
 # ---------------------------------------------------------------------------
