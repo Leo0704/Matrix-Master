@@ -261,17 +261,37 @@ async def pair_device(
     """APK 调主控配对。
 
     鉴权策略：APK 在配对时还没有共享密钥，因此 HMAC 鉴权失败也允许继续
-    （通过配对码 + token 验证身份）。如果客户端带上了 HMAC header，优先校验。
+    （通过配对码验证身份）。如果客户端带上了 HMAC header，优先校验。
+
+    标准配对流程（防重放）：
+    1. ``validate_code`` 预检：配对码存在 + 未过期 + 未被消费
+    2. 校验 ``device_id`` 与配对码登记设备一致
+    3. ``consume_pair_code`` 原子消费（防并发 / 防重放）
+    4. ``complete_pairing`` 签发并下发 HMAC 密钥
     """
     km = KeyManager(session)
     ts = TailscaleClient(api_url="", api_key="")  # 仅占位
     pairing = PairingService(session, km, ts)
 
+    expected_device = pairing.validate_code(payload.pair_code)
+    if expected_device is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="invalid or expired pair code"
+        )
+    if expected_device != device_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="pair code does not match device"
+        )
+    if not pairing.consume_pair_code(payload.pair_code):
+        # 已被并发消费
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="pair code already consumed"
+        )
+
     try:
         result = await pairing.complete_pairing(
             device_id=device_id,
             pair_code=payload.pair_code,
-            token=payload.pair_code,  # 简化：token = pair_code
         )
     except PairingError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e

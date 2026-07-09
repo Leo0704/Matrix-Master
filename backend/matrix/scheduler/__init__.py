@@ -10,10 +10,12 @@ from .scheduler import (
     TaskResult,
     TaskStatusWriter,
 )
+from .slot_picker import DefaultSlotPicker
 from .token_bucket import RateLimitTimeout, TokenBucket
 
 __all__ = [
     "CircuitBreaker",
+    "DefaultSlotPicker",
     "RateLimitDecision",
     "RateLimitTimeout",
     "RateLimiter",

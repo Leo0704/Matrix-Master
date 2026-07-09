@@ -5,26 +5,31 @@ from __future__ import annotations
 from matrix.monitoring.logging import get_logger
 from datetime import UTC, datetime
 from typing import Any
-from uuid import uuid4
 
 from matrix.scheduler.active_window import is_in_active_window
 
 from .._services import get_services
-from ..protocols import DeviceSlot
+from ..protocols import ChosenSlot
 from ..types import AgentState
 
 logger = get_logger(__name__)
 
 
-async def schedule_node(state: AgentState) -> dict[str, Any]:
-    """可选：根据 persona 选活跃窗，并委派给 ``services.scheduler`` 选设备+账号。
+async def schedule_node(state: AgentState, *, now: datetime | None = None) -> dict[str, Any]:
+    """按 persona 选活跃窗，并委派给 ``services.scheduler.choose_slot`` 选设备+账号。
 
-    单元测试可注入 ``services.scheduler`` 来 mock 选设备；未注入则用一个
-    临时 UUID 作为占位 slot（标记 reason="synthetic_slot"），便于在没有
-    scheduler 模块的情况下端到端流转。
+    错误码：
+    - ``OUT_OF_ACTIVE_WINDOW``：不在活跃窗内，待重试
+    - ``NO_SCHEDULER``：未配置 scheduler（生产环境必须配）
+    - ``NO_AVAILABLE_SLOT``：无候选 device/account 组合可用
+    - ``SCHEDULE_FAILED``：``choose_slot`` 抛错
+
+    Args:
+        state: 当前 AgentState
+        now: 注入的"当前时间"，测试时使用避开活跃窗外；默认 ``datetime.now(UTC)``
     """
     services = get_services()
-    now = datetime.now(UTC)
+    now = now or datetime.now(UTC)
 
     # 取 persona_config（活跃窗黑名单等）
     persona_config: dict | None = None
@@ -42,34 +47,21 @@ async def schedule_node(state: AgentState) -> dict[str, Any]:
         }
 
     if services.scheduler is None:
-        # 占位：返回伪 slot，由 dispatch 阶段产生 synthetic task 记录
-        slot = DeviceSlot(
-            device_id=uuid4(),
-            account_id=uuid4(),
-            reason="synthetic_slot",
-        )
         return {
             "scheduled_at": now.isoformat(),
-            "slot": slot.__dict__,
-            "last_error": None,
+            "slot": None,
+            "last_error": {
+                "code": "NO_SCHEDULER",
+                "message": "scheduler slot picker not configured",
+            },
         }
 
-    # 实际生产路径
     try:
-        chosen = await services.scheduler.choose_slot(  # type: ignore[attr-defined]
+        chosen = await services.scheduler.choose_slot(
             draft=state.get("draft") or {},
+            persona_config=persona_config,
+            now=now,
         )
-        slot = DeviceSlot(
-            device_id=chosen.device_id,
-            account_id=chosen.account_id,
-            reason="scheduler.choose_slot",
-        )
-        scheduled_at = chosen.scheduled_at or now
-        return {
-            "scheduled_at": scheduled_at.isoformat(),
-            "slot": slot.__dict__,
-            "last_error": None,
-        }
     except Exception as exc:
         logger.exception("schedule.choose_slot failed")
         return {
@@ -77,3 +69,34 @@ async def schedule_node(state: AgentState) -> dict[str, Any]:
             "slot": None,
             "last_error": {"code": "SCHEDULE_FAILED", "message": str(exc)},
         }
+
+    if chosen is None:
+        return {
+            "scheduled_at": now.isoformat(),
+            "slot": None,
+            "last_error": {
+                "code": "NO_AVAILABLE_SLOT",
+                "message": "no active device/account combination available",
+            },
+        }
+
+    if not isinstance(chosen, ChosenSlot):
+        # 兜底：上游实现返回了普通 DeviceSlot 时补一个 scheduled_at
+        chosen = ChosenSlot(
+            device_id=chosen.device_id,
+            account_id=chosen.account_id,
+            reason=chosen.reason,
+            scheduled_at=now,
+        )
+    slot = {
+        "device_id": str(chosen.device_id),
+        "account_id": str(chosen.account_id),
+        "reason": chosen.reason,
+        "scheduled_at": chosen.scheduled_at.isoformat() if chosen.scheduled_at else None,
+    }
+    scheduled_at = (chosen.scheduled_at or now).isoformat()
+    return {
+        "scheduled_at": scheduled_at,
+        "slot": slot,
+        "last_error": None,
+    }

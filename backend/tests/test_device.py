@@ -487,9 +487,10 @@ class TestPairingService:
         pairing = PairingService(session, km, ts)
 
         created = await pairing.create_pairing(device.id)
-        result = await pairing.complete_pairing(
-            device.id, created.pair_code, created.pair_code
-        )
+        # 标准流程：validate → consume → complete
+        assert pairing.validate_code(created.pair_code) == device.id
+        assert pairing.consume_pair_code(created.pair_code) is True
+        result = await pairing.complete_pairing(device.id, created.pair_code)
         assert result.device_id == device.id
         assert result.key_id.startswith("hmk_")
         # base64 编码可解码
@@ -506,8 +507,9 @@ class TestPairingService:
         km = KeyManager(session)
         pairing = PairingService(session, km, ts)
 
-        with pytest.raises(PairingError, match="invalid or expired"):
-            await pairing.complete_pairing(device.id, "000000", "000000")
+        # 未知配对码：validate_code 返回 None（不抛错），consume_pair_code 返回 False
+        assert pairing.validate_code("000000") is None
+        assert pairing.consume_pair_code("000000") is False
 
     @pytest.mark.asyncio
     async def test_complete_pairing_rejects_device_mismatch(self) -> None:
@@ -519,8 +521,12 @@ class TestPairingService:
         pairing = PairingService(session, km, ts)
         created = await pairing.create_pairing(device.id)
 
+        # validate_code 返回的是登记的 device.id；调用方应自行比对
+        assert pairing.validate_code(created.pair_code) == device.id
+        # 若强制用错误 device_id 调 complete_pairing，consume 成功但 complete 拒绝
+        assert pairing.consume_pair_code(created.pair_code) is True
         with pytest.raises(PairingError, match="does not match"):
-            await pairing.complete_pairing(uuid.uuid4(), created.pair_code, created.pair_code)
+            await pairing.complete_pairing(uuid.uuid4(), created.pair_code)
 
     @pytest.mark.asyncio
     async def test_pair_code_one_time_use(self) -> None:
@@ -531,11 +537,12 @@ class TestPairingService:
         km = KeyManager(session)
         pairing = PairingService(session, km, ts)
         created = await pairing.create_pairing(device.id)
-        # 第一次成功
-        await pairing.complete_pairing(device.id, created.pair_code, created.pair_code)
-        # 第二次失败
-        with pytest.raises(PairingError):
-            await pairing.complete_pairing(device.id, created.pair_code, created.pair_code)
+        # 第一次：consume → complete
+        assert pairing.consume_pair_code(created.pair_code) is True
+        await pairing.complete_pairing(device.id, created.pair_code)
+        # 第二次：validate 返回 None（已被消费）
+        assert pairing.validate_code(created.pair_code) is None
+        assert pairing.consume_pair_code(created.pair_code) is False
 
     @pytest.mark.asyncio
     async def test_pair_code_expires(self) -> None:
@@ -547,8 +554,13 @@ class TestPairingService:
         # TTL = 0 → 立即过期
         pairing = PairingService(session, km, ts, ttl_seconds=0)
         created = await pairing.create_pairing(device.id)
-        with pytest.raises(PairingError, match="expired"):
-            await pairing.complete_pairing(device.id, created.pair_code, created.pair_code)
+        # validate / consume 都因过期失效（API 层在调 complete_pairing 之前会先
+        # 走这两步拿到精确错误码：consume_pair_code 内部对过期会返回 False，
+        # api 路径会先 validate_code 拿到 None 状态）。
+        assert pairing.validate_code(created.pair_code) is None
+        assert pairing.consume_pair_code(created.pair_code) is False
+        with pytest.raises(PairingError, match="not_consumed"):
+            await pairing.complete_pairing(device.id, created.pair_code)
 
     @pytest.mark.asyncio
     async def test_cleanup_expired_removes_old_codes(self) -> None:

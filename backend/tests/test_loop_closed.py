@@ -6,6 +6,9 @@ ANALYZE→IDLE）在真实节点代码下能端到端收敛，且确实调用了
 """
 from __future__ import annotations
 
+from datetime import datetime
+from uuid import uuid4
+
 from tests.test_agent import (
     FakeKBRetriever,
     FakeKBWriter,
@@ -14,7 +17,26 @@ from tests.test_agent import (
 )
 
 from matrix.agent.bootstrap import build_agent_services, build_run_manager
+from matrix.agent.protocols import ChosenSlot
 from tests._fake_adapters import MockDeviceAdapter
+
+
+class _FakeSlotPicker:
+    """测试用：每次 choose_slot 返回一个固定的 ChosenSlot。"""
+
+    def __init__(self) -> None:
+        self.device_id = uuid4()
+        self.account_id = uuid4()
+
+    async def choose_slot(
+        self, *, draft: dict, persona_config: dict | None = None, now: datetime | None = None
+    ) -> ChosenSlot:
+        return ChosenSlot(
+            device_id=self.device_id,
+            account_id=self.account_id,
+            reason="slot_picker.match",
+            scheduled_at=now or datetime.utcnow(),
+        )
 
 
 async def test_closed_loop_runs_end_to_end():
@@ -33,6 +55,7 @@ async def test_closed_loop_runs_end_to_end():
         kb_retriever=FakeKBRetriever(),
         kb_writer=FakeKBWriter(),
         device_adapter=device,
+        scheduler=_FakeSlotPicker(),
     )
     rm = build_run_manager(services=services, repository=InMemoryAgentRepository())
 
@@ -74,6 +97,7 @@ async def test_closed_loop_fails_when_publish_fails():
         kb_retriever=FakeKBRetriever(),
         kb_writer=FakeKBWriter(),
         device_adapter=device,
+        scheduler=_FakeSlotPicker(),
     )
     rm = build_run_manager(services=services, repository=InMemoryAgentRepository())
 
