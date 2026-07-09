@@ -28,7 +28,6 @@ from matrix.scheduler import (
     TaskExecutor,
     TaskLike,
     TaskLoader,
-    TaskResult,
     TaskStatusWriter,
     TokenBucket,
     is_in_active_window,

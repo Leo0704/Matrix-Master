@@ -38,7 +38,7 @@ from matrix.api.routes import (
     settings as settings_routes,
 )
 from matrix.agent._default_repository import DefaultAgentRepository
-from matrix.agent.bootstrap import build_agent_services, build_run_manager
+from matrix.agent.bootstrap import build_run_manager
 from matrix.agent.run_manager import init_manager
 from matrix.agent.runner import AgentRunWorker, set_worker
 from matrix.api.schemas import ErrorDetail, ErrorResponse
@@ -92,9 +92,6 @@ def create_app(
         # ---- 装配 Agent 服务（LLM/KB 检索器/写库器）并启动 worker ----
         services: Any = None
         try:
-            from matrix.kb.embedding import EmbeddingService
-            from matrix.kb.retrieval import Retriever
-            from matrix.kb.store import KbStore
 
             from matrix.agent._services import set_services as _set_services
             from matrix.api._agent_factory import build_runtime_services

@@ -10,7 +10,6 @@
 """
 from __future__ import annotations
 
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -19,10 +18,8 @@ from matrix.agent._services import AgentServices, reset_services, set_services
 from matrix.agent.nodes import image_gen_node
 from matrix.agent.nodes.image_gen import _build_image_prompt, _topic_hash
 from matrix.agent.protocols import RetrievedChunk
-from matrix.agent.types import AgentState
 from matrix.llm.image_gen import (
     ImageGenError,
-    ImageGenResult,
     InMemoryImageGenClient,
 )
 

@@ -2,7 +2,6 @@ package com.matrix.companion.net
 
 import com.matrix.companion.util.Logx
 import java.net.NetworkInterface
-import java.util.Locale
 
 /**
  * Peek at the device's Tailscale IP. Real implementation embeds libtailscale

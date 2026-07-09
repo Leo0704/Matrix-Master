@@ -36,14 +36,12 @@ from matrix.device.hmac import (
     hash_key,
     verify_signature,
 )
-from matrix.device.key_manager import DEFAULT_ROTATION_DAYS, KeyManager
+from matrix.device.key_manager import KeyManager
 from matrix.device.login_state import (
-    VALID_RESULTS,
     LoginStateMonitor,
     LoginStateReport,
 )
 from matrix.device.pairing import (
-    PAIR_CODE_TTL_SECONDS,
     PairingError,
     PairingService,
 )
@@ -1066,7 +1064,6 @@ class TestDeviceAPI:
     @pytest.mark.asyncio
     async def test_list_devices_returns_dict(self) -> None:
         from matrix.device.api import list_devices
-        from fastapi import Request
 
         d1 = make_device()
         session = FakeSession()
@@ -1093,7 +1090,6 @@ class TestDeviceAPI:
     @pytest.mark.asyncio
     async def test_register_device_via_api(self) -> None:
         from matrix.device.api import register_device, DeviceRegisterIn
-        from datetime import datetime
 
         session = FakeSession()
         payload = DeviceRegisterIn(

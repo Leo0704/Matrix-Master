@@ -65,3 +65,4 @@ Thumbs.db
 
 # Tauri / 前端构建产物
 shell/dist/
+_real_device_*.py

@@ -22,7 +22,6 @@ from typing import Any, Optional, Protocol
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .embedding import EmbeddingService
 
 
 logger = get_logger(__name__)

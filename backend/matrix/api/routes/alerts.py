@@ -77,13 +77,9 @@ async def scan_alerts(
 
     已有 (code, subject_id, resolved=False) 的告警不再重复写（幂等）。
     """
-    from sqlalchemy import and_, exists
     from matrix.monitoring.alerts import (
-        check_budget_exceeded,
         check_device_offline,
         check_risk_blocked,
-        check_selector_not_found,
-        check_tailscale_derp_lost,
     )
 
     # 收集现有 (code, subject_id) — resolved=False 的告警，避免重复

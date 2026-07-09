@@ -20,7 +20,6 @@ from matrix.agent._services import (
     reset_services,
     set_services,
 )
-from matrix.agent.bootstrap import build_agent_services, build_run_manager
 from matrix.agent.guards import GuardConfig
 from matrix.agent.nodes.interact import interact_node
 from matrix.agent.protocols import InteractResult
@@ -30,8 +29,6 @@ from matrix.agent.types import State
 from matrix.scheduler.rate_limiter import RateLimiter
 
 from tests.test_agent import (
-    FakeKBRetriever,
-    FakeKBWriter,
     FakeLLM,
     InMemoryAgentRepository,
     clear_notify_log,
@@ -244,7 +241,6 @@ async def test_interact_node_no_device_interactor_marks_part():
 @pytest.mark.asyncio
 async def test_interact_node_rate_limiter_throttles():
     """限速命中 → 该项记 daily_cap，interactor 不被调。"""
-    from datetime import datetime
 
     # 用一个超低阈值的 limiter 来强制触发
     rl = RateLimiter(device_interact_per_day=2)

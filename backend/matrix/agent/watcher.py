@@ -22,7 +22,7 @@ asyncio loop + ``asyncio.wait_for(stop_event, timeout=poll_interval)``
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
 

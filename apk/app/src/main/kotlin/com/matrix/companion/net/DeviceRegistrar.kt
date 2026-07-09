@@ -24,10 +24,8 @@ import java.util.UUID
  * Coordinates the bootstrap handshake:
  *
  *   1. read-or-generate device_id, persist in shared prefs
- *   2. POST /api/v1/devices/register { device_id, tailscale_ip, model, os }
- *      → returns { device_list (other paired devices, for UI only) }
- *   3. POST /api/v1/devices/pair { device_id, pair_code }
- *      → returns { hmac_secret (base64), tailscale_block }
+ *   2. POST /api/v1/devices/pair { device_id, pair_code, tailscale_ip, model, os_version }
+ *      → returns { hmac_secret (base64) }
  *
  * Pair-once: HMAC secret is wrapped in Keystore and persisted via
  * [HmacSecretStore.save]. Tailscale mesh ACLs are applied master-side.
@@ -73,7 +71,6 @@ class DeviceRegistrar(private val context: Context) {
 
     @Serializable
     data class ApiErrorBody(
-        val code: String? = null,
         val message: String? = null,
     )
 

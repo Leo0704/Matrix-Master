@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -26,11 +25,9 @@ from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from prometheus_client import REGISTRY
 
 # 必须在被测模块之前 import（tracing 模块用全局 provider）
 from matrix.monitoring import (  # noqa: E402
-    Alert,
     MonitoringMiddleware,
     all_metrics,
     bind_context,

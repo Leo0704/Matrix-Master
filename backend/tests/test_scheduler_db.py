@@ -5,7 +5,6 @@ dispatch 走 ``DeviceTaskExecutor`` 时用 fake 协议。
 """
 from __future__ import annotations
 
-import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone

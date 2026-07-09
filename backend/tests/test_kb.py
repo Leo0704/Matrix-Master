@@ -15,12 +15,9 @@
 """
 from __future__ import annotations
 
-import asyncio
 import uuid
-from contextlib import asynccontextmanager
-from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -32,8 +29,6 @@ from matrix.kb import (
 )
 from matrix.kb.chunker import Chunk
 from matrix.kb.retrieval import (
-    DEFAULT_RRF_K,
-    ChunkResult,
     Retriever,
     _build_ts_query,
     _vec_to_pgvector_str,
@@ -341,7 +336,6 @@ class TestVecSerialization:
         assert "0.2" in s
 
     def test_nan_inf_filtered(self):
-        import math
         s = _vec_to_pgvector_str([0.1, float("inf"), float("nan"), 0.3])
         assert "inf" not in s.lower()
         assert "nan" not in s.lower()

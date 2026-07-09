@@ -21,7 +21,6 @@ def hello() -> None:
 def check_db() -> None:
     """检查数据库连接。"""
     try:
-        import asyncpg
 
         print("Connecting to localhost:5432/matrix ...")
         # TODO: 实际连接测试

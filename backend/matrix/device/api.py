@@ -16,11 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from matrix.db.models import Device
 from matrix.db.session import get_session
-from matrix.device.account_binding import AccountBinding
 from matrix.device.hmac import (
-    SIGNATURE_SEP,
-    compute_signature,
-    hash_key,
     verify_signature,
 )
 from matrix.device.key_manager import KeyManager

@@ -1,5 +1,5 @@
 /**
- * Tauri IPC wrapper. All Rust-side commands (get_app_info / restart_backend / etc)
+ * Tauri IPC wrapper. All Rust-side commands (get_app_info / restart_python_backend / etc)
  * are exposed on `window.__TAURI__.core.invoke`. When running outside Tauri
  * (e.g. pure Vite dev), fall back to a no-op so the UI doesn't crash.
  */
@@ -33,7 +33,7 @@ export function useTauri() {
   return {
     isTauri: isTauri(),
     getAppInfo: () => invoke<{ version: string; name: string }>('get_app_info'),
-    restartBackend: () => invoke<{ ok: boolean }>('restart_backend'),
+    restartBackend: () => invoke<{ ok: boolean }>('restart_python_backend'),
     generateHmacKey: () =>
       invoke<{ key_id: string; hmac_key: string }>('generate_hmac_key'),
     showNotification: (title: string, body: string) =>

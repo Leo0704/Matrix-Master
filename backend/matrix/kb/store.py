@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from matrix.monitoring.logging import get_logger
 import uuid
-from typing import Any, Optional
+from typing import Optional
 
 from sqlalchemy import delete as sa_delete, select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession

@@ -33,10 +33,6 @@ class KeystoreManager(
         return generator.generateKey()
     }
 
-    fun deleteKey() {
-        if (keystore.containsAlias(keyAlias)) keystore.deleteEntry(keyAlias)
-    }
-
     companion object {
         const val ANDROID_KEYSTORE = "AndroidKeyStore"
         const val DEFAULT_ALIAS = "matrix_companion_master_key"

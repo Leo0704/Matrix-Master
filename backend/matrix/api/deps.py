@@ -12,7 +12,7 @@ import os
 from dataclasses import dataclass
 from typing import AsyncIterator
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from matrix.db.session import get_session_factory

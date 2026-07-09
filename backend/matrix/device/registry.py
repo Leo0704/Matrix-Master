@@ -12,7 +12,7 @@ from __future__ import annotations
 from matrix.monitoring.logging import get_logger
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Iterable, Optional
+from typing import Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, select

@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator
 
 import pytest
 import pytest_asyncio
@@ -26,7 +26,6 @@ from matrix.db.models import (
     Account,
     AgentRun,
     Device,
-    Goal,
     Note,
     Persona,
 )

@@ -12,7 +12,6 @@ from __future__ import annotations
 from matrix.monitoring.logging import get_logger
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
 from uuid import UUID, uuid4
 
 import httpx

@@ -13,7 +13,6 @@ from typing import Any
 
 import pytest
 from fastapi import FastAPI, HTTPException, status
-from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
 
 from matrix.api.app import _install_exception_handlers
@@ -151,14 +150,10 @@ class TestAlertScannerWiring:
         用最小 stub 替换 _gather_devices/_gather_accounts/_fetch_existing_pairs
         注入固定输入；验证 _scan_once 行为。
         """
-        from sqlalchemy.ext.asyncio import async_sessionmaker
 
         # 空 session_factory（只调用 .add / .flush / .commit 的 stub）
-        from unittest.mock import AsyncMock, MagicMock
 
         # 一个空 sqlite in-memory + 创建 alerts 表（用 SQLAlchemy 核心 DDL）
-        from sqlalchemy import Column, MetaData, Table, create_engine, text
-        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
         # 走最简路径：mock 掉 AlertScanner 内部的 helper，验证去重逻辑
         async def fake_gather_devices(session):

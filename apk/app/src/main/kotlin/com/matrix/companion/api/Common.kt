@@ -3,9 +3,7 @@ package com.matrix.companion.api
 import kotlinx.serialization.Serializable
 
 @Serializable
-internal data class OkResp(val ok: Boolean, val data: kotlinx.serialization.json.JsonElement? = null) {
-    companion object { val falseFlag: Boolean = false }
-}
+internal data class OkResp(val ok: Boolean, val data: kotlinx.serialization.json.JsonElement? = null)
 
 @Serializable
 internal data class ErrResp(
