@@ -80,6 +80,8 @@ async def build_runtime_services(
     *,
     llm_factory: Callable[[], Any] = lambda: None,
     embedding_client_cls: Callable[..., Any] | None = None,
+    task_writer: Any | None = None,
+    scheduler: Any | None = None,
 ) -> AgentServices:
     """构造生产链所需的 AgentServices：LLM / KB 检索 / KB 写库 / Usage 跟踪。
 
@@ -87,6 +89,10 @@ async def build_runtime_services(
         session_factory: DB session 工厂
         llm_factory: 返回 LLMClient 实例的可调用（默认从环境变量选 provider）
         embedding_client_cls: OpenAI Embedding 客户端类（用于构造 EmbeddingService）
+        task_writer: 写 task 的 callable（默认 None → dispatch_node 静默跳过落库；
+            生产路径传 :class:`matrix.scheduler.db.DbTaskWriter`）
+        scheduler: 选 (设备,账号) 槽位的 scheduler（默认 None；
+            生产路径传 :class:`matrix.scheduler.slot_picker.DefaultSlotPicker`）
     """
     llm = llm_factory()
     if embedding_client_cls is None:
@@ -103,5 +109,7 @@ async def build_runtime_services(
         kb_writer=_LazyWriter(session_factory, embedder),
         usage_tracker=usage_tracker,
         config=_LazyConfigReader(session_factory),
+        task_writer=task_writer,
+        scheduler=scheduler,
     )
     return services
