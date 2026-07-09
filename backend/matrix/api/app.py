@@ -29,6 +29,7 @@ from matrix.api.routes import (
     health as health_routes,
     interactions as interactions_routes,
     kb as kb_routes,
+    logs as logs_routes,
     metrics as metrics_routes,
     notes as notes_routes,
     personas as personas_routes,
@@ -219,6 +220,7 @@ def create_app(
     app.include_router(analytics_routes.router, prefix=API_PREFIX)
     app.include_router(metrics_routes.router, prefix=API_PREFIX)
     app.include_router(interactions_routes.router, prefix=API_PREFIX)  # v0.6
+    app.include_router(logs_routes.router, prefix=API_PREFIX)            # PR 6
 
     return app
 

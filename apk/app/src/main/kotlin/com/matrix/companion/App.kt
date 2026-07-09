@@ -12,6 +12,7 @@ import com.matrix.companion.crypto.KeystoreManager
 import com.matrix.companion.status.StatusProvider
 import com.matrix.companion.accessibility.AccessibilityDriver
 import com.matrix.companion.accessibility.ActionExecutor
+import com.matrix.companion.net.LogForwarder
 import com.matrix.companion.util.Logx
 
 /**
@@ -54,6 +55,11 @@ class App : Application() {
             driver = AccessibilityDriver(serviceRef = { accessibilityServiceInstance })
             executor = ActionExecutor(driver, this)
             ensureNotificationChannel()
+            // Plant the LogForwarder Tree so every Logx.i/w/e (and any
+            // direct Timber call) is shipped to master. Must run after
+            // shared-prefs is readable (always true here — App is the
+            // first thing the process touches).
+            LogForwarder.install(this)
             Logx.i("App initialized")
         } catch (t: Throwable) {
             Logx.e("App init failed", t)

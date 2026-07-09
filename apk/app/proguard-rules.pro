@@ -8,3 +8,7 @@
 
 # Keep our companion package public API
 -keep class com.matrix.companion.** { *; }
+
+# Timber (defensive — Tree subclasses are reflectively planted)
+-keep class timber.log.** { *; }
+-dontwarn timber.log.**
