@@ -13,26 +13,29 @@
 | 工具 | 版本 | 用途 |
 |---|---|---|
 | Git | 2.30+ | 版本控制 |
-| Docker | 24+ | PostgreSQL / Headscale 容器化 |
+| Docker | 24+ | PostgreSQL / Headscale / 后端 / 前端 vite / 测试容器化 |
 | Docker Compose | v2 | 多容器编排 |
-| Node.js | 20+ | 前端构建（如用 Tauri-Web） |
-| pnpm | 8+ | 前端包管理（推荐） |
+| Node.js | 20+ | host 上 npm install + `npx tauri dev` 用 |
+| pnpm | 8+ | 可选；frontend service 默认用 npm |
 
-### 1.2 Python 后端
+### 1.2 后端 / 测试 / 数据库
 
-| 工具 | 版本 | 备注 |
+| 工具 | 位置 | 备注 |
 |---|---|---|
-| Python | 3.11+ | pyenv 管理 |
-| Poetry | 1.7+ | 依赖管理 |
-| Alembic | latest | 数据库迁移 |
+| Python 3.11 | docker 镜像 | Dockerfile / Dockerfile.backend 固定 |
+| [uv](https://docs.astral.sh/uv/) | docker 镜像 | 包管理（在镜像内，host 不需要装） |
+| Alembic | docker 镜像（test service） | 数据库迁移 |
 
-### 1.3 Tauri Shell
+### 1.3 Tauri Shell（仅 host）
+
+Tauri 的 Rust 进程 + WebView 必须在 host 跑（macOS WKWebView 依赖 Cocoa；Windows WebView2 依赖系统组件；docker 容器无法承载 GUI）。
 
 | 工具 | 版本 | 备注 |
 |---|---|---|
 | Rust | 1.75+ | rustup 管理 |
-| Tauri CLI | 1.5+ | `cargo install tauri-cli` |
+| Tauri CLI v2 | latest | `cargo install tauri-cli --version "^2.0" --locked` |
 | WebView2 | latest | Windows 专用 |
+| @tauri-apps/cli | latest | host 上 `npm install` 拉取（在 shell/devDependencies） |
 
 ### 1.4 APK 开发
 
@@ -55,18 +58,12 @@ cd matrix
 # 子模块（如有）
 git submodule update --init --recursive
 
-# 创建 Python 虚拟环境
-python3.11 -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-
-# 安装 Python 依赖
-cd backend
-poetry install
-
-# 复制环境变量模板
+# 复制环境变量模板（host 端用，docker 内不需要）
 cp .env.example .env
 # 编辑 .env 填入 LLM API key 等
 ```
+
+> host 不需要装 Python 依赖 —— 全部在 docker 镜像里（Dockerfile / Dockerfile.backend）。
 
 ## 3. 启动 PostgreSQL
 
@@ -101,15 +98,37 @@ volumes:
   postgres_data:
 ```
 
-### 3.2 应用迁移
+### 3.2 应用迁移（容器内）
+
+迁移走 docker test service，与测试共用同一镜像（alembic 已在镜像里）：
 
 ```bash
-cd backend
-alembic upgrade head
+# 在仓库根目录
+docker compose run --rm test alembic upgrade head
 
 # 验证
 psql -h localhost -U matrix -d matrix -c "\dt"
 ```
+
+### 3.3 跑测试（容器内，约定）
+
+本项目约定 **pytest 必须在 docker 内跑**，不要本地 `pytest`：
+
+```bash
+# 全部测试
+docker compose run --rm test
+
+# 单文件
+docker compose run --rm test pytest tests/test_x.py
+
+# 按关键字
+docker compose run --rm test pytest tests -k agent
+
+# 跑某个 mark
+docker compose run --rm test pytest tests -m "not slow"
+```
+
+`backend/` 通过 volumes bind mount 挂进容器，源码改动立即生效，无需 rebuild 镜像。只有 `pyproject.toml` / `uv.lock` 变化才需要 `docker compose build test`。
 
 ## 4. 启动 Headscale（开发用）
 
@@ -130,14 +149,14 @@ docker compose logs headscale
 docker exec -it headscale headscale nodes register --user default --key nodekey:xxx
 ```
 
-## 5. 启动 Python 后端
+## 5. 启动 Python 后端（docker 内）
 
 ```bash
-cd backend
-source ../.venv/bin/activate
+# 起基础设施（如果 §3 §4 还没起）
+docker compose up -d postgres headscale derp
 
-# 开发模式（自动 reload）
-uvicorn matrix.api.app:app --reload --port 8666
+# 起后端（uvicorn 在 docker 内，--reload 自动热重启）
+docker compose up -d backend
 
 # 健康检查
 curl http://localhost:8666/api/v1/health
@@ -155,18 +174,23 @@ curl http://localhost:8666/api/v1/health
 }
 ```
 
-## 6. 启动 Tauri Shell
+## 6. 启动前端 vite + Tauri Shell
 
 ```bash
+# 6.1 起前端 vite dev server（docker 内，端口 1420）
+docker compose up -d frontend
+
+# 6.2 在 host 上启动 Tauri（Rust 进程 + WebView，必须 host 跑）
 cd shell
 npm install
-npm run tauri dev
+npx tauri dev
 ```
 
 首次启动会：
-1. 检查 Python 后端是否在 8666 端口监听
-2. 未监听则报错并提示启动 Python 后端
-3. 启动后打开桌面 UI
+1. Tauri 编译 Rust 进程（首次较慢，增量编译后秒级）
+2. 创建 WebView 窗口（macOS WKWebView / Windows WebView2）
+3. WebView 加载 http://localhost:1420（Tauri `devUrl`） → 经 docker port mapping → frontend 容器内 vite
+4. WebView 通过 http://localhost:8666 调用后端 → 经 port mapping → backend 容器内 uvicorn
 
 ## 7. 启动 APK（开发模式）
 
@@ -196,9 +220,8 @@ adb shell am start -n com.matrix.companion/.MainActivity
 ### 8.1 主控调用 APK
 
 ```bash
-# 在主控端
-cd backend
-python -m matrix.cli test_hello_world
+# CLI 在 backend 容器内跑
+docker compose exec backend python -m matrix.cli test_hello_world
 ```
 
 预期输出：
@@ -216,7 +239,7 @@ python -m matrix.cli test_hello_world
 ### 8.2 端到端发布测试
 
 ```bash
-python -m matrix.cli test_publish_e2e
+docker compose exec backend python -m matrix.cli test_publish_e2e
 ```
 
 预期：从知识库生成一篇测试笔记 → 调度 → APK 发布 → 拿到 platform_note_id。
@@ -233,12 +256,12 @@ python -m matrix.cli test_publish_e2e
 - Even Better TOML
 - SQLTools（PostgreSQL）
 
-`settings.json`：
+`settings.json`（host 端没有 .venv；Python 调试走 docker attach）：
 
 ```json
 {
-  "python.defaultInterpreterPath": ".venv/bin/python",
-  "python.testing.pytestEnabled": true,
+  "python.defaultInterpreterPath": null,
+  "python.testing.pytestEnabled": false,
   "rust-analyzer.cargo.features": "all",
   "[python]": {
     "editor.formatOnSave": true,
@@ -246,6 +269,14 @@ python -m matrix.cli test_publish_e2e
   }
 }
 ```
+
+调试 Python 时用：
+
+```bash
+docker compose exec backend python -m pdb -m matrix.cli test_hello_world
+```
+
+或挂 VS Code Dev Containers 扩展连接到 `matrix-backend` 容器。
 
 ### 9.2 PyCharm
 
@@ -295,5 +326,5 @@ sudo tailscale up
 
 - 阅读 [architecture/SDD.md](../architecture/SDD.md) 了解系统设计
 - 阅读 [api/](../api/) 了解接口规范
-- 跑通 `pytest backend/tests/` 验证单元测试
+- 跑通 `docker compose run --rm test` 验证单元测试（在容器内）
 - 加入一个 issue 开始编码

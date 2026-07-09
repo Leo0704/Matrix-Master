@@ -15,6 +15,7 @@ from matrix.db.models import (
     AuditLog,
     Base,
     Comment,
+    DailyCounter,
     Device,
     DeviceHeartbeat,
     DeviceHmacKey,
@@ -22,7 +23,6 @@ from matrix.db.models import (
     Interaction,
     KbChunk,
     KbDocument,
-    LlmUsage,
     Note,
     NoteMetric,
     Persona,
@@ -63,7 +63,7 @@ __all__ = [
     "Interaction",
     "Comment",
     # 统计 / 审计 / 配置
-    "LlmUsage",
+    "DailyCounter",
     "AuditLog",
     "AppConfig",
 ]

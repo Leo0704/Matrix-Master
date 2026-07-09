@@ -19,9 +19,6 @@ from typing import Any
 from matrix.llm import LLMClient
 from matrix.llm.errors import LLMError
 
-from matrix.llm.clients import calculate_cost_usd
-from matrix.llm.usage import UsageTracker
-
 from .protocols import (
     ConfigReader,
     DeviceCollector,
@@ -50,8 +47,6 @@ class AgentServices:
     device_interactor: DeviceInteractor | None = None
     # 运行时配置（app_config 表读阈值等）；测试可传 None → 节点走硬编码 fallback
     config: ConfigReader | None = None
-    # LLM 用量跟踪（DB 持久化；如未设置则 LLM 调用不写 usage）
-    usage_tracker: UsageTracker | None = None
     # 默认模型与生成参数
     model: str = "sonnet"
     max_tokens: int = 1024
@@ -131,28 +126,6 @@ async def llm_complete(
                 run_id=run_id,
                 account_id=account_id,
             )
-            # 写 usage 记录到 DB（如果有 tracker）
-            if svc.usage_tracker is not None:
-                try:
-                    from matrix.llm.usage import UsageRecord
-
-                    cost = calculate_cost_usd(
-                        result.model, result.prompt_tokens, result.completion_tokens
-                    )
-                    rec = UsageRecord(
-                        model=result.model,
-                        call_type=call_type,
-                        prompt_tokens=result.prompt_tokens,
-                        completion_tokens=result.completion_tokens,
-                        cost_usd=cost,
-                        latency_ms=result.latency_ms,
-                        run_id=run_id,
-                        account_id=account_id,
-                    )
-                    if hasattr(svc.usage_tracker, "record_async"):
-                        await svc.usage_tracker.record_async(rec)
-                except Exception:  # pragma: no cover
-                    logger.exception("usage_tracker.record_async failed")
             return result.text
         except LLMError as exc:  # 可重试错误
             last_exc = exc

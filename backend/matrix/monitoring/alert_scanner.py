@@ -4,8 +4,7 @@
 --------
 - 纯后台任务，不阻塞请求路径
 - 复用现有 ``_LazyConfigReader`` 读阈值（``monitoring.heartbeat_threshold_sec`` /
-  ``monitoring.risk_score_threshold`` / ``monitoring.daily_budget_usd``），缺省走
-  ``monitoring/alerts.py`` 默认值
+  ``monitoring.risk_score_threshold``），缺省走 ``monitoring/alerts.py`` 默认值
 - 复用现有 ``Alert`` ORM（迁移 004 已建）；同 ``(code, subject_id)`` 未 resolved
   的不重复写（去重）
 - notifier 失败 / DB 失败都 logger.exception，不让后台循环崩
@@ -47,7 +46,6 @@ class AlertScannerConfig:
     enable_auto_scan: bool = True
     heartbeat_threshold_sec: int = 300
     risk_score_threshold: float = 0.7
-    daily_budget_usd: float = 100.0
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +143,6 @@ class AlertScanner:
     async def _scan_once(self) -> list[Alert]:
         """执行一轮扫描；公开给测试用。返回本轮新写入的 Alert ORM 行。"""
         from matrix.monitoring.alerts import (
-            check_budget_exceeded,
             check_device_offline,
             check_risk_blocked,
         )
@@ -170,13 +167,6 @@ class AlertScanner:
                     risk_threshold=thresholds["risk_score_threshold"],
                 )
             )
-            alerts.extend(
-                check_budget_exceeded(
-                    0.0,  # TODO: 接 llm_usage 聚合
-                    daily_budget_usd=thresholds["daily_budget_usd"],
-                )
-            )
-
             written: list[Alert] = []
             for a in alerts:
                 if (a.code, a.subject_id) in existing_pairs:
@@ -236,12 +226,6 @@ class AlertScanner:
                 await self._config_reader(
                     "monitoring.risk_score_threshold",
                     cfg.risk_score_threshold,
-                )
-            ),
-            "daily_budget_usd": float(
-                await self._config_reader(
-                    "monitoring.daily_budget_usd",
-                    cfg.daily_budget_usd,
                 )
             ),
         }

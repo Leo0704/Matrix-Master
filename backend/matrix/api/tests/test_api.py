@@ -635,7 +635,6 @@ async def test_metrics_summary(client: AsyncClient) -> None:
     assert "devices" in body
     assert "accounts" in body
     assert "tasks" in body
-    assert "llm_cost_24h_usd" in body
     assert body["devices"]["total"] == 0
     assert body["accounts"]["total"] == 0
     assert body["tasks"]["pending"] == 0

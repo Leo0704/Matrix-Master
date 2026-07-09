@@ -16,8 +16,84 @@ branch_labels = None
 depends_on = None
 
 
+def _split_sql(sql: str) -> list[str]:
+    """把多语句 SQL 拆成单语句列表，绕过 asyncpg 不支持 multi-statement prepared statement 的限制。
+
+    处理的边界：
+    - 行注释 `-- ...`（在语句内部）
+    - dollar-quoted 块 `$$ ... $$`（CREATE FUNCTION 等用）
+    - 单引号字符串 `'...'`
+    - 空语句（仅空白/注释）
+    """
+    statements: list[str] = []
+    current: list[str] = []
+    i = 0
+    n = len(sql)
+
+    def flush() -> None:
+        stmt = "".join(current).strip()
+        if stmt:
+            statements.append(stmt)
+        current.clear()
+
+    while i < n:
+        ch = sql[i]
+
+        # 行注释：到行尾
+        if ch == "-" and i + 1 < n and sql[i + 1] == "-":
+            while i < n and sql[i] != "\n":
+                current.append(sql[i])
+                i += 1
+            continue
+
+        # dollar-quoted 块（PostgreSQL PL/pgSQL 函数体常用）
+        if ch == "$" and i + 1 < n and sql[i + 1] == "$":
+            current.append("$$")
+            i += 2
+            while i < n and not (sql[i] == "$" and i + 1 < n and sql[i + 1] == "$"):
+                current.append(sql[i])
+                i += 1
+            if i < n:
+                current.append("$$")
+                i += 2
+            continue
+
+        # 单引号字符串
+        if ch == "'":
+            current.append("'")
+            i += 1
+            while i < n:
+                if sql[i] == "'" and i + 1 < n and sql[i + 1] == "'":
+                    # SQL 标准：两个连续单引号是转义
+                    current.append("''")
+                    i += 2
+                    continue
+                if sql[i] == "'":
+                    current.append("'")
+                    i += 1
+                    break
+                current.append(sql[i])
+                i += 1
+            continue
+
+        # 语句结束
+        if ch == ";":
+            current.append(";")
+            flush()
+            i += 1
+            continue
+
+        current.append(ch)
+        i += 1
+
+    # 兜底：文件末尾若没有 ;
+    flush()
+    return statements
+
+
 def upgrade() -> None:
-    op.execute("""-- =============================================================================
+    # asyncpg 不支持多语句 prepared statement；逐条执行
+    sql_script = """-- =============================================================================
 -- AI-Native 自媒体矩阵主控系统 - 数据库 Schema
 -- 版本：v0.1
 -- 数据库：PostgreSQL 16+ (需 pgvector 扩展)
@@ -95,6 +171,26 @@ CREATE TABLE device_heartbeats (
 CREATE TABLE device_heartbeats_default PARTITION OF device_heartbeats DEFAULT;
 
 -- =============================================================================
+-- 人设（先建：accounts.persona_id 外键依赖 personas）
+-- =============================================================================
+
+CREATE TABLE personas (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name            VARCHAR(64) NOT NULL UNIQUE,
+    tone            VARCHAR(256) NOT NULL,
+    style_guide     TEXT NOT NULL,
+    forbidden_words TEXT[] NOT NULL DEFAULT '{}',
+    sample_note_ids UUID[] NOT NULL DEFAULT '{}',
+    version         INTEGER NOT NULL DEFAULT 1,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at      TIMESTAMPTZ
+);
+
+CREATE TRIGGER trg_personas_updated_at BEFORE UPDATE ON personas
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- =============================================================================
 -- 账号
 -- =============================================================================
 
@@ -148,26 +244,6 @@ CREATE TABLE risk_signals (
 
 CREATE INDEX idx_risk_signals_account_ts ON risk_signals(account_id, ts DESC);
 CREATE INDEX idx_risk_signals_type_ts ON risk_signals(type, ts DESC);
-
--- =============================================================================
--- 人设 / 规则 / 选题
--- =============================================================================
-
-CREATE TABLE personas (
-    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name            VARCHAR(64) NOT NULL UNIQUE,
-    tone            VARCHAR(256) NOT NULL,
-    style_guide     TEXT NOT NULL,
-    forbidden_words TEXT[] NOT NULL DEFAULT '{}',
-    sample_note_ids UUID[] NOT NULL DEFAULT '{}',
-    version         INTEGER NOT NULL DEFAULT 1,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_at      TIMESTAMPTZ
-);
-
-CREATE TRIGGER trg_personas_updated_at BEFORE UPDATE ON personas
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 CREATE TABLE topics (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -508,7 +584,9 @@ SELECT
     MAX(t.scheduled_at) AS latest
 FROM tasks t
 GROUP BY t.status;
-""")
+"""
+    for stmt in _split_sql(sql_script):
+        op.execute(stmt)
 
 
 def downgrade() -> None:

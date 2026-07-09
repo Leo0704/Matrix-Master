@@ -146,13 +146,6 @@ export function Settings() {
                 type="password"
                 description="sk-…"
               />
-              <SettingField
-                settingKey="llm.daily_budget_usd"
-                label="日成本上限（USD）"
-                type="number"
-                defaultValue="10"
-                description="超过 80% 会触发 BUDGET_EXCEEDED 告警"
-              />
             </CardContent>
           </Card>
         </TabsContent>

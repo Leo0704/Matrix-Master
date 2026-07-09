@@ -26,7 +26,7 @@
 5. **dispatch**：通过 Tailscale 发送到 APK
 6. **execute**：APK 执行操作
 7. **respond**：APK 回报结果
-8. **record**：主控记录到 llm_usage / interactions / tasks
+8. **record**：主控记录到 interactions / tasks
 9. **retry**：失败时按错误分类策略重试
 
 ## 3. 跨文档引用

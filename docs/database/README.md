@@ -35,8 +35,9 @@
 - `comments` — 评论内容
 
 ### 统计 / 审计 / 配置
-- `llm_usage` — LLM token 用量与成本
 - `audit_logs` — 审计日志
+- `alerts` — 告警表
+- `daily_counters` — 限速日上限原子计数
 - `app_config` — 应用配置 KV
 
 ## 关键设计决策

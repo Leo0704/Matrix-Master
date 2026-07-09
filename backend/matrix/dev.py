@@ -4,6 +4,7 @@
 `poetry run matrix-dev check-db` - 检查数据库连接
 """
 
+import os
 import sys
 
 
@@ -20,11 +21,24 @@ def hello() -> None:
 
 def check_db() -> None:
     """检查数据库连接。"""
-    try:
+    import asyncio
+    from sqlalchemy import text
 
-        print("Connecting to localhost:5432/matrix ...")
-        # TODO: 实际连接测试
-        print("✓ Database connection OK (stub)")
+    from matrix.db.engine import create_engine
+
+    async def _probe() -> None:
+        engine = create_engine()
+        try:
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+        finally:
+            await engine.dispose()
+
+    url = os.environ.get("DATABASE_URL", "postgresql+asyncpg://localhost:5432/matrix")
+    print(f"Connecting to {url} ...")
+    try:
+        asyncio.run(_probe())
+        print("✓ Database connection OK")
     except Exception as e:
         print(f"✗ Database connection failed: {e}")
         sys.exit(1)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,14 +16,11 @@ from matrix.llm import (
     CompletionCache,
     CompletionResult,
     EmbeddingClient,
-    InMemoryUsageTracker,
     InvalidRequestError,
     LLMError,
     LLMTimeoutError,
     OpenAIClient,
     RateLimitError,
-    UsageRecord,
-    calculate_cost_usd,
     get_client,
     reset_client_cache,
     resolve_model,
@@ -108,42 +104,6 @@ class TestModelResolution:
 
     def test_unknown_passthrough(self):
         assert resolve_model("custom-model") == "custom-model"
-
-
-class TestCost:
-    def test_sonnet_4_5(self):
-        # 1M input + 1M output => 3 + 15 = 18 USD
-        cost = calculate_cost_usd("claude-sonnet-4-5", 1_000_000, 1_000_000)
-        assert cost == pytest.approx(18.0)
-
-    def test_haiku_4_5(self):
-        # 1M input + 1M output => 0.8 + 4 = 4.8 USD
-        cost = calculate_cost_usd("claude-haiku-4-5", 1_000_000, 1_000_000)
-        assert cost == pytest.approx(4.8)
-
-    def test_gpt5(self):
-        # 1M input + 1M output => 2.5 + 10 = 12.5 USD
-        cost = calculate_cost_usd("gpt-5", 1_000_000, 1_000_000)
-        assert cost == pytest.approx(12.5)
-
-    def test_gpt5_mini(self):
-        # 1M input + 1M output => 0.4 + 1.6 = 2.0 USD
-        cost = calculate_cost_usd("gpt-5-mini", 1_000_000, 1_000_000)
-        assert cost == pytest.approx(2.0)
-
-    def test_embedding_input_only(self):
-        # text-embedding-3-small: 0.02 / M input, 0 output
-        cost = calculate_cost_usd("text-embedding-3-small", 1_000_000, 0)
-        assert cost == pytest.approx(0.02)
-
-    def test_unknown_model_zero(self):
-        assert calculate_cost_usd("unknown-model", 1000, 1000) == 0.0
-
-
-# ---------------------------------------------------------------------------
-# 缓存
-# ---------------------------------------------------------------------------
-
 
 class TestCompletionCache:
     async def test_set_and_get(self):
@@ -280,53 +240,6 @@ class TestRetry:
 
 
 # ---------------------------------------------------------------------------
-# UsageTracker
-# ---------------------------------------------------------------------------
-
-
-class TestUsageTracker:
-    def test_record_and_summary(self):
-        tracker = InMemoryUsageTracker()
-        tracker.record(UsageRecord(
-            model="claude-sonnet-4-5", call_type="generation",
-            prompt_tokens=1000, completion_tokens=200,
-            cost_usd=0.006, latency_ms=500, run_id="r1",
-        ))
-        tracker.record(UsageRecord(
-            model="claude-haiku-4-5", call_type="decision",
-            prompt_tokens=500, completion_tokens=100,
-            cost_usd=0.0008, latency_ms=200, run_id="r1",
-        ))
-        s = tracker.summary()
-        assert s["total_calls"] == 2
-        assert s["total_prompt_tokens"] == 1500
-        assert s["total_completion_tokens"] == 300
-        assert s["total_cost_usd"] == pytest.approx(0.0068)
-        assert "claude-sonnet-4-5" in s["by_model"]
-        assert "generation" in s["by_call_type"]
-
-    def test_summary_since_filter(self):
-        tracker = InMemoryUsageTracker()
-        old = UsageRecord(
-            model="m", call_type="t", prompt_tokens=1, completion_tokens=1,
-            cost_usd=0.0, latency_ms=1,
-            timestamp=datetime(2020, 1, 1, tzinfo=timezone.utc),
-        )
-        new = UsageRecord(
-            model="m", call_type="t", prompt_tokens=10, completion_tokens=5,
-            cost_usd=0.0, latency_ms=1,
-        )
-        tracker.record(old)
-        tracker.record(new)
-        s = tracker.summary(since=datetime(2025, 1, 1, tzinfo=timezone.utc))
-        assert s["total_calls"] == 1
-        assert s["total_prompt_tokens"] == 10
-
-
-# ---------------------------------------------------------------------------
-# AnthropicClient
-# ---------------------------------------------------------------------------
-
 
 class TestAnthropicClient:
     async def test_complete_parses_response(self):
@@ -550,18 +463,6 @@ class TestRouter:
     def test_provider_for_unknown_model_raises(self):
         with pytest.raises(ValueError):
             get_client("totally-fake-model-123")
-
-    def test_pricing_known_for_domestic_models(self):
-        from matrix.llm.clients import calculate_cost_usd, resolve_model
-
-        # DeepSeek 应有定价
-        assert calculate_cost_usd(resolve_model("deepseek-chat"), 1000, 500) > 0
-        # 通义
-        assert calculate_cost_usd(resolve_model("qwen-plus"), 1000, 500) > 0
-        # 智谱
-        assert calculate_cost_usd(resolve_model("glm-4-flash"), 1000, 500) > 0
-        # 豆包
-        assert calculate_cost_usd(resolve_model("doubao-pro-32k"), 1000, 500) > 0
 
     def test_model_aliases_resolve_to_full_names(self):
         from matrix.llm.clients import resolve_model

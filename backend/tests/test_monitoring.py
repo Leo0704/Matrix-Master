@@ -174,12 +174,9 @@ class TestMetrics:
             "agent_human_takeover_rate_24h",
             "vlm_call_count_per_run",
             "vlm_confidence_distribution",
-            # §2.5 LLM / VLM
-            "llm_cost_usd_per_day",
-            "llm_cost_usd_per_run",
+            # §2.5 LLM 调用延迟 / 限速
             "llm_latency_seconds",
             "llm_rate_limit_hit_count_1h",
-            "vlm_cost_usd_per_day",
         ],
     )
     def test_runbook_metric_defined(self, name):
@@ -616,15 +613,6 @@ class TestAlerts:
         assert alerts[0].code == "TAILSCALE_DERP_LOST"
         assert alerts[0].subject_id == "ap-shanghai"
 
-    def test_budget_exceeded(self):
-        # 未超预算
-        assert alerts_mod.check_budget_exceeded(50.0, daily_budget_usd=100.0) == []
-        # 超预算
-        alerts = alerts_mod.check_budget_exceeded(150.0, daily_budget_usd=100.0)
-        assert len(alerts) == 1
-        assert alerts[0].code == "BUDGET_EXCEEDED"
-        assert alerts[0].severity == "critical"
-
     def test_postgres_disk_full(self):
         assert alerts_mod.check_postgres_disk_full(50.0) == []
         alerts = alerts_mod.check_postgres_disk_full(85.0)
@@ -637,8 +625,6 @@ class TestAlerts:
             accounts=[{"account_id": "a1", "risk_score": 0.95}],
             selector_events=[{"device_id": "d1", "tool": "x"}] * 5,
             derp_results=[{"region": "us", "reachable": False}],
-            llm_cost_per_day_usd=200,
-            daily_budget_usd=100,
             disk_usage_percent=90,
         )
         codes = {a.code for a in alerts}
@@ -647,7 +633,6 @@ class TestAlerts:
             "RISK_BLOCKED",
             "SELECTOR_NOT_FOUND",
             "TAILSCALE_DERP_LOST",
-            "BUDGET_EXCEEDED",
             "POSTGRES_DISK_FULL",
         }
 

@@ -11,8 +11,6 @@ from matrix.api.schemas.alerts import (
 from matrix.api.schemas.analytics import (
     AccountRiskBucket,
     AccountRiskResponse,
-    LlmCostPoint,
-    LlmCostResponse,
     TaskThroughputPoint,
     TaskThroughputResponse,
 )
@@ -86,8 +84,6 @@ __all__ = [
     "InteractionListResponse",
     "InteractionResult",
     "InteractionType",
-    "LlmCostPoint",
-    "LlmCostResponse",
     "KbDocument",
     "KbDocumentCreate",
     "KbDocumentListResponse",

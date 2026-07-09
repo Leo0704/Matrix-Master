@@ -7,8 +7,7 @@
 - 纯函数：不直接读 Prometheus client state，参数化输入
 - 易测试：每个判定都接收原始值
 - 覆盖 runbook §3 全部条目（DEVICE_OFFLINE / RISK_BLOCKED /
-  SELECTOR_NOT_FOUND / TAILSCALE_DERP_LOST / BUDGET_EXCEEDED /
-  POSTGRES_DISK_FULL）
+  SELECTOR_NOT_FOUND / TAILSCALE_DERP_LOST / POSTGRES_DISK_FULL）
 """
 
 from __future__ import annotations
@@ -164,35 +163,7 @@ def check_tailscale_derp_lost(
 
 
 # ---------------------------------------------------------------------------
-# §3.5 BUDGET_EXCEEDED
-# ---------------------------------------------------------------------------
-
-
-def check_budget_exceeded(
-    cost_per_day_usd: float,
-    *,
-    daily_budget_usd: float,
-) -> list[Alert]:
-    """LLM/VLM 当日累计花费超预算 → BUDGET_EXCEEDED。
-
-    返回空列表表示未触发。
-    """
-    if cost_per_day_usd > daily_budget_usd:
-        return [
-            Alert(
-                code="BUDGET_EXCEEDED",
-                severity="critical",
-                message=(
-                    f"Daily LLM cost ${cost_per_day_usd:.2f} > "
-                    f"budget ${daily_budget_usd:.2f}; pausing agent runs"
-                ),
-            )
-        ]
-    return []
-
-
-# ---------------------------------------------------------------------------
-# §3.6 POSTGRES_DISK_FULL
+# §3.5 POSTGRES_DISK_FULL
 # ---------------------------------------------------------------------------
 
 
@@ -227,8 +198,6 @@ def evaluate_all(
     accounts: Sequence[dict] | None = None,
     selector_events: Sequence[dict] | None = None,
     derp_results: Sequence[dict] | None = None,
-    llm_cost_per_day_usd: float = 0.0,
-    daily_budget_usd: float = 100.0,
     disk_usage_percent: float = 0.0,
 ) -> list[Alert]:
     """跑全部告警检查，返回合并后的列表。
@@ -243,8 +212,5 @@ def evaluate_all(
         alerts.extend(check_selector_not_found(selector_events))
     if derp_results is not None:
         alerts.extend(check_tailscale_derp_lost(derp_results))
-    alerts.extend(
-        check_budget_exceeded(llm_cost_per_day_usd, daily_budget_usd=daily_budget_usd)
-    )
     alerts.extend(check_postgres_disk_full(disk_usage_percent))
     return alerts

@@ -3,7 +3,7 @@
 | 项 | 内容 |
 |---|---|
 | 适用对象 | 架构师 / 决策者 |
-| 配套 | [cost-model.md](./cost-model.md) / [SDD.md §8](../architecture/SDD.md) |
+| 配套 | [SDD.md §8](../architecture/SDD.md) |
 
 ## 1. 目标场景
 
@@ -46,7 +46,6 @@
 | `notes` | 100 篇 | 36K 行 (~50MB) |
 | `tasks` | 100 * 65 = 6500 | 240 万行 (~500MB) |
 | `agent_checkpoints` | 100 * 100 = 10K | 360 万行 (~1GB) |
-| `llm_usage` | 100 * 200 = 20K | 730 万行 (~2GB) |
 | `risk_signals` | 100 * 5 = 500 | 18 万行 (~50MB) |
 | **总计** | | ~35GB / 年 |
 
@@ -57,9 +56,9 @@
 | `device_heartbeats` | 30 天 | detach 旧分区 |
 | `note_metrics` | 1 年 | detach 旧分区 |
 | `agent_checkpoints` | 7 天 | DELETE 旧行 |
-| `llm_usage` | 1 年 | 分区 + detach |
 | `audit_logs` | 1 年 | 归档到冷存储 |
 | `risk_signals` | 90 天 | DELETE 旧行 |
+| `daily_counters` | 7 天 | DELETE 旧行（按天） |
 
 ## 5. LLM / VLM 调用量
 
@@ -83,7 +82,7 @@
 - 日 LLM calls：200 * 9 = 1800
 - 日 token：~5M input + ~1M output
 
-详见 [cost-model.md](./cost-model.md)。
+详见 [SDD.md §8](../architecture/SDD.md)。
 
 ## 6. VLM 调用
 

@@ -54,14 +54,6 @@ export function formatNumber(n: number | undefined, digits = 0): string {
 }
 
 /**
- * Format as currency (USD).
- */
-export function formatUsd(n: number | undefined, digits = 2): string {
-  if (n == null || !Number.isFinite(n)) return '-';
-  return `$${n.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
-}
-
-/**
  * Format a risk score (0-1) as percentage.
  */
 export function formatRisk(score: number | undefined): string {

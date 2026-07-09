@@ -692,5 +692,3 @@ components:
               type: integer
             failed_24h:
               type: integer
-        llm_cost_24h_usd:
-          type: number

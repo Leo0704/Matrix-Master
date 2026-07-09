@@ -1,6 +1,6 @@
 """/api/v1/metrics/summary — 监控指标汇总。
 
-从 DB 聚合设备 / 账号 / 任务 / LLM 成本统计。
+从 DB 聚合设备 / 账号 / 任务 统计。
 """
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from matrix.api.schemas import Health, OkResponse  # noqa: F401  (Health unused 
 from matrix.db.models import (
     Account,
     Device,
-    LlmUsage,
     Task,
 )
 from pydantic import BaseModel
@@ -46,7 +45,6 @@ class MetricsSummary(BaseModel):
     devices: DevicesBlock = DevicesBlock()
     accounts: AccountsBlock = AccountsBlock()
     tasks: TasksBlock = TasksBlock()
-    llm_cost_24h_usd: float = 0.0
 
 
 def _ago(hours: int) -> datetime:
@@ -127,15 +125,6 @@ async def get_metrics_summary(
         )
     ).scalar_one()
 
-    # --- llm cost 24h ---
-    cost = (
-        await session.execute(
-            select(func.coalesce(func.sum(LlmUsage.cost_usd), 0.0)).where(
-                LlmUsage.ts >= _ago(24)
-            )
-        )
-    ).scalar_one()
-
     return MetricsSummary(
         devices=DevicesBlock(
             total=int(dev_total), active=int(dev_active), offline=int(dev_offline)
@@ -151,5 +140,4 @@ async def get_metrics_summary(
             success_24h=int(t_success_24h),
             failed_24h=int(t_failed_24h),
         ),
-        llm_cost_24h_usd=float(cost or 0.0),
     )

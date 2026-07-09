@@ -181,7 +181,13 @@ def create_app(
 
             apk_client = ApkHttpClient()
             app.state.apk_client = apk_client
-            rate_limiter = RateLimiter(jitter_base=0.0, jitter_sigma=0.0)
+            from matrix.scheduler.rate_limiter import DbDailyCounter
+
+            rate_limiter = RateLimiter(
+                jitter_base=0.0,
+                jitter_sigma=0.0,
+                daily_counter=DbDailyCounter(app.state.db_session_factory),
+            )
             executor = DeviceTaskExecutor(
                 device_publisher=apk_client,
                 device_collector=apk_client,

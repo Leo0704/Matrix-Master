@@ -60,15 +60,12 @@ OS 指标 ─────┘
 | `vlm_call_count_per_run` | > 5 | info |
 | `vlm_confidence_below_threshold_rate` | > 0.3 | warning |
 
-### 2.5 LLM / VLM 成本
+### 2.5 LLM 调用延迟 / 限速
 
 | 指标 | 阈值 | 告警级别 |
 |---|---|---|
-| `llm_cost_usd_per_day` | > 日预算 | critical |
-| `llm_cost_usd_per_run_p95` | > $1 | warning |
 | `llm_latency_p95` | > 30s | warning |
 | `llm_rate_limit_hit_count_1h` | > 5 | warning |
-| `vlm_cost_usd_per_day` | > 日预算 | critical |
 
 ### 2.6 系统指标
 
@@ -190,33 +187,22 @@ curl -v telnet://<derp-host>:3478
 - 多 DERP 节点（不同区域）
 - Headscale 自托管而非依赖官方 DERP
 
-### 3.5 BUDGET_EXCEEDED
+### 3.5 POSTGRES_DISK_FULL
 
-**触发**：LLM 成本超日预算
+**触发**：DB 磁盘使用率超阈值
 
 **立即行动**：
-1. **暂停所有 Agent 运行**（自动）
-2. 通知运营者
-3. 排查预算消耗来源
-
-**排查**：
-```sql
--- 查今日 LLM 用量
-SELECT model, call_type, COUNT(*), SUM(total_tokens), SUM(cost_usd)
-FROM llm_usage
-WHERE ts > NOW() - INTERVAL '1 day'
-GROUP BY model, call_type
-ORDER BY SUM(cost_usd) DESC;
-```
+1. 通知运维
+2. detach 旧分区（见 capacity-plan.md）
+3. 必要时扩容
 
 **常见原因**：
-- Agent 重试循环（state machine 卡住）
-- VLM 调用激增（大量 SELECTOR_NOT_FOUND）
-- 某账号触发 LLM 频繁调用
+- 时序表（device_heartbeats / note_metrics / agent_checkpoints）分区未及时清理
+- audit_logs 长期堆积
 
 **恢复**：
-1. 修根本原因
-2. 调整预算上限
+1. 清理历史数据
+2. 调整分区保留策略
 3. 重启 Agent
 
 **预防**：

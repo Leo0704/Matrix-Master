@@ -29,7 +29,6 @@ class ImageGenResult:
     revised_prompt: str | None = None
     provider: str = ""
     model: str = ""
-    cost_usd: float = 0.0
     seed: int | None = None
     raw: dict[str, Any] | None = None
 

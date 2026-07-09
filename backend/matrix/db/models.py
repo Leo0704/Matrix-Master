@@ -13,6 +13,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -710,34 +711,6 @@ class Comment(Base):
 # =============================================================================
 
 
-class LlmUsage(Base):
-    __tablename__ = 'llm_usage'
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        server_default=sa_text('uuid_generate_v4()'),
-    )
-    ts: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=sa_text('NOW()')
-    )
-    model: Mapped[str] = mapped_column(String(64), nullable=False)
-    call_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
-    completion_tokens: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=sa_text('0')
-    )
-    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
-    cost_usd: Mapped[Optional[float]] = mapped_column(Numeric(10, 6))
-    latency_ms: Mapped[Optional[int]] = mapped_column(Integer)
-    run_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey('agent_runs.id')
-    )
-    account_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey('accounts.id')
-    )
-
-
 class AuditLog(Base):
     __tablename__ = 'audit_logs'
 
@@ -804,6 +777,25 @@ class AppConfig(Base):
     )
 
 
+class DailyCounter(Base):
+    """按 (scope, key, kind, day) 原子自增的日计数器。
+
+    取代 ``RateLimiter`` 内的进程内 ``_DailyCounter``（uvicorn workers>1 会被绕过）。
+    通过 ``INSERT ... ON CONFLICT DO UPDATE SET count = daily_counters.count + 1``
+    实现跨进程 / 跨节点的严格日上限。
+    """
+    __tablename__ = 'daily_counters'
+
+    scope: Mapped[str] = mapped_column(String(32), primary_key=True)
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), primary_key=True)
+    day: Mapped[Any] = mapped_column(Date, primary_key=True)
+    count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=sa_text('0'))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=sa_text('NOW()')
+    )
+
+
 __all__ = [
     'Base',
     'Device',
@@ -826,7 +818,7 @@ __all__ = [
     'AgentCheckpoint',
     'Interaction',
     'Comment',
-    'LlmUsage',
+    'DailyCounter',
     'AuditLog',
     'Alert',
     'AppConfig',

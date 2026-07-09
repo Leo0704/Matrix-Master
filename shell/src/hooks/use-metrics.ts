@@ -16,10 +16,3 @@ export function useTaskThroughput(days: number = 14) {
     queryFn: () => apiClient.get('/analytics/task-throughput', { params: { days } }),
   });
 }
-
-export function useLlmCost(days: number = 14) {
-  return useQuery<{ items: Array<{ date: string; cost: number }>; days: number }>({
-    queryKey: ['llm-cost', days],
-    queryFn: () => apiClient.get('/analytics/llm-cost', { params: { days } }),
-  });
-}

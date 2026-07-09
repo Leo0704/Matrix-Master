@@ -238,7 +238,6 @@ export interface MetricsSummary {
     success_24h?: number;
     failed_24h?: number;
   };
-  llm_cost_24h_usd?: number;
 }
 
 // ---------- Chat ----------

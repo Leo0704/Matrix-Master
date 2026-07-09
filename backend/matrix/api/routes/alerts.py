@@ -133,7 +133,6 @@ async def scan_alerts(
 
     # 3. 选择器失败 — 暂无事件流，留空
     # 4. Tailscale — 暂无 derp 数据，留空
-    # 5. BUDGET_EXCEEDED — 由 LLM 成本聚合判断（需要 daily_budget 上下文）
 
     written: list[AlertItem] = []
     for a in new_alerts:

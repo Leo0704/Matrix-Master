@@ -5,7 +5,7 @@
 - §2.2 账号指标
 - §2.3 任务指标
 - §2.4 Agent 指标
-- §2.5 LLM / VLM 成本
+- §2.5 LLM 调用延迟 / 限速
 
 约定：
 - Histogram buckets: ``LATENCY_BUCKETS`` = [0.1, 0.5, 1, 2, 5, 10, 30] 秒
@@ -166,22 +166,8 @@ vlm_confidence_distribution = Histogram(
 
 
 # ---------------------------------------------------------------------------
-# §2.5 LLM / VLM 成本
+# §2.5 LLM 调用延迟 / 限速
 # ---------------------------------------------------------------------------
-
-llm_cost_usd_per_day = Gauge(
-    "llm_cost_usd_per_day",
-    "LLM 当日累计花费（USD），由后台任务按窗口重置",
-    namespace=NAMESPACE,
-)
-
-llm_cost_usd_per_run = Histogram(
-    "llm_cost_usd_per_run",
-    "单 run LLM 花费分布（USD）",
-    labelnames=["model"],
-    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
-    namespace=NAMESPACE,
-)
 
 llm_latency_seconds = Histogram(
     "llm_latency_seconds",
@@ -195,12 +181,6 @@ llm_rate_limit_hit_count_1h = Counter(
     "llm_rate_limit_hit_count_1h",
     "近 1 小时 LLM 限速命中次数（label=model）",
     ["model"],
-    namespace=NAMESPACE,
-)
-
-vlm_cost_usd_per_day = Gauge(
-    "vlm_cost_usd_per_day",
-    "VLM 当日累计花费（USD）",
     namespace=NAMESPACE,
 )
 

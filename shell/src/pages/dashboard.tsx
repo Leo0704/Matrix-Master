@@ -1,4 +1,4 @@
-import { Smartphone, Users, FileText, DollarSign, Activity } from 'lucide-react';
+import { Smartphone, Users, FileText, Activity } from 'lucide-react';
 import { useMetricsSummary } from '@/hooks/use-metrics';
 import { useDevices } from '@/hooks/use-devices';
 import { useNotes } from '@/hooks/use-notes';
@@ -7,12 +7,10 @@ import { KpiCard } from '@/components/dashboard/kpi-card';
 import { DeviceStatusGrid } from '@/components/dashboard/device-status-grid';
 import { AccountRiskChart } from '@/components/dashboard/account-risk-chart';
 import { TaskThroughputChart } from '@/components/dashboard/task-throughput-chart';
-import { LlmCostChart } from '@/components/dashboard/llm-cost-chart';
 import { AlertsFeed } from '@/components/dashboard/alerts-feed';
 import { ChatInput } from '@/components/chat/chat-input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { formatUsd } from '@/lib/format';
 
 export function Dashboard() {
   const metrics = useMetricsSummary();
@@ -47,11 +45,6 @@ export function Dashboard() {
           icon={Activity}
         />
         <KpiCard
-          label="LLM 成本 24h"
-          value={formatUsd(metrics.data?.llm_cost_24h_usd)}
-          icon={DollarSign}
-        />
-        <KpiCard
           label="笔记数"
           value={notes.data?.total ?? notes.data?.items?.length ?? '—'}
           icon={FileText}
@@ -68,7 +61,7 @@ export function Dashboard() {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <TaskThroughputChart />
-        <LlmCostChart />
+        <AccountRiskChart />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">

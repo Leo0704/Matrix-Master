@@ -2,7 +2,6 @@
 
 - ``LLMClient`` ABC：``async complete(prompt, model, max_tokens, temperature) -> CompletionResult``
 - ``AnthropicClient`` / ``OpenAIClient``：官方 SDK 实现
-- Cost 计算按 ``docs/planning/cost-model.md`` 定价
 - Token 计数优先使用 API response 的 usage 字段；缺失时回退 tiktoken
 """
 
@@ -38,40 +37,6 @@ class CompletionResult:
     stop_reason: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
-
-# ---------------------------------------------------------------------------
-# 定价表（USD / 1M tokens）
-# ---------------------------------------------------------------------------
-
-
-# 按 cost-model.md §3.1 / §3.2
-PRICING: dict[str, dict[str, float]] = {
-    # Anthropic
-    "claude-sonnet-4-5": {"input": 3.00, "output": 15.00},
-    "claude-sonnet-4.5": {"input": 3.00, "output": 15.00},
-    "claude-haiku-4-5": {"input": 0.80, "output": 4.00},
-    "claude-haiku-4.5": {"input": 0.80, "output": 4.00},
-    "claude-opus-4": {"input": 15.00, "output": 75.00},
-    # OpenAI
-    "gpt-5": {"input": 2.50, "output": 10.00},
-    "gpt-5-mini": {"input": 0.40, "output": 1.60},
-    # DeepSeek（人民币 ≈ USD 占位，上线改用合同价）
-    "deepseek-chat": {"input": 0.00027, "output": 0.0011},
-    "deepseek-reasoner": {"input": 0.00055, "output": 0.0022},
-    # 通义千问（OpenAI 兼容模式，单位 USD/百万 token）
-    "qwen-plus": {"input": 0.0008, "output": 0.002},
-    "qwen-max": {"input": 0.0024, "output": 0.008},
-    "qwen-turbo": {"input": 0.0003, "output": 0.0006},
-    # 智谱 GLM
-    "glm-4-plus": {"input": 0.007, "output": 0.007},
-    "glm-4-flash": {"input": 0.0001, "output": 0.0001},
-    # 豆包
-    "doubao-pro-32k": {"input": 0.0008, "output": 0.001},
-    "doubao-lite-32k": {"input": 0.0003, "output": 0.0006},
-    # Embedding（input-only）
-    "text-embedding-3-small": {"input": 0.02, "output": 0.0},
-    "text-embedding-3-large": {"input": 0.13, "output": 0.0},
-}
 
 # 模型别名
 MODEL_ALIASES: dict[str, str] = {
@@ -109,20 +74,6 @@ MODEL_ALIASES: dict[str, str] = {
 def resolve_model(name: str) -> str:
     """解析模型别名到真实模型名。"""
     return MODEL_ALIASES.get(name, name)
-
-
-def calculate_cost_usd(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    """按 cost-model.md 定价计算成本（USD）。"""
-    pricing = PRICING.get(model)
-    if pricing is None:
-        # 未知模型：按 0 计费（集成层应记录告警）
-        logger.warning("llm.cost.unknown_model", model=model)
-        return 0.0
-    cost = (
-        prompt_tokens / 1_000_000.0 * pricing["input"]
-        + completion_tokens / 1_000_000.0 * pricing["output"]
-    )
-    return cost
 
 
 # ---------------------------------------------------------------------------

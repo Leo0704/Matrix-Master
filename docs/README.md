@@ -26,7 +26,6 @@
 | **测试** | [testing/test-plan.md](./testing/test-plan.md) | QA / 开发 | 写测试 / 验收 |
 | **知识** | [testing/kb-writing-guide.md](./testing/kb-writing-guide.md) | 运营者 / 知识库管理员 | 写 persona / rule / topic |
 | **规划** | [planning/capacity-plan.md](./planning/capacity-plan.md) | 架构师 / 老板 | 评估规模化可行性 |
-| **规划** | [planning/cost-model.md](./planning/cost-model.md) | 老板 / 运营 | 评估商业可行性 |
 
 ---
 
@@ -53,9 +52,8 @@
 
 ### 我是老板 / 决策者
 1. [PRD.md](../PRD.md) — 产品范围
-2. [planning/capacity-plan.md](./planning/capacity-plan.md) — 容量上限
-3. [planning/cost-model.md](./planning/cost-model.md) — 成本估算
-4. [architecture/threat-model.md](./architecture/threat-model.md) — 风险
+2. [planning/capacity-plan.md](./planning/capacity-plan.md) — 容量规划
+3. [architecture/threat-model.md](./architecture/threat-model.md) — 风险
 
 ---
 

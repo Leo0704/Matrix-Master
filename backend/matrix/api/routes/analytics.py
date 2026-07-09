@@ -1,7 +1,6 @@
 """分析 / 图表端点：按日聚合的序列 + 账号风险分布。
 
 - GET /analytics/task-throughput?days=14   tasks 表按日 success/failed
-- GET /analytics/llm-cost?days=14         llm_usage 表按日 cost_usd 之和
 - GET /analytics/account-risk             accounts.risk_score 区间分布
 """
 from __future__ import annotations
@@ -15,12 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from matrix.api.deps import get_db
 from matrix.api.schemas import (
-    LlmCostPoint,
-    LlmCostResponse,
     TaskThroughputPoint,
     TaskThroughputResponse,
 )
-from matrix.db.models import Account, LlmUsage, Task
+from matrix.db.models import Account, Task
 from matrix.monitoring.logging import get_logger
 
 logger = get_logger(__name__)
@@ -70,29 +67,6 @@ async def task_throughput(
         for d, vals in _fill_date_range(end, days, by_day)
     ]
     return TaskThroughputResponse(items=points, days=days)
-
-
-@router.get("/llm-cost", response_model=LlmCostResponse)
-async def llm_cost(
-    days: int = Query(14, ge=1, le=90),
-    session: AsyncSession = Depends(get_db),
-) -> LlmCostResponse:
-    """按日聚合 llm_usage.cost_usd 之和。"""
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(days=days)
-
-    stmt = select(
-        func.date(LlmUsage.ts).label("day"),
-        func.coalesce(func.sum(LlmUsage.cost_usd), 0.0).label("cost"),
-    ).where(LlmUsage.ts >= start).group_by(func.date(LlmUsage.ts))
-    rows = (await session.execute(stmt)).all()
-    by_day = {str(day): {"cost": float(cost)} for day, cost in rows}
-
-    points = [
-        LlmCostPoint(date=d, cost=vals.get("cost", 0.0))
-        for d, vals in _fill_date_range(end, days, by_day)
-    ]
-    return LlmCostResponse(items=points, days=days)
 
 
 # ---------------------------------------------------------------------------

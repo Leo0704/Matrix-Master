@@ -1,8 +1,9 @@
-version: '3.8'
-
 # Matrix Master 开发环境
-# 启动 PostgreSQL + Headscale + 自建 DERP
-# 主控后端在本地跑（poetry run），不放在容器里，方便热重载
+# - 常驻服务：PostgreSQL + Headscale + 自建 DERP（+ monitoring 监控栈可选）
+# - 应用服务：backend (uvicorn) + frontend (vite dev server)，前后端都跑在 docker 里
+# - 测试：test service 在 docker 内跑 pytest
+# - 桌面 GUI（Tauri Rust 进程 + WebView）：必须在 host 跑，详见 README §"快速开始"
+#   因为 macOS WKWebView 依赖 Cocoa / Windows WebView2 依赖系统组件，docker 容器无法承载
 
 services:
   # PostgreSQL + pgvector
@@ -80,6 +81,94 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: admin
     profiles: ["monitoring"]
 
+  # 后端测试服务（约定：pytest 必须在容器内跑）
+  # 用法：
+  #   docker compose run --rm test                          # 跑全部测试
+  #   docker compose run --rm test pytest tests/test_x.py   # 单文件
+  #   docker compose run --rm test pytest tests -k agent    # 按关键字
+  #   docker compose run --rm test alembic upgrade head     # 跑迁移
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: matrix-master-test:latest
+    container_name: matrix-test
+    # working_dir=/app/backend：alembic.ini 与 prepend_sys_path=. 都基于此目录
+    working_dir: /app/backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://matrix:matrix_dev@postgres:5432/matrix
+      PYTHONPATH: /app/backend
+      PATH: /app/.venv/bin:$PATH
+    volumes:
+      # 开发态：源码改动立即生效，无需 rebuild
+      - ./backend:/app/backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # 不写 command：继承 Dockerfile 的 CMD = ["pytest", "tests"]
+    # 用户在 docker compose run 后面追加参数可覆盖
+
+  # 后端 FastAPI（uvicorn）服务
+  # 用法：docker compose up -d backend
+  # 健康检查：curl http://localhost:8666/api/v1/health
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: matrix-master-backend:latest
+    container_name: matrix-backend
+    working_dir: /app/backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://matrix:matrix_dev@postgres:5432/matrix
+      PYTHONPATH: /app/backend
+      PATH: /app/.venv/bin:$PATH
+    volumes:
+      # 开发态：源码改动立即生效，uvicorn --reload 自动重启
+      - ./backend:/app/backend
+    ports:
+      - "8666:8666"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # 覆盖 Dockerfile 默认 CMD（pytest）；PYTEST_ADDOPTS 对 uvicorn 进程无害
+    command:
+      - uvicorn
+      - matrix.api.app:app
+      - --reload
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8666"
+
+  # 前端 vite dev server（Tauri 的开发页面 server）
+  # Tauri Rust 进程在 host 上跑，WebView 加载 http://localhost:1420
+  # 用法：docker compose up -d frontend
+  frontend:
+    image: node:20-slim
+    container_name: matrix-frontend
+    working_dir: /app
+    volumes:
+      # bind mount shell/ 源码（改动立即生效）
+      - ./shell:/app
+      # node_modules 用 named volume 隔离，避免被 bind mount 覆盖
+      - frontend_node_modules:/app/node_modules
+    ports:
+      - "1420:1420"
+    command:
+      - sh
+      - -c
+      - |
+        # 第一次启动或 node_modules 为空时跑 npm install
+        if [ ! -d node_modules ] || [ -z "$$(ls -A node_modules 2>/dev/null)" ]; then
+          echo "[frontend] installing npm dependencies..."
+          npm install
+        fi
+        # vite.config.ts 写死 host=localhost，docker 容器里需改成 0.0.0.0
+        # 才能通过 host 的 port mapping 被 Tauri WebView 访问到
+        npm run dev -- --host 0.0.0.0
+    # Tauri 在 host 上跑，访问 docker 内的后端（host 上 localhost:8666 经 port mapping → 容器内 8666）
+
 volumes:
   postgres_data:
   headscale_data:
+  frontend_node_modules:

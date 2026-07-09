@@ -143,7 +143,6 @@ Agent 解析后会反馈确认，再执行。
 | `DEVICE_OFFLINE` | 设备 5+ 分钟无心跳 | 查手机 / 查 Tailscale |
 | `RISK_BLOCKED` | 账号触发风控 | 暂停账号 + 人工检查 |
 | `SELECTOR_NOT_FOUND` | 选择器失效 | 人工介入或等修复 |
-| `BUDGET_EXCEEDED` | LLM 成本超预算 | 调整频率 / 换模型 |
 | `TASK_TIMEOUT` | 任务超时 | 查手机 / 查网络 |
 
 ### 5.2 处理流程

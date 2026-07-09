@@ -15,7 +15,6 @@ from matrix.agent._services import AgentServices
 from matrix.kb.embedding import EmbeddingService
 from matrix.kb.retrieval import Retriever
 from matrix.kb.store import KbStore
-from matrix.llm.db_tracker import DbUsageTracker
 
 
 class _LazyRetriever:
@@ -100,7 +99,6 @@ async def build_runtime_services(
 
         embedding_client_cls = EmbeddingClient
     embedder = EmbeddingService(embedding_client_cls())
-    usage_tracker = DbUsageTracker(session_factory)
 
     if scheduler is None:
         from matrix.scheduler import DefaultSlotPicker
@@ -111,7 +109,6 @@ async def build_runtime_services(
         llm=llm,
         kb_retriever=_LazyRetriever(session_factory, embedder),
         kb_writer=_LazyWriter(session_factory, embedder),
-        usage_tracker=usage_tracker,
         config=_LazyConfigReader(session_factory),
         task_writer=task_writer,
         scheduler=scheduler,

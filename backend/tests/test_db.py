@@ -170,15 +170,15 @@ EXPECTED_TABLES = [
     "agent_checkpoints",
     "interactions",
     "comments",
-    "llm_usage",
     "audit_logs",
     "alerts",
+    "daily_counters",
     "app_config",
 ]
 
 
 def test_all_tableless_imported():
-    """所有 23 个模型都能 import。"""
+    """所有 22 个模型都能 import。"""
     from matrix.db import models
 
     for name in [
@@ -202,8 +202,9 @@ def test_all_tableless_imported():
         "AgentCheckpoint",
         "Interaction",
         "Comment",
-        "LlmUsage",
         "AuditLog",
+        "Alert",
+        "DailyCounter",
         "AppConfig",
     ]:
         assert hasattr(models, name), f"missing model: {name}"
@@ -234,8 +235,9 @@ def test_tableless_match_schema():
         "agent_checkpoints": "AgentCheckpoint",
         "interactions": "Interaction",
         "comments": "Comment",
-        "llm_usage": "LlmUsage",
         "audit_logs": "AuditLog",
+        "alerts": "Alert",
+        "daily_counters": "DailyCounter",
         "app_config": "AppConfig",
     }
     for table, classname in table_to_class.items():
@@ -246,7 +248,7 @@ def test_tableless_match_schema():
 
 
 def test_tableless_count():
-    """models 模块声明的 Base 子类数量应为 24（含 migration 004 加的 alerts）。"""
+    """models 模块声明的 Base 子类数量应为 24（含 Alert + DailyCounter，去掉 LlmUsage）。"""
     from sqlalchemy.orm import DeclarativeBase
 
     from matrix.db import models

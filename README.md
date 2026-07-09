@@ -46,45 +46,61 @@
 │   ├── operations/             monitoring + postmortem + faq
 │   └── planning/               capacity + cost-model
 │
-└── docker-compose.yml          开发环境（PostgreSQL + Headscale + DERP）
+├── Dockerfile                  后端镜像（默认 CMD = pytest；backend service 用 command 覆盖为 uvicorn）
+├── docker-compose.yml          开发环境（PostgreSQL + Headscale + DERP + backend + frontend + test）
 ```
 
 ## 快速开始
 
 ### 前置
 
-- Python 3.11+
-- Poetry
-- Docker + Docker Compose
+- Docker + Docker Compose（基础设施 + 后端 + 前端 vite dev server）
+- Rust toolchain（仅 host 跑 Tauri Rust 进程 + WebView 用）
+- [Tauri CLI v2](https://tauri.app/start/prerequisites/)（`cargo install tauri-cli --version "^2.0" --locked`）
 - Git
 
-### 安装
+### 安装与启动
 
 ```bash
 git clone <repo-url> matrix
 cd matrix
 
-# Python 依赖
-cd backend
-poetry install
+# 1. 起基础设施（PostgreSQL + Headscale + DERP）
+docker compose up -d postgres headscale derp
 
-# 启动开发数据库 + Tailscale 后端
-cd ..
-docker compose up -d
+# 2. 起后端 + 前端 vite dev server（都在 docker 内）
+docker compose up -d backend frontend
+
+# 3. 应用数据库迁移（容器内跑）
+docker compose run --rm test alembic upgrade head
+
+# 4. 在 host 上启动 Tauri 桌面应用（Rust 进程 + WebView）
+cd shell
+npm install         # 装 @tauri-apps/cli（在 devDependencies）
+npx tauri dev       # Tauri CLI 启动 Rust 进程 + 创建 WebView 加载 localhost:1420
 ```
+
+> **为什么 Tauri Rust 进程必须在 host 跑？**
+> Tauri 用系统 WebView（macOS WKWebView / Windows WebView2），需要 Cocoa/Win32 API，docker 容器无法承载 GUI。
+> Rust 进程创建 WebView 窗口，**加载 host 上 localhost:1420** → 经 docker port mapping 转到 frontend 容器内的 vite。
+> Rust 进程**调用 host 上 localhost:8666** → 经 port mapping 转到 backend 容器内的 uvicorn。
 
 ### 验证
 
 ```bash
-# 健康检查（后端在 8666）
+# 后端健康检查
 curl http://localhost:8666/api/v1/health
+
+# 前端 vite dev server 已起来（host 上）
+curl -I http://localhost:1420
 
 # 数据库
 psql -h localhost -U matrix -d matrix
 
-# 跑测试
-cd backend
-pytest
+# 跑测试（容器内）
+docker compose run --rm test                          # 全部
+docker compose run --rm test pytest tests/test_x.py   # 单文件
+docker compose run --rm test pytest tests -k agent    # 按关键字
 ```
 
 详细开发环境搭建见 [docs/development/dev-setup.md](./docs/development/dev-setup.md)。

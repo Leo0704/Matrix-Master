@@ -7,15 +7,23 @@
 from __future__ import annotations
 
 import asyncio
-from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Awaitable, Callable, Protocol
+
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from matrix.db.models import DailyCounter
+from matrix.monitoring.logging import get_logger
 
 from .active_window import is_in_active_window
 from .circuit_breaker import CircuitBreaker
 from .jitter import jitter_delay
 from .token_bucket import RateLimitTimeout, TokenBucket
+
+logger = get_logger(__name__)
 
 
 PUBLISH_ACTIONS = {"device_publish"}
@@ -45,28 +53,83 @@ class TaskLike(Protocol):
     scheduled_at: datetime
 
 
-@dataclass
-class _DailyCounter:
-    """单 (scope, key) 的按日计数器。
+class DailyCounterBackend(Protocol):
+    """日上限计数器后端接口。
 
-    TODO: 多进程部署（uvicorn workers>1）下每个 worker 独立计数会绕过日上限。
-    应替换为走 DB 的原子 ``UPDATE ... RETURNING counter``，或接 Redis INCR。
-    详见 plan §"不在本 PR 范围"。本期保持进程内内存实现。
+    生产用 :class:`DbDailyCounter`（跨进程原子）；测试可传 in-memory 实现。
     """
 
-    counts: dict[date, dict[str, int]] = field(default_factory=lambda: defaultdict(lambda: defaultdict(int)))
+    async def get(self, scope: str, key: object, kind: str, day: date) -> int: ...
+    async def add(self, scope: str, key: object, kind: str, day: date) -> int: ...
 
-    def add(self, scope: str, key: object, kind: str, day: date) -> int:
-        bucket = self.counts[day]
-        bucket[(scope, str(key), kind)] = bucket[(scope, str(key), kind)] + 1
-        return bucket[(scope, str(key), kind)]
 
-    def get(self, scope: str, key: object, kind: str, day: date) -> int:
-        return self.counts[day].get((scope, str(key), kind), 0)
+class InMemoryDailyCounter:
+    """进程内日上限计数器（单进程 / 测试用）。多 worker 不安全。"""
+
+    def __init__(self) -> None:
+        self._counts: dict[date, dict[tuple[str, str, str], int]] = {}
+        self._lock = asyncio.Lock()
+
+    async def get(self, scope: str, key: object, kind: str, day: date) -> int:
+        async with self._lock:
+            return self._counts.get(day, {}).get((scope, str(key), kind), 0)
+
+    async def add(self, scope: str, key: object, kind: str, day: date) -> int:
+        async with self._lock:
+            bucket = self._counts.setdefault(day, {})
+            k = (scope, str(key), kind)
+            bucket[k] = bucket.get(k, 0) + 1
+            return bucket[k]
+
+
+class DbDailyCounter:
+    """DB 原子日上限计数器（生产 / uvicorn workers>1）。
+
+    通过 ``INSERT ... ON CONFLICT DO UPDATE`` 原子自增；
+    所有 worker 共享同一份 ``daily_counters`` 表。
+    """
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._factory = session_factory
+
+    async def get(self, scope: str, key: object, kind: str, day: date) -> int:
+        async with self._factory() as session:
+            row = (
+                await session.execute(
+                    select(DailyCounter.count).where(
+                        DailyCounter.scope == scope,
+                        DailyCounter.key == str(key),
+                        DailyCounter.kind == kind,
+                        DailyCounter.day == day,
+                    )
+                )
+            ).scalar_one_or_none()
+            return int(row or 0)
+
+    async def add(self, scope: str, key: object, kind: str, day: date) -> int:
+        async with self._factory() as session:
+            stmt = pg_insert(DailyCounter).values(
+                scope=scope,
+                key=str(key),
+                kind=kind,
+                day=day,
+                count=1,
+            ).on_conflict_do_update(
+                constraint="daily_counters_pkey",
+                set_={"count": DailyCounter.count + 1},
+            ).returning(DailyCounter.count)
+            row = (await session.execute(stmt)).scalar_one()
+            await session.commit()
+            return int(row)
 
 
 class RateLimiter:
-    """组合限速器：活跃窗 → 日上限 → 令牌桶 → 抖动。"""
+    """组合限速器：活跃窗 → 日上限 → 令牌桶 → 抖动。
+
+    Args:
+        daily_counter: 日上限计数器后端。生产用 :class:`DbDailyCounter`；
+            未传则落回 ``InMemoryDailyCounter``（仅单进程安全）。
+    """
 
     def __init__(
         self,
@@ -81,11 +144,11 @@ class RateLimiter:
         jitter_sigma: float = 0.5,
         breaker: CircuitBreaker | None = None,
         clock: Callable[[], datetime] = datetime.now,
+        daily_counter: DailyCounterBackend | None = None,
     ) -> None:
         self._buckets: dict[object, TokenBucket] = {}
         self._bucket_lock = asyncio.Lock()
-        self._daily = _DailyCounter()
-        self._daily_lock = asyncio.Lock()
+        self._daily = daily_counter or InMemoryDailyCounter()
 
         self.bucket_capacity = bucket_capacity
         self.bucket_refill_rate = bucket_refill_rate
@@ -131,21 +194,19 @@ class RateLimiter:
         """仅做日上限检查（活跃窗之外不应调用本方法）。"""
         kind = self._kind(task.action)
         day = self._clock().date()
-        async with self._daily_lock:
-            for scope, key in (("device", task.device_id), ("account", task.account_id)):
-                cap = self._daily_cap(scope, kind)
-                used = self._daily.get(scope, key, kind, day)
-                if used >= cap:
-                    return RateLimitDecision(ok=False, reason=f"daily_cap_{scope}_{kind}")
+        for scope, key in (("device", task.device_id), ("account", task.account_id)):
+            cap = self._daily_cap(scope, kind)
+            used = await self._daily.get(scope, key, kind, day)
+            if used >= cap:
+                return RateLimitDecision(ok=False, reason=f"daily_cap_{scope}_{kind}")
         return RateLimitDecision(ok=True)
 
     async def record(self, task: TaskLike) -> None:
         """操作成功后记一次计数。"""
         kind = self._kind(task.action)
         day = self._clock().date()
-        async with self._daily_lock:
-            for scope, key in (("device", task.device_id), ("account", task.account_id)):
-                self._daily.add(scope, key, kind, day)
+        for scope, key in (("device", task.device_id), ("account", task.account_id)):
+            await self._daily.add(scope, key, kind, day)
 
     async def throttle(self, task: TaskLike, persona_config: dict | None = None) -> RateLimitDecision:
         """执行前完整检查：活跃窗 → 日上限 → 熔断 → 令牌桶 → 抖动延迟。

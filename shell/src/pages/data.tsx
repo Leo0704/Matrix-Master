@@ -1,6 +1,5 @@
 import { Link } from 'react-router-dom';
 import { TaskThroughputChart } from '@/components/dashboard/task-throughput-chart';
-import { LlmCostChart } from '@/components/dashboard/llm-cost-chart';
 import { AccountRiskChart } from '@/components/dashboard/account-risk-chart';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -31,7 +30,7 @@ export function Data() {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <TaskThroughputChart />
-        <LlmCostChart />
+        <AccountRiskChart />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">

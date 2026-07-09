@@ -244,7 +244,6 @@ async def resume_runs():
 - **超时**：60s（生成）/ 30s（决策）/ 10s（embedding）。
 - **重试**：指数退避 1s/3s/9s，最多 3 次。
 - **缓存**：相同 prompt 命中本地 cache（LRU 1h TTL）。
-- **Token 计数**：每次调用记录 `prompt_tokens` / `completion_tokens` 到 `llm_usage` 表。
 
 ---
 

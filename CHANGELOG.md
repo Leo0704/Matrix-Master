@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+### Removed
+- **LLM 计费功能整体下线**
+  - 删 `llm_usage` 表 + `app_config.llm.daily_budget_usd`（migration 005）
+  - 删 `PRICING` / `calculate_cost_usd` / `UsageTracker` / `DbUsageTracker` 及全部 cost_usd 字段
+  - 删 `/analytics/llm-cost`、`/metrics/summary.llm_cost_24h_usd`、`BUDGET_EXCEEDED` 告警、Prometheus `llm_cost_usd_*` / `vlm_cost_usd_per_day`
+  - 删 `shell/src/components/dashboard/llm-cost-chart` + dashboard / data / settings 三处引用 + `formatUsd`
+  - 删 `docs/planning/cost-model.md`、openapi 中 `llm_cost_24h_usd`
+
+### Added
+- 限速日上限走 DB 原子计数：新增 `daily_counters` 表（migration 005）+ migration 替换原进程内 `_DailyCounter`，uvicorn workers>1 不再绕过日上限
+- `RateLimiter` 日上限新增 `_DailyCounterDb` 实现（DB-backed INSERT ... ON CONFLICT）
+- `dev.py check-db` 真连 DB（`app.state.db_session_factory` SELECT 1）
+- `/health.tailscale` 真查 Tailscale CLI / socket（替换硬编码 `disconnected`）
+
+### Fixed
+- `backend/matrix/dev.py:26` `check-db` 不再是 stub
+- `backend/matrix/scheduler/rate_limiter.py:52` 日上限多进程绕过
+- `backend/matrix/api/routes/health.py:31` Tailscale 真实状态
+
 ### 计划
 - 多设备 / 多账号接入
 - 互动闭环 — follow / share / collect 动作
