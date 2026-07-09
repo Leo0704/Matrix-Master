@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-import logging
+from matrix.monitoring.logging import get_logger
 import re
 from typing import Any
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 _JSON_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.S)
@@ -43,7 +43,7 @@ def parse_json_response(text: str) -> dict[str, Any]:
         try:
             return json.loads(snippet)
         except json.JSONDecodeError:
-            logger.warning("agent.llm.json_parse_fail text=%r", text[:200])
+            logger.warning("agent.llm.json_parse_fail", text=text[:200])
 
     return {}
 

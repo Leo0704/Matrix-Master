@@ -88,7 +88,7 @@ async def create_goal(
     await session.flush()
 
     logger.info(
-        "goal created, agent.run scheduled",
+        "goal.created.agent_run.scheduled",
         goal_id=str(g.id),
         run_id=str(run.id),
         type=g.type,
@@ -98,6 +98,6 @@ async def create_goal(
         with trace_agent_run(str(run.id), goal=f"{g.type}:{g.id}"):
             pass
     except Exception:  # pragma: no cover - tracing 失败不影响业务
-        logger.warning("trace_agent_run failed", exc_info=True)
+        logger.exception("trace_agent_run failed")
 
     return _to_schema(g)

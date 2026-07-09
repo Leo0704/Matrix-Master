@@ -76,5 +76,5 @@ async def upsert_setting(
     except IntegrityError:
         await session.rollback()
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "settings upsert failed")
-    logger.info("settings.upsert key=%s", key)
+    logger.info("settings.upsert", key=key)
     return _to_schema(row)

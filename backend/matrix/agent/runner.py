@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import asyncio
-import logging
+from matrix.monitoring.logging import get_logger
 from typing import Optional
 
 from sqlalchemy import select
@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from matrix.agent.run_manager import get_manager
 from matrix.db.models import AgentRun
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class AgentRunWorker:
@@ -66,16 +66,16 @@ class AgentRunWorker:
         try:
             manager = get_manager()
             await manager.start_run(run_id)
-            logger.info("agent_run_worker.completed run_id=%s", run_id)
+            logger.info("agent_run_worker.completed", run_id=run_id)
         except Exception:
-            logger.exception("agent_run_worker.failed run_id=%s", run_id)
+            logger.exception("agent_run_worker.failed", run_id=run_id)
         finally:
             self._in_flight.discard(run_id)
 
     async def loop(self) -> None:
         """worker 主循环。"""
         logger.info(
-            "agent_run_worker.started poll_interval=%.2fs", self._poll_interval
+            "agent_run_worker.started", poll_interval=self._poll_interval
         )
         while not self._stop_event.is_set():
             try:

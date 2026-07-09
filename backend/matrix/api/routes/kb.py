@@ -158,10 +158,10 @@ async def create_document(
         is_published=body.is_published,
     )
     logger.info(
-        "kb.api.create doc_id=%s type=%s published=%s",
-        doc.id,
-        body.type,
-        body.is_published,
+        "kb.api.create",
+        doc_id=doc.id,
+        type=body.type,
+        published=body.is_published,
     )
     return _to_schema(doc)
 

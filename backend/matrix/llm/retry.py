@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import logging
+from matrix.monitoring.logging import get_logger
 import random
 from typing import Any, Awaitable, Callable, TypeVar
 
 from .errors import LLMError, RateLimitError
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 T = TypeVar("T")
 
@@ -77,11 +77,11 @@ def retry_with_backoff(
                         delay = delay * (1.0 + random.uniform(-jitter, jitter))
                         delay = max(0.0, delay)
                     logger.warning(
-                        "llm.retry attempt=%d/%d delay=%.2fs err=%s",
-                        attempt,
-                        total,
-                        delay,
-                        exc,
+                        "llm.retry",
+                        attempt=attempt,
+                        total=total,
+                        delay=delay,
+                        err=exc,
                     )
                     await asyncio.sleep(delay)
             assert last_exc is not None

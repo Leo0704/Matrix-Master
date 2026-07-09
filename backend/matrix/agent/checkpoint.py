@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from matrix.db.models import AgentCheckpoint, AgentRun
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _utcnow() -> datetime:

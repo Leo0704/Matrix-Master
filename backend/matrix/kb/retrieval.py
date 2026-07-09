@@ -12,7 +12,7 @@
 """
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 import math
 import re
 import uuid
@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .embedding import EmbeddingService
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 DEFAULT_RRF_K: int = 60
 DEFAULT_CANDIDATE_MULTIPLIER: int = 2  # 候选 top_k * multiplier

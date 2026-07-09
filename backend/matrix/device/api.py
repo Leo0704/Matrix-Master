@@ -6,7 +6,7 @@ HMAC 鉴权：APK 端调 ``POST /api/v1/devices/{id}/pair`` 时，body 路径需
 """
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 from typing import Annotated, Optional
 from uuid import UUID
 
@@ -36,7 +36,7 @@ from matrix.device.registry import (
 )
 from matrix.device.tailscale_client import TailscaleClient
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
 

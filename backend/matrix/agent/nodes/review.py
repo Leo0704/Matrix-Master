@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 from typing import Any
 
 from .. import prompts
@@ -11,7 +11,7 @@ from ..protocols import RetrieveQuery
 from ..types import AgentState
 from ._util import format_brief, join_chunks, parse_json_response
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # 阈值默认值（settings 里读不到时 fallback）

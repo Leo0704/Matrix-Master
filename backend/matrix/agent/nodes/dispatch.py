@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 import uuid as uuidlib
 from datetime import UTC, datetime
 from typing import Any
@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 from .._services import get_services
 from ..types import AgentState
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def dispatch_node(state: AgentState) -> dict[str, Any]:

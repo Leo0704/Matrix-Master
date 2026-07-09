@@ -4,7 +4,7 @@
 """
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 from datetime import datetime
 from typing import Any, Optional
 
@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from matrix.db.models import LlmUsage
 from matrix.llm.usage import UsageRecord, UsageTracker
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class DbUsageTracker(UsageTracker):
@@ -53,7 +53,7 @@ class DbUsageTracker(UsageTracker):
                 await session.commit()
         except Exception as e:  # pragma: no cover
             logger.warning(
-                "DbUsageTracker.record_async failed model=%s err=%s", usage.model, e
+                "DbUsageTracker.record_async failed", model=usage.model, err=e
             )
 
     def summary(self, *, since: Optional[datetime] = None) -> dict[str, Any]:

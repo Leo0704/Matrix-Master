@@ -9,13 +9,13 @@
 from __future__ import annotations
 
 import asyncio
-import logging
+from matrix.monitoring.logging import get_logger
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +85,7 @@ def calculate_cost_usd(model: str, prompt_tokens: int, completion_tokens: int) -
     pricing = PRICING.get(model)
     if pricing is None:
         # 未知模型：按 0 计费（集成层应记录告警）
-        logger.warning("llm.cost.unknown_model model=%s", model)
+        logger.warning("llm.cost.unknown_model", model=model)
         return 0.0
     cost = (
         prompt_tokens / 1_000_000.0 * pricing["input"]

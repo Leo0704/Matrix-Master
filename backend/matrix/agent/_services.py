@@ -10,7 +10,7 @@ state machine 的节点函数需要 LLMClient / KBRetriever / DevicePublisher �
 from __future__ import annotations
 
 import asyncio
-import logging
+from matrix.monitoring.logging import get_logger
 import random
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -32,7 +32,7 @@ from .protocols import (
     Notifier,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -68,6 +68,8 @@ class AgentServices:
     rate_limiter: Any | None = None
     # 调度选（设备/账号）— 由 RunManager 注入；默认 None 调度节点会返回占位 slot
     scheduler: Any | None = None
+    # v0.7 Phase 3：生图客户端（ImageGenClient）。None 则 IMAGE_GEN 走 fallback=no_image
+    image_generator: Any | None = None
 
 
 _SERVICES: AgentServices | None = None
@@ -77,7 +79,7 @@ def set_services(services: AgentServices) -> None:
     """设置全局依赖（生产路径 / 测试）。"""
     global _SERVICES
     _SERVICES = services
-    logger.debug("agent services set: llm=%s", services.llm)
+    logger.debug("agent services set", llm=services.llm)
 
 
 def get_services() -> AgentServices:
@@ -160,11 +162,11 @@ async def llm_complete(
             delay *= 1.0 + random.uniform(-0.1, 0.1)
             delay = max(0.0, delay)
             logger.warning(
-                "agent.llm.retry attempt=%d/%d delay=%.2fs err=%s",
-                attempt,
-                total,
-                delay,
-                exc,
+                "agent.llm.retry",
+                attempt=attempt,
+                total=total,
+                delay=delay,
+                err=exc,
             )
             await asyncio.sleep(delay)
     assert last_exc is not None

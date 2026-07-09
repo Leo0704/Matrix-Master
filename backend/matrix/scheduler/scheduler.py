@@ -6,14 +6,14 @@ DB 集成由 ``TaskLoader`` / ``TaskExecutor`` 抽象，调度器本身不连 DB
 from __future__ import annotations
 
 import asyncio
-import logging
+from matrix.monitoring.logging import get_logger
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Protocol
 
 from .rate_limiter import RateLimiter
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TaskLike(Protocol):
@@ -103,7 +103,7 @@ class Scheduler:
         try:
             ok = await self.executor.execute(task)
         except Exception as e:
-            logger.exception("executor raised for task=%s", task.id)
+            logger.exception("executor raised", task_id=task.id)
             await self.writer.mark_failed(
                 task,
                 {"code": "EXECUTOR_RAISED", "message": str(e)},

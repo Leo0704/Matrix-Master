@@ -9,7 +9,7 @@ v0.6.1：移除原 ``MockDeviceAdapter``（搬到 ``tests/_fake_adapters.py``）
 """
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -25,7 +25,7 @@ from matrix.agent.protocols import (
     PublishResult,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -107,7 +107,7 @@ class ApkHttpClient(DevicePublisher, DeviceCollector, DeviceInteractor):
                 error_message=str(exc),
             )
         except Exception as exc:  # noqa: BLE001
-            logger.exception("apk.publish failed device=%s", device_id)
+            logger.exception("apk.publish.failed", device_id=device_id)
             return PublishResult(ok=False, note_id=uuid4(), error_code="APK_ERROR", error_message=str(exc))
 
     async def collect(
@@ -183,7 +183,7 @@ class ApkHttpClient(DevicePublisher, DeviceCollector, DeviceInteractor):
                 error_message=str(exc),
             )
         except Exception as exc:  # noqa: BLE001
-            logger.exception("apk.interact failed device=%s", device_id)
+            logger.exception("apk.interact.failed", device_id=device_id)
             return InteractResult(
                 ok=False, interaction_id=uuid4(),
                 error_code="APK_ERROR", error_message=str(exc),

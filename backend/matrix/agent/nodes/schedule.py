@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -13,7 +13,7 @@ from .._services import get_services
 from ..protocols import DeviceSlot
 from ..types import AgentState
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def schedule_node(state: AgentState) -> dict[str, Any]:

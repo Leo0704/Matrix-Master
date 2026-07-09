@@ -10,7 +10,7 @@
 """
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 import uuid
 from typing import Any, Optional
 
@@ -24,7 +24,7 @@ from .chunker import Chunker, Chunk
 from .embedding import EmbeddingService
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # 允许的 doc.type
@@ -121,8 +121,11 @@ class KbStore:
             )
         await self._session.flush()
         logger.info(
-            "kb.create doc_id=%s type=%s chunks=%d ref_id=%s",
-            doc.id, type, len(chunks), ref_id,
+            "kb.create",
+            doc_id=doc.id,
+            type=type,
+            chunks=len(chunks),
+            ref_id=ref_id,
         )
         return doc
 
@@ -210,7 +213,7 @@ class KbStore:
             await self._replace_chunks(doc)
 
         await self._session.flush()
-        logger.info("kb.update doc_id=%s version=%d", doc.id, doc.version)
+        logger.info("kb.update", doc_id=doc.id, version=doc.version)
         return doc
 
     async def _replace_chunks(self, doc: KbDocument) -> None:
@@ -264,7 +267,7 @@ class KbStore:
             )
         )
         await self._session.flush()
-        logger.info("kb.soft_delete doc_id=%s", doc_id)
+        logger.info("kb.soft_delete", doc_id=doc_id)
         return True
 
     async def hard_delete(self, doc_id: uuid.UUID) -> bool:
@@ -277,7 +280,7 @@ class KbStore:
             sa_delete(KbDocument).where(KbDocument.id == doc_id)
         )
         await self._session.flush()
-        logger.info("kb.hard_delete doc_id=%s", doc_id)
+        logger.info("kb.hard_delete", doc_id=doc_id)
         return True
 
 

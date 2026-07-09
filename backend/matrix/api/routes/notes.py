@@ -128,4 +128,4 @@ async def delete_note(
     n.updated_at = n.deleted_at
     n.status = "deleted"
     await session.flush()
-    logger.info("note.soft_delete id=%s", note_id)
+    logger.info("note.soft_delete", note_id=note_id)

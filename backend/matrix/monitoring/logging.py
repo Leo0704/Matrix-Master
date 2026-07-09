@@ -25,9 +25,15 @@ DEFAULT_MAX_BYTES = 100 * 1024 * 1024  # 100MB
 DEFAULT_BACKUP_DAYS = 7
 
 # structlog 上下文字段名（业务代码应使用这些 key，便于 dashboard 聚合）
+# 字段顺序：先基础设施（ts/level/event），再追踪（trace_id/span_id），
+# 最后业务（run_id/device_id/account_id/action/latency_ms/error_code）。
+# service / version 由 configure_logging() 通过 bind_contextvars 注入，不在此白名单。
 LOG_FIELDS = (
     "ts",
     "level",
+    "event",
+    "trace_id",
+    "span_id",
     "run_id",
     "device_id",
     "account_id",

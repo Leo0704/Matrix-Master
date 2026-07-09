@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 import os
 from typing import Any
 
@@ -14,7 +14,7 @@ from .clients import (
     resolve_model,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _is_anthropic_model(model: str) -> bool:
@@ -55,7 +55,11 @@ def get_client(model_name: str, *, force_new: bool = False, **kwargs: Any) -> LL
         )
 
     _client_cache[cache_key] = client
-    logger.debug("llm.router.get_client model=%s -> %s", model_name, client.provider)
+    logger.debug(
+        "llm.router.get_client",
+        model=model_name,
+        provider=client.provider,
+    )
     return client
 
 

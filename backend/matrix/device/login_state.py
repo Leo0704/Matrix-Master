@@ -9,7 +9,7 @@ APK 在心跳中上报 XHS 登录状态；本服务负责：
 """
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from matrix.db.models import Account, AccountLoginSession
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # 与 AccountLoginSession.result CHECK constraint 对齐
@@ -126,13 +126,11 @@ class LoginStateMonitor:
         """通过监控子系统告警。alerter 未注入时仅打 log。"""
         if self.alerter is None:
             logger.warning(
-                "login state degraded",
-                extra={
-                    "account_id": str(report.account_id),
-                    "device_id": str(report.device_id),
-                    "result": report.result,
-                    "risk_signal": report.risk_signal,
-                },
+                "login.state.degraded",
+                account_id=str(report.account_id),
+                device_id=str(report.device_id),
+                result=report.result,
+                risk_signal=report.risk_signal,
             )
             return
         try:

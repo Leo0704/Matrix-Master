@@ -9,7 +9,7 @@
 """
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from matrix.db.models import Device, DeviceHeartbeat
 from matrix.device.key_manager import KeyManager
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -100,7 +100,7 @@ class DeviceRegistry:
         )
         self.session.add(device)
         await self.session.flush()
-        logger.info("device registered", extra={"device_id": str(device.id)})
+        logger.info("device.registered", device_id=str(device.id))
         return device
 
     async def unregister_device(self, device_id: UUID) -> bool:
@@ -122,7 +122,7 @@ class DeviceRegistry:
         device.deleted_at = datetime.now(timezone.utc)
         device.updated_at = datetime.now(timezone.utc)
         await self.session.flush()
-        logger.info("device unregistered", extra={"device_id": str(device_id)})
+        logger.info("device.unregistered", device_id=str(device_id))
         return True
 
     # ------------------------------------------------------------------

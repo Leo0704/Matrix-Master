@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 from datetime import date
 from typing import Any
 from uuid import uuid4
@@ -12,7 +12,7 @@ from .._services import get_services, llm_complete
 from ..types import AgentState, State
 from ._util import format_brief, join_chunks, parse_json_response
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def research_node(state: AgentState) -> dict[str, Any]:

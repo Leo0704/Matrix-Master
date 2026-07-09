@@ -8,7 +8,7 @@ plan 项形如 ``{"note_id": str, "kind": "like"|"comment", "content_template"?:
 """
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID, uuid4
@@ -27,7 +27,7 @@ class _TaskLike:
     device_id: UUID
     account_id: UUID
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 _VALID_KINDS = {"like", "comment"}
@@ -63,7 +63,7 @@ async def _gen_comment_text(
         parsed = parse_json_response(raw)
         content = str(parsed.get("content", "")).strip()
         if not content:
-            logger.warning("interact.llm.empty_content raw=%r", raw[:200])
+            logger.warning("interact.llm.empty_content", raw=raw[:200])
             return None
         return content[:140]  # XHS 评论硬上限
     except Exception:
@@ -192,7 +192,7 @@ async def interact_node(state: AgentState) -> dict[str, Any]:
                 timeout=60.0,
             )
         except Exception as exc:  # noqa: BLE001
-            logger.exception("interact.device_call_failed kind=%s", kind)
+            logger.exception("interact.device_call_failed", kind=kind)
             failed += 1
             details.append(
                 {

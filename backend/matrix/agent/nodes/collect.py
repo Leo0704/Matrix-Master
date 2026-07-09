@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 from typing import Any
 from uuid import UUID
 
 from .._services import get_services
 from ..types import AgentState
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def collect_node(state: AgentState) -> dict[str, Any]:

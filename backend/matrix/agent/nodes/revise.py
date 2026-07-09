@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 from typing import Any
 
 from .._services import get_services, llm_complete
 from ..types import AgentState, ReviewFailureReason
 from ._util import parse_json_response
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 REVISE_INSTRUCTIONS = {

@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from matrix.db.models import Device, DeviceHmacKey
 from matrix.device.hmac import generate_key, hash_key
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # 默认轮换周期：30 天
 DEFAULT_ROTATION_DAYS = 30
@@ -85,7 +85,7 @@ class KeyManager:
         )
         await self.session.flush()
 
-        logger.info("hmac key issued", extra={"device_id": str(device_id), "key_id": key_id})
+        logger.info("hmac.key.issued", device_id=str(device_id), key_id=key_id)
         return IssuedKey(key_id=key_id, secret=secret)
 
     async def lookup_hash(self, device_id: UUID, key_id: str) -> Optional[bytes]:

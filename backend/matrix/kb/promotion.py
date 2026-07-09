@@ -10,7 +10,7 @@
 """
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from matrix.db.models import AuditLog, KbDocument
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ReviewGate:
@@ -99,7 +99,7 @@ class ReviewGate:
             new_state=True,
         )
         await self._session.flush()
-        logger.info("kb.publish doc_id=%s reviewer=%s", doc_id, reviewer)
+        logger.info("kb.publish", doc_id=doc_id, reviewer=reviewer)
         return True
 
     async def unpublish(
@@ -139,7 +139,7 @@ class ReviewGate:
             new_state=False,
         )
         await self._session.flush()
-        logger.info("kb.unpublish doc_id=%s reviewer=%s", doc_id, reviewer)
+        logger.info("kb.unpublish", doc_id=doc_id, reviewer=reviewer)
         return True
 
     # ------------------------------------------------------------------

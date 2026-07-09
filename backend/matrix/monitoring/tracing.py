@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 import threading
 from contextlib import contextmanager
 from typing import Iterator
@@ -32,7 +32,7 @@ from opentelemetry.sdk.trace.export import (
 )
 from opentelemetry.trace import Span, SpanKind, Status, StatusCode
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _LOCK = threading.Lock()
 _PROVIDER: TracerProvider | None = None
@@ -75,16 +75,18 @@ def _build_exporter(otlp_endpoint: str | None) -> SpanExporter:
                 OTLPSpanExporter as HTTPSpanExporter,
             )
 
-            logger.info("Using OTLP/HTTP exporter: %s", otlp_endpoint)
+            logger.info("Using OTLP/HTTP exporter", endpoint=otlp_endpoint)
             return HTTPSpanExporter(endpoint=otlp_endpoint)
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
             OTLPSpanExporter as GRPCSpanExporter,
         )
 
-        logger.info("Using OTLP/gRPC exporter: %s", otlp_endpoint)
+        logger.info("Using OTLP/gRPC exporter", endpoint=otlp_endpoint)
         return GRPCSpanExporter(endpoint=otlp_endpoint, insecure=True)
     except Exception as e:  # pragma: no cover - 防御性兜底
-        logger.warning("Failed to init OTLP exporter (%s); using ConsoleSpanExporter", e)
+        logger.warning(
+            "Failed to init OTLP exporter; using ConsoleSpanExporter", error=e
+        )
         return ConsoleSpanExporter()
 
 

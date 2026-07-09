@@ -8,13 +8,13 @@
 from __future__ import annotations
 
 import asyncio
-import logging
+from matrix.monitoring.logging import get_logger
 import time
 from typing import Any
 
 from .errors import LLMError
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # 模型 → 维度
@@ -75,10 +75,10 @@ class EmbeddingClient:
             raise _map_openai_error(exc) from exc
         latency_ms = int((time.monotonic() - start) * 1000)
         logger.debug(
-            "embedding.batch size=%d model=%s latency_ms=%d",
-            len(texts),
-            use_model,
-            latency_ms,
+            "embedding.batch",
+            size=len(texts),
+            model=use_model,
+            latency_ms=latency_ms,
         )
 
         # 按 index 排序以保证返回顺序

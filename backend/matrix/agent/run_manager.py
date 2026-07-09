@@ -15,7 +15,7 @@ API（async）：
 
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -26,7 +26,7 @@ from .repository import AgentRepository
 from .state_machine import StateMachine
 from .types import AgentState, RunStatus, State
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -91,7 +91,7 @@ class RunManager:
             to_state=State.IDLE.value,
             payload={"created": True, "entry": entry},
         )
-        logger.info("agent.run.created run_id=%s entry=%s", run_id, entry)
+        logger.info("agent.run.created", run_id=run_id, entry=entry)
         return run_id
 
     async def start_run(self, run_id: UUID) -> AgentState:
@@ -152,7 +152,7 @@ class RunManager:
             to_state=State.IDLE.value,
             payload={"reason": "cancelled_by_caller"},
         )
-        logger.info("agent.run.cancelled run_id=%s", run_id)
+        logger.info("agent.run.cancelled", run_id=run_id)
 
     async def get_run_status(self, run_id: UUID) -> dict[str, Any] | None:
         """读取 run 行 + 最后一条 checkpoint。"""

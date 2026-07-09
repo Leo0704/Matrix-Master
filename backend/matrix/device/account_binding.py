@@ -9,7 +9,7 @@
 """
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from matrix.db.models import Account, Device, Task
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -67,8 +67,9 @@ class AccountBinding:
         account.updated_at = datetime.now(timezone.utc)
         await self.session.flush()
         logger.info(
-            "account bound to device",
-            extra={"account_id": str(account_id), "device_id": str(device_id)},
+            "account.bound.to_device",
+            account_id=str(account_id),
+            device_id=str(device_id),
         )
         return BindingResult(account_id=account_id, device_id=device_id, bound=True)
 
@@ -138,8 +139,9 @@ class AccountBinding:
         )
         count = int(result.rowcount or 0)
         logger.info(
-            "tasks paused for offline device",
-            extra={"device_id": str(device_id), "count": count},
+            "tasks.paused.offline_device",
+            device_id=str(device_id),
+            count=count,
         )
         return count
 
@@ -164,8 +166,9 @@ class AccountBinding:
         )
         count = int(result.rowcount or 0)
         logger.info(
-            "tasks resumed for recovered device",
-            extra={"device_id": str(device_id), "count": count},
+            "tasks.resumed.recovered_device",
+            device_id=str(device_id),
+            count=count,
         )
         return count
 

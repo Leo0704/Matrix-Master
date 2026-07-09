@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import base64
-import logging
+from matrix.monitoring.logging import get_logger
 import secrets
 import time
 from dataclasses import dataclass
@@ -25,7 +25,7 @@ from matrix.db.models import Device
 from matrix.device.key_manager import IssuedKey, KeyManager
 from matrix.device.tailscale_client import TailscaleClient, TailscaleError
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # 配对码：6 位数字（4 字节熵 ≈ 1e6 种组合）
 PAIR_CODE_TTL_SECONDS = 300  # 5 分钟
@@ -123,13 +123,16 @@ class PairingService:
                 )
             except TailscaleError as e:
                 logger.warning(
-                    "tailscale register_node failed; continue with pairing code",
-                    extra={"device_id": str(device_id), "error": str(e)},
+                    "tailscale.register_node.failed",
+                    device_id=str(device_id),
+                    error=str(e),
                 )
 
         logger.info(
-            "pairing created",
-            extra={"device_id": str(device_id), "pair_code": pair_code, "ttl": self.ttl_seconds},
+            "pairing.created",
+            device_id=str(device_id),
+            pair_code=pair_code,
+            ttl=self.ttl_seconds,
         )
         return PairingCode(
             pair_code=pair_code,
@@ -194,8 +197,9 @@ class PairingService:
         # 实际通过 Tailscale mesh 推送；这里仅记录通道
         # （APK 端在收到 pair response 后会从主控取 key，通道由 mesh 加密）
         logger.info(
-            "pairing completed",
-            extra={"device_id": str(device_id), "key_id": issued.key_id},
+            "pairing.completed",
+            device_id=str(device_id),
+            key_id=issued.key_id,
         )
         return PairingResult(
             device_id=device_id,

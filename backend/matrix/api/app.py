@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
@@ -112,9 +112,9 @@ def create_app(
             app.state.agent_worker = worker
         except Exception as e:  # pragma: no cover
             logger.warning(
-                "agent services / worker setup failed: %s; "
+                "agent services / worker setup failed; "
                 "Agent runs created via API will NOT auto-execute",
-                e,
+                error=e,
                 exc_info=True,
             )
 
@@ -130,16 +130,16 @@ def create_app(
             try:
                 await worker.stop()
             except Exception:  # pragma: no cover
-                logger.warning("agent worker stop failed", exc_info=True)
+                logger.exception("agent worker stop failed")
         try:
             shutdown_tracing()
         except Exception:  # pragma: no cover
-            logger.warning("shutdown_tracing failed", exc_info=True)
+            logger.exception("shutdown_tracing failed")
         if app.state.db_engine is not None:
             try:
                 await app.state.db_engine.dispose()
             except Exception:  # pragma: no cover
-                logger.warning("engine.dispose failed", exc_info=True)
+                logger.exception("engine.dispose failed")
         logger.info("matrix.api stopped")
 
     app = FastAPI(

@@ -151,7 +151,7 @@ async def scan_alerts(
         session.add(row)
         await session.flush()
         written.append(_to_schema(row))
-        logger.info("alerts.scan wrote code=%s subject=%s", a.code, a.subject_id)
+        logger.info("alerts.scan.wrote", code=a.code, subject_id=a.subject_id)
 
     return AlertListResponse(items=written, total=len(written))
 
@@ -171,6 +171,6 @@ async def resolve_alert(
     a.resolved_at = datetime.now(timezone.utc)
     await session.flush()
     logger.info(
-        "alerts.resolve alert_id=%s resolver=%s", alert_id, body.resolver
+        "alerts.resolve", alert_id=alert_id, resolver=body.resolver
     )
     return AlertResolveResponse(id=a.id, resolved=True)

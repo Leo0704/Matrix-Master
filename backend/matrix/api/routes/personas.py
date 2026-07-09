@@ -138,4 +138,4 @@ async def delete_persona(
     p.deleted_at = datetime.now(timezone.utc)
     p.updated_at = p.deleted_at
     await session.flush()
-    logger.info("persona.soft_delete id=%s", persona_id)
+    logger.info("persona.soft_delete", persona_id=persona_id)

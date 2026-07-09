@@ -11,14 +11,14 @@ Headscale 控制面 API（v1）：
 """
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 import os
 from dataclasses import dataclass
 from typing import Any, Optional
 
 import httpx
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass

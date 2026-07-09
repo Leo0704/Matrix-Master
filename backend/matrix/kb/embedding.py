@@ -8,14 +8,14 @@
 from __future__ import annotations
 
 import hashlib
-import logging
+from matrix.monitoring.logging import get_logger
 from collections import OrderedDict
 from typing import Optional
 
 from matrix.llm.embeddings import EmbeddingClient
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 DEFAULT_BATCH_SIZE: int = 100
 DEFAULT_CACHE_SIZE: int = 4096

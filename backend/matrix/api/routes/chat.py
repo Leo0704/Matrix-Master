@@ -113,7 +113,7 @@ async def chat(
     try:
         raw = await _call_llm(prompt, CHAT_SYSTEM)
     except LLMError as e:
-        logger.warning("chat LLM call failed, fall back to no-confirm: %s", e)
+        logger.warning("chat.llm.call_failed", error=e)
         return ChatResponse(
             reply="主题识别暂不可用，请稍后重试。",
             action=ChatAction(type="llm_error", payload={"error": str(e)}),
@@ -123,7 +123,11 @@ async def chat(
     try:
         parsed = _parse_llm_json(raw)
     except (json.JSONDecodeError, ValueError) as e:
-        logger.warning("chat LLM returned non-JSON: %r (err=%s)", raw[:200], e)
+        logger.warning(
+            "chat.llm.non_json_response",
+            raw=raw[:200],
+            error=e,
+        )
         return ChatResponse(
             reply=raw[:500] or "请再说一次。",
             action=ChatAction(type="parse_error", payload={}),

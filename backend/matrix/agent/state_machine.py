@@ -17,7 +17,7 @@ v0.6 新增 INTERACT：PUBLISH 成功后，若 ``interact_plan`` 非空则跳到
 
 from __future__ import annotations
 
-import logging
+from matrix.monitoring.logging import get_logger
 from dataclasses import dataclass
 from typing import Any
 
@@ -50,7 +50,7 @@ from .nodes import (
 )
 from .types import AgentState, State
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
