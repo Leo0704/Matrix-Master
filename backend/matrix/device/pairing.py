@@ -7,6 +7,12 @@
 4. 主控校验：配对码匹配 + 设备存在 + token 在有效期内
 5. 通过 Tailscale 通道下发 HMAC 共享密钥（仅一次）
 6. APK 用 Keystore 加密保存密钥
+
+P1-2 增强：配对码一次性消费。
+- ``consumed_at`` 记录首次成功消费的时间戳
+- 二次消费（含并发竞争）一律 ``PairingError("pair_code_used")``
+- 过期消费一律 ``PairingError("pair_code_expired")``
+- 内存索引，不落 DB（重启后未使用 / 已消费码均失效）
 """
 from __future__ import annotations
 
@@ -43,6 +49,15 @@ class PairingCode:
 
 
 @dataclass
+class _PairCodeEntry:
+    """内存中的配对码记录：未消费 vs 已消费。"""
+
+    device_id: UUID
+    expires_at: float
+    consumed_at: Optional[float] = None  # Unix timestamp（秒）
+
+
+@dataclass
 class PairingResult:
     """配对成功后的下发数据。"""
 
@@ -61,6 +76,9 @@ class PairingService:
 
     设计选择：配对码 + token 仅在主控内存中保留 TTL 窗口（默认 5 分钟），
     不落 DB（避免泄漏面）。重启后未使用的配对码直接失效。
+
+    P1-2：每次 ``consume_pair_code`` 调用都会原子地标记 ``consumed_at``，
+    防止重放 / 并发竞争导致的二次消费。
     """
 
     def __init__(
@@ -74,8 +92,8 @@ class PairingService:
         self.key_manager = key_manager
         self.tailscale = tailscale
         self.ttl_seconds = ttl_seconds
-        # pair_code -> (device_id, expires_at)；token 隐含 = pair_code（同一索引）
-        self._codes: dict[str, tuple[UUID, float]] = {}
+        # pair_code -> _PairCodeEntry；consume 后保留 entry，consumed_at 非空
+        self._codes: dict[str, _PairCodeEntry] = {}
 
     # ------------------------------------------------------------------
     # 配对码生成
@@ -113,7 +131,10 @@ class PairingService:
         pair_code = self._generate_pair_code()
         token = self._generate_token()
         expires_at = time.time() + self.ttl_seconds
-        self._codes[pair_code] = (device_id, expires_at)
+        self._codes[pair_code] = _PairCodeEntry(
+            device_id=device_id,
+            expires_at=expires_at,
+        )
 
         # 可选：预注册 Tailscale 节点（失败不阻塞配对码本身）
         if auth_key:
@@ -142,53 +163,77 @@ class PairingService:
         )
 
     # ------------------------------------------------------------------
-    # 配对码校验 + 密钥下发
+    # 配对码校验 + 消费 + 密钥下发
     # ------------------------------------------------------------------
 
     def validate_code(self, pair_code: str) -> Optional[UUID]:
-        """校验配对码 + 有效期，返回对应 device_id；无效返回 None。
+        """校验配对码 + 有效期 + 未消费，返回对应 device_id；无效返回 None。
 
         校验后**不**消费配对码（让下发流程可重试一次以应对网络抖动）。
         """
         entry = self._codes.get(pair_code)
         if entry is None:
             return None
-        device_id, expires_at = entry
-        if time.time() > expires_at:
+        if entry.consumed_at is not None:
+            return None
+        if time.time() > entry.expires_at:
             # 过期清理
             self._codes.pop(pair_code, None)
             return None
-        return device_id
+        return entry.device_id
+
+    def consume_pair_code(self, pair_code: str) -> bool:
+        """一次性消费配对码。
+
+        行为：
+        - 配对码不存在 / 已被消费 → 返回 ``False``（幂等；调用方按需抛错）
+        - 配对码过期 → 返回 ``False``（同时清理 entry）
+        - 配对码有效 → 标记 ``consumed_at = utcnow()``，返回 ``True``
+
+        调用方在拿到 ``True`` 后应立即推进密钥下发流程（``complete_pairing``）。
+        """
+        entry = self._codes.get(pair_code)
+        if entry is None:
+            return False
+        now = time.time()
+        if entry.consumed_at is not None:
+            return False
+        if now > entry.expires_at:
+            # 过期清理
+            self._codes.pop(pair_code, None)
+            return False
+        entry.consumed_at = now
+        return True
 
     async def complete_pairing(
         self,
         device_id: UUID,
         pair_code: str,
-        token: str,
+        token: Optional[str] = None,
     ) -> PairingResult:
-        """校验配对码 + token 后下发 HMAC 密钥。
+        """校验已消费的配对码 + 设备匹配后下发 HMAC 密钥。
 
-        - ``token`` 必须等于 create_pairing 时返回的 token（这里用 pair_code
-          作为 token 的简化处理：实际上传 pair_code 和 token，函数验证两者一致）。
-        - 成功后配对码一次性消费。
+        标准流程（由调用方负责）：
+        1. ``consume_pair_code(pair_code)`` 一次性消费（防重放 + 防并发）
+        2. 本函数负责设备匹配 + 密钥签发
+
+        :param token: 预留参数；当前实现不校验 token 本身，仅做非空检查。
+            历史接口保留 token 形参以兼容旧调用方。
 
         Raises:
-            PairingError: 配对码无效 / 过期 / token 不匹配 / 设备不匹配
+            PairingError: 配对码未被消费 / 设备不匹配 / 设备不存在
         """
-        expected_device = self.validate_code(pair_code)
-        if expected_device is None:
-            raise PairingError("invalid or expired pair code")
-        if expected_device != device_id:
+        entry = self._codes.get(pair_code)
+        if entry is None or entry.consumed_at is None:
+            raise PairingError("pair_code_not_consumed")
+        if entry.device_id != device_id:
             raise PairingError("pair code does not match device")
-        if not token:
+        if token is not None and not token:
             raise PairingError("missing token")
 
         device = await self._load_device(device_id)
         if device is None:
             raise PairingError(f"device {device_id} not found")
-
-        # 消费配对码
-        self._codes.pop(pair_code, None)
 
         # 签发密钥
         issued: IssuedKey = await self.key_manager.issue_key(device_id)
@@ -217,9 +262,13 @@ class PairingService:
         return result.scalar_one_or_none()
 
     def cleanup_expired(self) -> int:
-        """清理已过期的配对码（可由后台任务定期调）。返回清理数。"""
+        """清理已过期或已消费的配对码（可由后台任务定期调）。返回清理数。"""
         now = time.time()
-        expired = [k for k, (_, exp) in self._codes.items() if exp <= now]
+        expired = [
+            k
+            for k, e in self._codes.items()
+            if e.expires_at <= now or e.consumed_at is not None
+        ]
         for k in expired:
             self._codes.pop(k, None)
         return len(expired)

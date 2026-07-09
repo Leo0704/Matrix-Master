@@ -91,8 +91,7 @@ async def build_runtime_services(
         embedding_client_cls: OpenAI Embedding 客户端类（用于构造 EmbeddingService）
         task_writer: 写 task 的 callable（默认 None → dispatch_node 静默跳过落库；
             生产路径传 :class:`matrix.scheduler.db.DbTaskWriter`）
-        scheduler: 选 (设备,账号) 槽位的 scheduler（默认 None；
-            生产路径传 :class:`matrix.scheduler.slot_picker.DefaultSlotPicker`）
+        scheduler: 可选 slot picker；未传时构造默认 :class:`DefaultSlotPicker`
     """
     llm = llm_factory()
     if embedding_client_cls is None:
@@ -102,6 +101,11 @@ async def build_runtime_services(
         embedding_client_cls = EmbeddingClient
     embedder = EmbeddingService(embedding_client_cls())
     usage_tracker = DbUsageTracker(session_factory)
+
+    if scheduler is None:
+        from matrix.scheduler import DefaultSlotPicker
+
+        scheduler = DefaultSlotPicker(session_factory)
 
     services = build_agent_services(
         llm=llm,

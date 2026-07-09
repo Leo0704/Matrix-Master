@@ -18,7 +18,9 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -64,6 +66,7 @@ from matrix.agent.prompts import (
     REVIEW_USER,
 )
 from matrix.agent.protocols import (
+    ChosenSlot,
     DevicePublisher,
     KBRetriever,
     KBWriter,
@@ -346,6 +349,7 @@ def make_services(
     publisher: DevicePublisher | None = None,
     collector: FakeDeviceCollector | None = None,
     task_writer: Any = None,
+    scheduler: Any | None = None,
 ) -> AgentServices:
     return AgentServices(
         llm=llm or FakeLLM(),
@@ -355,6 +359,7 @@ def make_services(
         device_collector=collector or FakeDeviceCollector(),
         notifier=recording_notifier,
         task_writer=task_writer,
+        scheduler=scheduler,
     )
 
 
@@ -639,11 +644,49 @@ class TestNodes:
         assert result["draft"]["title"] == "改写后"
 
     @pytest.mark.asyncio
-    async def test_schedule_synthetic_slot(self):
+    async def test_schedule_no_scheduler_errors(self):
+        # 未注入 scheduler 时 schedule_node 不再返回 synthetic slot，
+        # 而是返回 NO_SCHEDULER 错误码，避免假 UUID 流入下游。
+        # 注入 now=12:00 避开 OUT_OF_ACTIVE_WINDOW 分支。
         set_services(make_services())
-        result = await schedule_node({"draft": {"title": "t"}})
+        _frozen_now = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
+        result = await schedule_node({"draft": {"title": "t"}}, now=_frozen_now)
+        assert result["slot"] is None
+        assert result["last_error"] is not None
+        assert result["last_error"]["code"] == "NO_SCHEDULER"
+
+    @pytest.mark.asyncio
+    async def test_schedule_picks_real_slot_via_choose_slot(self):
+        from matrix.agent.protocols import ChosenSlot
+
+        chosen = ChosenSlot(
+            device_id=uuid4(),
+            account_id=uuid4(),
+            reason="slot_picker.match",
+            scheduled_at=datetime(2026, 7, 9, 12, 0, tzinfo=UTC),
+        )
+        scheduler = SimpleNamespace(
+            choose_slot=AsyncMock(return_value=chosen),
+        )
+        set_services(make_services(scheduler=scheduler))
+        _frozen_now = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
+        result = await schedule_node({"draft": {"title": "t"}}, now=_frozen_now)
         assert result["slot"] is not None
-        assert result["slot"]["reason"] == "synthetic_slot"
+        assert result["slot"]["reason"] == "slot_picker.match"
+        assert result["slot"]["device_id"] == str(chosen.device_id)
+        assert result["slot"]["account_id"] == str(chosen.account_id)
+        assert result["slot"]["scheduled_at"] is not None
+        assert result["last_error"] is None
+
+    @pytest.mark.asyncio
+    async def test_schedule_returns_no_slot_when_choose_slot_returns_None(self):
+        scheduler = SimpleNamespace(choose_slot=AsyncMock(return_value=None))
+        set_services(make_services(scheduler=scheduler))
+        _frozen_now = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
+        result = await schedule_node({"draft": {"title": "t"}}, now=_frozen_now)
+        assert result["slot"] is None
+        assert result["last_error"] is not None
+        assert result["last_error"]["code"] == "NO_AVAILABLE_SLOT"
 
     @pytest.mark.asyncio
     async def test_dispatch_creates_task(self):
@@ -777,7 +820,19 @@ class TestStateMachine:
         )
         writer = FakeKBWriter()
         publisher = FakeDevicePublisher(ok=True)
-        set_services(make_services(llm=llm, writer=writer, publisher=publisher))
+        scheduler = SimpleNamespace(
+            choose_slot=AsyncMock(
+                return_value=ChosenSlot(
+                    device_id=uuid4(),
+                    account_id=uuid4(),
+                    reason="slot_picker.match",
+                    scheduled_at=datetime(2026, 7, 9, 12, 0, tzinfo=UTC),
+                )
+            )
+        )
+        set_services(
+            make_services(llm=llm, writer=writer, publisher=publisher, scheduler=scheduler)
+        )
         sm = build_state_machine()
         result = await sm.ainvoke(
             {

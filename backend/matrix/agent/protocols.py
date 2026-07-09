@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
@@ -178,6 +179,13 @@ class DeviceSlot:
     device_id: UUID
     account_id: UUID
     reason: str = ""
+
+
+@dataclass(frozen=True)
+class ChosenSlot(DeviceSlot):
+    """SlotPicker 选出的最终调度结果，携带计划下发时间。"""
+
+    scheduled_at: datetime | None = None
 
 
 # 抽象一个 callable 工厂方法，便于 mocking：
