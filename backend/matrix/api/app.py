@@ -6,10 +6,12 @@
 """
 from __future__ import annotations
 
-from matrix.monitoring.logging import get_logger
+import asyncio
 import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
+
+from matrix.monitoring.logging import get_logger
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
@@ -94,11 +96,19 @@ def create_app(
 
             from matrix.agent._services import set_services as _set_services
             from matrix.api._agent_factory import build_runtime_services
+            from matrix.scheduler.db import DbTaskLoader, DbTaskStatusWriter, DbTaskWriter
+            from matrix.scheduler.db_task_executor import DeviceTaskExecutor
+            from matrix.scheduler.rate_limiter import RateLimiter
+            from matrix.scheduler.scheduler import Scheduler
+
+            # ---- v0.7 P0-1：调度器接入 dispatch_node 的 task_writer ----
+            task_writer = DbTaskWriter(app.state.db_session_factory)
 
             services = await build_runtime_services(
                 app.state.db_session_factory,
                 llm_factory=get_default_client,
                 embedding_client_cls=EmbeddingClient,
+                task_writer=task_writer,
             )
             _set_services(services)
             manager = build_run_manager(
@@ -141,6 +151,34 @@ def create_app(
                 exc_info=True,
             )
 
+        # ---- v0.7 P0-1：调度器主循环（拉 pending → execute → 写回 status） ----
+        # scheduler 失败不能阻塞 lifespan（dev 环境没 DB / 没 APK 也能起 API）
+        try:
+            from matrix.device.adapters import ApkHttpClient
+
+            apk_client = ApkHttpClient()
+            app.state.apk_client = apk_client
+            rate_limiter = RateLimiter(jitter_base=0.0, jitter_sigma=0.0)
+            executor = DeviceTaskExecutor(
+                device_publisher=apk_client,
+                device_collector=apk_client,
+                device_interactor=apk_client,
+            )
+            scheduler = Scheduler(
+                loader=DbTaskLoader(app.state.db_session_factory),
+                writer=DbTaskStatusWriter(app.state.db_session_factory),
+                executor=executor,
+                rate_limiter=rate_limiter,
+                poll_interval=1.0,
+            )
+            app.state.scheduler_task = asyncio.create_task(
+                scheduler.run(), name="matrix-scheduler"
+            )
+            app.state.scheduler = scheduler
+            logger.info("matrix.scheduler started")
+        except Exception:  # pragma: no cover
+            logger.warning("matrix.scheduler setup failed; tasks will not auto-execute", exc_info=True)
+
         logger.info(
             "matrix.api starting", version=__version__, db=str(database_url or "default")
         )
@@ -162,6 +200,27 @@ def create_app(
             except Exception:  # pragma: no cover
                 logger.warning("agent watchdog stop failed", exc_info=True)
                 logger.exception("agent worker stop failed")
+        # v0.7 P0-1: 停调度器
+        scheduler = getattr(app.state, "scheduler", None)
+        if scheduler is not None:
+            try:
+                await scheduler.stop()
+            except Exception:  # pragma: no cover
+                logger.warning("scheduler stop failed", exc_info=True)
+        scheduler_task = getattr(app.state, "scheduler_task", None)
+        if scheduler_task is not None and not scheduler_task.done():
+            try:
+                await asyncio.wait_for(scheduler_task, timeout=5.0)
+            except asyncio.TimeoutError:  # pragma: no cover
+                scheduler_task.cancel()
+                logger.warning("scheduler task cancel after timeout")
+        # 关 APK HTTP 客户端
+        apk_client = getattr(app.state, "apk_client", None)
+        if apk_client is not None:
+            try:
+                await apk_client.aclose()
+            except Exception:  # pragma: no cover
+                logger.warning("apk_client aclose failed", exc_info=True)
         try:
             shutdown_tracing()
         except Exception:  # pragma: no cover
