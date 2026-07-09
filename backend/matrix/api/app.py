@@ -46,6 +46,7 @@ from matrix.db import create_engine
 from matrix.llm.embeddings import EmbeddingClient
 from matrix.llm.router import get_default_client
 from matrix.monitoring import setup_monitoring, shutdown_tracing
+from matrix.monitoring.alert_scanner import AlertScanner
 from matrix.monitoring.logging import get_logger
 from matrix.monitoring.middleware import install_middleware
 
@@ -89,6 +90,7 @@ def create_app(
             app.state.db_session_factory = get_session_factory()
 
         # ---- 装配 Agent 服务（LLM/KB 检索器/写库器）并启动 worker ----
+        services: Any = None
         try:
             from matrix.kb.embedding import EmbeddingService
             from matrix.kb.retrieval import Retriever
@@ -143,6 +145,19 @@ def create_app(
                 app.state.agent_watchdog = watchdog
             except Exception:  # pragma: no cover
                 logger.warning("agent_watchdog setup failed", exc_info=True)
+
+            # v0.7 Phase 4：AlertScanner 后台定期跑 monitoring/alerts 全部 check
+            # 必须 services 装配好之后启动（依赖 notifier / config_reader）
+            try:
+                scanner = AlertScanner(
+                    session_factory=app.state.db_session_factory,
+                    config_reader=services.config,  # type: ignore[union-attr]
+                    notifier=services.notifier,  # type: ignore[union-attr]
+                )
+                scanner.start()
+                app.state.alert_scanner = scanner
+            except Exception:  # pragma: no cover
+                logger.warning("alert_scanner setup failed", exc_info=True)
         except Exception as e:  # pragma: no cover
             logger.warning(
                 "agent services / worker setup failed; "
@@ -185,6 +200,13 @@ def create_app(
         app.state.start_time = time.monotonic()
         yield
         # ---- shutdown ----
+        # 先停后台扫描器（避免 DB 关了还查表）
+        alert_scanner = getattr(app.state, "alert_scanner", None)
+        if alert_scanner is not None:
+            try:
+                await alert_scanner.stop()
+            except Exception:  # pragma: no cover
+                logger.warning("alert_scanner stop failed", exc_info=True)
         # 先停 worker（避免在 DB 关闭后还查表）
         worker = getattr(app.state, "agent_worker", None)
         if worker is not None:
@@ -288,22 +310,36 @@ def create_app(
 # 异常处理
 # ---------------------------------------------------------------------------
 
+# HTTP status → envelope code 映射（按 plan / 错误码语义）
+_STATUS_CODE_MAP: dict[int, str] = {
+    status.HTTP_400_BAD_REQUEST: "INVALID_PARAMS",
+    status.HTTP_401_UNAUTHORIZED: "UNAUTHORIZED",
+    status.HTTP_403_FORBIDDEN: "FORBIDDEN",
+    status.HTTP_404_NOT_FOUND: "NOT_FOUND",
+    status.HTTP_409_CONFLICT: "CONFLICT",
+    status.HTTP_422_UNPROCESSABLE_ENTITY: "VALIDATION_ERROR",
+}
+
 
 def _install_exception_handlers(app: FastAPI) -> None:
+    """统一错误响应 envelope：所有异常（HTTP / 校验 / unhandled）都走
+    ``{ok: False, error: {code, message, retryable}}``。
+
+    客户端字段从 ``detail`` 切到 ``error.code``；unhandled 不再泄漏 ``str(exc)``，
+    改为暴露 ``X-Trace-Id`` header 让客户端回报问题时能关联日志。
+    """
+
     @app.exception_handler(HTTPException)
     async def http_exc_handler(request: Request, exc: HTTPException) -> JSONResponse:
-        # 保留 401 / 403 不做 envelope 包装（鉴权语义），其它业务异常走 error envelope
-        if exc.status_code in (401, 403, 404):
-            return JSONResponse(
-                status_code=exc.status_code,
-                content={"detail": exc.detail},
-            )
-        code = _code_for_status(exc.status_code)
+        code = _STATUS_CODE_MAP.get(
+            exc.status_code,
+            "INTERNAL_ERROR" if exc.status_code >= 500 else "UNKNOWN",
+        )
         body = ErrorResponse(
             ok=False,
             error=ErrorDetail(
-                code=code,
-                message=str(exc.detail),
+                code=code,  # type: ignore[arg-type]
+                message=str(exc.detail) if exc.detail is not None else code,
                 retryable=exc.status_code >= 500,
             ),
         )
@@ -316,7 +352,7 @@ def _install_exception_handlers(app: FastAPI) -> None:
         body = ErrorResponse(
             ok=False,
             error=ErrorDetail(
-                code="INVALID_PARAMS",
+                code="VALIDATION_ERROR",
                 message=str(exc.errors()),
                 retryable=False,
             ),
@@ -328,31 +364,54 @@ def _install_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def unhandled_exc_handler(request: Request, exc: Exception) -> JSONResponse:
-        logger.exception("unhandled exception", path=request.url.path)
+        # 安全：不要把 str(exc) 漏给客户端（可能含 SQL / 内部路径 / 堆栈）；
+        # 仅服务端 logger.exception 留 trace_id 关联
+        trace_id = _extract_trace_id(request)
+        logger.exception(
+            "unhandled exception",
+            path=request.url.path,
+            trace_id=trace_id,
+            error=str(exc),
+        )
         body = ErrorResponse(
             ok=False,
             error=ErrorDetail(
                 code="INTERNAL_ERROR",
-                message=str(exc),
+                message="internal server error",
                 retryable=True,
             ),
         )
+        headers = {"X-Trace-Id": trace_id} if trace_id else {}
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content=body.model_dump(),
+            headers=headers,
         )
 
 
-def _code_for_status(status_code: int) -> str:
-    if status_code == 422:
-        return "INVALID_PARAMS"
-    if status_code == 400:
-        return "INVALID_PARAMS"
-    if status_code == 409:
-        return "INVALID_PARAMS"
-    if status_code >= 500:
-        return "INTERNAL_ERROR"
-    return "INTERNAL_ERROR"
+def _extract_trace_id(request: Request) -> str:
+    """从 request.state（middleware 注入）/ X-Request-ID header / OTel context 取 trace_id。
+
+    不依赖 ``X-Trace-Id`` response header（那是给客户端读的，handler 在它之前）。
+    """
+    trace_id = getattr(request.state, "trace_id", None)
+    if trace_id:
+        return trace_id
+    raw = request.headers.get("x-request-id")
+    if raw:
+        candidate = raw.strip().lower()
+        if len(candidate) == 32 and all(c in "0123456789abcdef" for c in candidate):
+            return candidate
+    try:
+        from opentelemetry import trace as otel_trace
+
+        span = otel_trace.get_current_span()
+        ctx = span.get_span_context() if span else None
+        if ctx and ctx.trace_id:
+            return format(ctx.trace_id, "032x")
+    except Exception:  # pragma: no cover
+        pass
+    return ""
 
 
 # ---------------------------------------------------------------------------

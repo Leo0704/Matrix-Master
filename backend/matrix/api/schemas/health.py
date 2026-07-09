@@ -37,7 +37,13 @@ class ErrorDetail(BaseModel):
         "RATE_LIMITED",
         "PARSE_FAILED",
         "INVALID_PARAMS",
+        "VALIDATION_ERROR",
+        "UNAUTHORIZED",
+        "FORBIDDEN",
+        "NOT_FOUND",
+        "CONFLICT",
         "INTERNAL_ERROR",
+        "UNKNOWN",
     ]
     message: str
     retryable: bool = False

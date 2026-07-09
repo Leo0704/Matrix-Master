@@ -76,6 +76,11 @@ class MonitoringMiddleware(BaseHTTPMiddleware):
             action=f"{method} {path}",
         )
 
+        # 把 trace_id 写到 request.state，让 unhandled exception handler 也能取到
+        # （handler 跑在 response 出来之前，看不到 response header）
+        if trace_id_hex:
+            request.state.trace_id = trace_id_hex
+
         status_code = 500
         try:
             response = await call_next(request)
