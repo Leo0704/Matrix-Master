@@ -395,6 +395,76 @@ class TestMiddleware:
         trace_id_header = asyncio.run(run_request())
         assert trace_id_header == format(fake_trace_id, "032x")
 
+    def test_middleware_prefers_x_request_id_header(self, tmp_path):
+        """X-Request-ID header（32 hex）优先于 OTel context，作为 trace_id。
+
+        Tauri shell 在 wait_ready/probe_health 等 reqwest 调用前发此 header，
+        让 Rust→Python 一次调用的日志能串联同一个 trace_id。
+        """
+        import asyncio
+
+        from httpx import ASGITransport, AsyncClient
+
+        configure_logging(log_dir=tmp_path, level="INFO", console=False)
+
+        sent_trace_id = "deadbeef" * 4  # 32 hex chars (lowercase)
+
+        app = FastAPI()
+        app.add_middleware(MonitoringMiddleware)
+
+        @app.get("/probe")
+        async def probe():
+            log = get_logger(__name__)
+            log.info("trace.probe.received", path="/probe")
+            return {"ok": True}
+
+        async def run_request() -> dict:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as ac:
+                resp = await ac.get(
+                    "/probe", headers={"X-Request-ID": sent_trace_id}
+                )
+                return {
+                    "header": resp.headers.get("X-Trace-Id", ""),
+                    "status": resp.status_code,
+                }
+
+        result = asyncio.run(run_request())
+        for h in logging.getLogger().handlers:
+            h.flush()
+
+        assert result["status"] == 200
+        assert result["header"] == sent_trace_id, (
+            f"X-Trace-Id 应等于 X-Request-ID header，实际: {result['header']!r}"
+        )
+
+        # 同时验证 jsonl 里有该 trace_id
+        files = list(tmp_path.glob("*.jsonl"))
+        assert files
+        content = files[0].read_text(encoding="utf-8").strip()
+        found = False
+        for line in content.splitlines():
+            record = json.loads(line)
+            if record.get("trace_id") == sent_trace_id:
+                found = True
+                assert record["event"] == "trace.probe.received"
+                break
+        assert found, f"trace_id {sent_trace_id} 不在 jsonl 里"
+
+    def test_middleware_rejects_malformed_x_request_id_header(self):
+        """非法 X-Request-ID（不是 32 hex）应该被忽略，回退 OTel context。"""
+        from matrix.monitoring.middleware import _normalize_trace_id
+
+        assert _normalize_trace_id("abcdef") == ""           # 太短
+        assert _normalize_trace_id("g" * 32) == ""           # 非 hex
+        assert _normalize_trace_id("") == ""                 # 空
+        assert _normalize_trace_id(None) == ""               # None
+        assert _normalize_trace_id("ABCDEF" * 4 + "AB" + "CD") == ""  # 大写长度不对
+        valid = "abcdef0123456789" * 2                        # 32 字符合法小写
+        assert _normalize_trace_id(valid) == valid
+        assert _normalize_trace_id(valid.upper()) == valid    # 大写小写化
+        assert _normalize_trace_id(f"  {valid}  ") == valid   # 空白 strip
+
     def test_middleware_trace_id_appears_in_jsonl_logs(self, tmp_path):
         """端到端：发起 HTTP 请求 → jsonl 日志里能 grep 到该 trace_id。
 

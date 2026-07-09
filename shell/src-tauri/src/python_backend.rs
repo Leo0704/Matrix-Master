@@ -12,6 +12,7 @@
 //! - `MATRIX_API_PORT`：`8666`（默认）
 
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,19 @@ const DEFAULT_API_PORT: u16 = 8666;
 const HEALTH_PATH: &str = "/api/v1/health";
 const READY_TIMEOUT_SECS: u64 = 30;
 const HEALTH_PROBE_INTERVAL_SECS: u64 = 10;
+
+/// 进程级单调计数器 + 高精度时间戳，构成 32 hex 字符 trace_id。
+static TRACE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// 生成 32 hex 字符 trace_id（与 Python middleware `_normalize_trace_id` 兼容）。
+pub fn generate_trace_id_hex() -> String {
+    let n = TRACE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    format!("{:016x}{:016x}", nanos, n)
+}
 
 /// 取消 + 清理句柄，关闭时由 Tauri RunEvent::ExitRequested / ExitRequested handle 触发。
 pub struct BackendHandle {
@@ -110,16 +124,23 @@ pub async fn spawn_backend(cfg: &BackendConfig) -> AppResult<Child> {
 }
 
 /// 等待 `/api/v1/health` 连续返回 200，最多等 [`READY_TIMEOUT_SECS`] 秒。
-#[tracing::instrument(skip_all, fields(base_url = %cfg.base_url, timeout_secs = READY_TIMEOUT_SECS))]
+#[tracing::instrument(skip_all, fields(base_url = %cfg.base_url, timeout_secs = READY_TIMEOUT_SECS, trace_id))]
 pub async fn wait_ready(cfg: &BackendConfig) -> AppResult<()> {
     let url = format!("{}{}", cfg.base_url, HEALTH_PATH);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
         .build()?;
     let deadline = std::time::Instant::now() + Duration::from_secs(READY_TIMEOUT_SECS);
+    let trace_id = generate_trace_id_hex();
+    tracing::Span::current().record("trace_id", tracing::field::display(&trace_id));
 
     while std::time::Instant::now() < deadline {
-        if let Ok(resp) = client.get(&url).send().await {
+        if let Ok(resp) = client
+            .get(&url)
+            .header("X-Request-ID", &trace_id)
+            .send()
+            .await
+        {
             if resp.status() == reqwest::StatusCode::OK {
                 return Ok(());
             }
@@ -133,7 +154,7 @@ pub async fn wait_ready(cfg: &BackendConfig) -> AppResult<()> {
 }
 
 /// 主动探活一次。
-#[tracing::instrument(skip_all, fields(base_url = %cfg.base_url))]
+#[tracing::instrument(skip_all, fields(base_url = %cfg.base_url, trace_id))]
 pub async fn probe_health(cfg: &BackendConfig) -> BackendHealth {
     let url = format!("{}{}", cfg.base_url, HEALTH_PATH);
     let client = reqwest::Client::builder()
@@ -141,7 +162,14 @@ pub async fn probe_health(cfg: &BackendConfig) -> BackendHealth {
         .build()
         .expect("reqwest client");
     let start = std::time::Instant::now();
-    match client.get(&url).send().await {
+    let trace_id = generate_trace_id_hex();
+    tracing::Span::current().record("trace_id", tracing::field::display(&trace_id));
+    match client
+        .get(&url)
+        .header("X-Request-ID", &trace_id)
+        .send()
+        .await
+    {
         Ok(resp) => {
             let status = resp.status();
             let body: Option<serde_json::Value> = resp.json().await.ok();

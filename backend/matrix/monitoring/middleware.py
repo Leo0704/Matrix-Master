@@ -28,6 +28,18 @@ def _normalize_path(path: str) -> str:
     return _PATH_TEMPLATE_RE.sub("/{id}", path)
 
 
+def _normalize_trace_id(raw: str | None) -> str:
+    """校验 X-Request-ID header；只接受 32 字符 hex（小写），其他返回空串。"""
+    if not raw:
+        return ""
+    candidate = raw.strip().lower()
+    if len(candidate) != 32:
+        return ""
+    if not all(c in "0123456789abcdef" for c in candidate):
+        return ""
+    return candidate
+
+
 class MonitoringMiddleware(BaseHTTPMiddleware):
     """记录 HTTP 请求的 method / path / status / latency_ms，并注入 trace context。
 
@@ -42,12 +54,17 @@ class MonitoringMiddleware(BaseHTTPMiddleware):
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
         start = time.perf_counter()
-        # 提取 trace_id 作为日志关联 key
-        span = otel_trace.get_current_span()
-        ctx = span.get_span_context() if span else None
-        trace_id_hex = (
-            format(ctx.trace_id, "032x") if ctx and ctx.trace_id else ""
-        )
+        # 提取 trace_id 作为日志关联 key。
+        # 优先 ``X-Request-ID`` header（Tauri shell 注入），其次用 OTel 当前 span。
+        # Rust 端的 reqwest 调用（wait_ready / probe_health / restart）发此 header，
+        # 让 Rust→Python 调用链能串联同一个 trace_id。
+        trace_id_hex = _normalize_trace_id(request.headers.get("x-request-id"))
+        if not trace_id_hex:
+            span = otel_trace.get_current_span()
+            ctx = span.get_span_context() if span else None
+            trace_id_hex = (
+                format(ctx.trace_id, "032x") if ctx and ctx.trace_id else ""
+            )
 
         method = request.method
         path = _normalize_path(request.url.path)
