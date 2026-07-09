@@ -20,6 +20,7 @@ class GuardConfig:
     """guard 阈值集合。"""
 
     revise_max_attempts: int = 3
+    interact_max_attempts: int = 1  # v0.6 互动一般不重试；限速命中由 RateLimiter 负责
 
     # REVIEW 通过条件
     max_dup_score: float = 0.85          # 相似度 ≤ 该值才算不撞稿
@@ -27,6 +28,9 @@ class GuardConfig:
 
     # ANALYZE / IDLE
     require_note_metrics: bool = True    # ANALYZE 之前是否要求已回采
+
+    # v0.6 互动节点
+    enable_post_publish_interact: bool = True  # 总开关：关闭则 PUBLISH → COLLECT
 
 
 class ReviewVerdict(TypedDict):
@@ -143,7 +147,7 @@ def dispatch_no_task_to_alert(state: AgentState) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# PUBLISH → COLLECT / ALERT
+# PUBLISH → INTERACT / COLLECT / ALERT  （v0.6：发后流量互推）
 # ---------------------------------------------------------------------------
 
 
@@ -154,6 +158,35 @@ def publish_succeeded(state: AgentState) -> bool:
 
 def publish_failed_to_alert(state: AgentState) -> bool:
     return not publish_succeeded(state)
+
+
+def has_interact_plan(state: AgentState) -> bool:
+    """PUBLISH 后是否有互动计划（且开关打开）。"""
+    plan = state.get("interact_plan")
+    return isinstance(plan, list) and len(plan) > 0
+
+
+def can_publish_to_interact(state: AgentState, cfg: GuardConfig) -> bool:
+    """PUBLISH → INTERACT：发布成功 + 有 plan + 开关打开。"""
+    if not cfg.enable_post_publish_interact:
+        return False
+    return publish_succeeded(state) and has_interact_plan(state)
+
+
+# ---------------------------------------------------------------------------
+# INTERACT → COLLECT / ALERT
+# ---------------------------------------------------------------------------
+
+
+def interact_has_results(state: AgentState) -> bool:
+    """INTERACT 节点已写入 results（含 succeeded/failed 计数）。"""
+    results = state.get("interact_results")
+    return isinstance(results, dict) and "succeeded" in results
+
+
+def interact_to_collect(state: AgentState, cfg: GuardConfig) -> bool:
+    """INTERACT → COLLECT：只要 results 字段存在就放行（哪怕全失败）。"""
+    return interact_has_results(state)
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +281,17 @@ def route_after_dispatch(state: AgentState, cfg: GuardConfig) -> State:
 
 
 def route_after_publish(state: AgentState, cfg: GuardConfig) -> State:
-    return State.COLLECT if publish_succeeded(state) else State.ALERT
+    if not publish_succeeded(state):
+        return State.ALERT
+    if can_publish_to_interact(state, cfg):
+        return State.INTERACT
+    return State.COLLECT
+
+
+def route_after_interact(state: AgentState, cfg: GuardConfig) -> State:
+    if interact_to_collect(state, cfg):
+        return State.COLLECT
+    return State.ALERT
 
 
 def route_after_collect(state: AgentState, cfg: GuardConfig) -> State:
@@ -282,6 +325,11 @@ __all__ = [
     # Publish
     "publish_succeeded",
     "publish_failed_to_alert",
+    "has_interact_plan",
+    "can_publish_to_interact",
+    # Interact (v0.6)
+    "interact_has_results",
+    "interact_to_collect",
     # Collect
     "collect_has_metrics",
     "collect_no_metrics_to_alert",
@@ -298,6 +346,7 @@ __all__ = [
     "route_after_schedule",
     "route_after_dispatch",
     "route_after_publish",
+    "route_after_interact",
     "route_after_collect",
     "route_idle",
 ]

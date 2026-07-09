@@ -31,6 +31,7 @@ class State(str, Enum):
     SCHEDULE = "SCHEDULE"
     DISPATCH = "DISPATCH"
     PUBLISH = "PUBLISH"
+    INTERACT = "INTERACT"  # v0.6 发后流量互推（like + comment）
     COLLECT = "COLLECT"
     ANALYZE = "ANALYZE"
     ALERT = "ALERT"
@@ -145,8 +146,15 @@ class AgentState(TypedDict, total=False):
     publish_result: dict[str, Any]  # PublishResult 序列化
     note_metrics: dict[str, int]  # {'views':..,'likes':.., ...}
 
+    # 互动（v0.6）—— list[{'note_id': str, 'kind': 'like'|'comment', 'content_template'?: str}]
+    interact_plan: list[dict[str, Any]]
+    interact_results: dict[str, Any]  # {'succeeded': int, 'failed': int, 'details': [...]}
+    interact_attempts: int
+
     # 异常
     last_error: dict[str, Any] | None
+    # 触发 ALERT 的错误快照（ALERT 节点清掉 last_error 之前留底）
+    last_error_snapshot: dict[str, Any] | None
 
 
 __all__ = [

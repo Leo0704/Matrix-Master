@@ -458,6 +458,29 @@ CREATE TABLE app_config (
 );
 
 -- =============================================================================
+-- 告警（v0.5+，migration 004 加的，schema.sql 同步）
+-- 主题贯穿改造 §11：/alerts 端点对应的 DB 表；monitoring/alerts.py 9 条 check 规则扫描结果
+-- =============================================================================
+
+CREATE TABLE alerts (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    code            VARCHAR(64) NOT NULL,
+    severity        VARCHAR(16) NOT NULL
+                        CHECK (severity IN ('critical', 'warning', 'info')),
+    message         TEXT NOT NULL,
+    subject_id      VARCHAR(128),
+    resolved        BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    resolved_at     TIMESTAMPTZ
+);
+
+CREATE INDEX idx_alerts_unresolved
+    ON alerts(created_at DESC) WHERE resolved = FALSE;
+
+CREATE INDEX idx_alerts_code
+    ON alerts(code, created_at DESC);
+
+-- =============================================================================
 -- 视图
 -- =============================================================================
 

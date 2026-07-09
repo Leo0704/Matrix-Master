@@ -479,19 +479,20 @@ class TestGuards:
 class TestPrompts:
     def test_research_prompt_format(self):
         out = RESEARCH_USER.format(
-            goal="g", brand="b", persona="p", topics="t", history="h", rules="r"
+            goal="g", brand="b", persona="p", history="h", rules="r", today="2026-07-09"
         )
-        assert "g" in out and "b" in out and "p" in out and "t" in out and "h" in out and "r" in out
+        assert "g" in out and "b" in out and "p" in out and "h" in out and "r" in out
+        assert "2026-07-09" in out  # 日期占位符注入
 
     def test_draft_prompt_format(self):
         out = DRAFT_USER.format(
             topic_title="tt",
             topic_rationale="tr",
-            persona_name="pn",
             persona_style="ps",
             persona_tone="pt",
             forbidden_words="",
             brand="br",
+            product_facts="",
         )
         assert "tt" in out and "tr" in out
         assert DRAFT_SYSTEM.format(persona_name="pn").startswith("你是")

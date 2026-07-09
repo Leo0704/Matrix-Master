@@ -6,9 +6,48 @@
 
 ### 计划
 - 多设备 / 多账号接入
-- 互动闭环（评论 / 关注 / 点赞）
+- 互动闭环 — follow / share / collect 动作
+- 互动闭环 — 日常养号（scheduler 驱动）
 - 知识库自更新
 - 规模化风控
+
+---
+
+## [0.6.0] - 2026-07-09
+
+### Added
+- **互动闭环（v0.6 MVP：发后流量互推）**
+  - 新增 `INTERACT` 状态 + 节点，嵌入在 `PUBLISH → COLLECT` 之间
+  - `ApkHttpClient.interact()` 实现 `POST /xhs/interact` 协议（OpenAPI 已在）
+  - `MockDeviceAdapter` 不再加新方法（按 v0.5 原则保持纯发布/回采）
+  - `AgentServices` 新增 `device_interactor` / `interaction_writer` / `rate_limiter` 三个可选依赖
+  - 新增 `INTERACT_SYSTEM` / `INTERACT_USER` prompt（按 persona 写走心评论）
+  - 新增 `/interactions` 只读 API（GET 列表 / GET 单条；写入由节点完成）
+  - 复用 `RateLimiter` 现有 5 个 INTERACT_ACTIONS 配额（device 30/天、account 20/天）
+  - 新增 `interact_plan` / `interact_results` / `interact_attempts` state 字段
+  - 新增 `enable_post_publish_interact` 开关（默认开；关掉后 PUBLISH → COLLECT）
+  - 新增 Pydantic schema：`Interaction` / `InteractionListResponse` / `InteractionType` / `InteractionResult`
+
+### Changed
+- 状态机从 9 主态 + 2 异常态扩展到 **10 主态 + 2 异常态**（`INTERACT` 插入 PUBLISH 和 COLLECT 之间）
+- `route_after_publish` 现在按 plan 是否为空 / 开关是否打开，3 路分发
+- `RunManager.create_run` 新增 `interact_plan` 参数
+- `RunManager.start_run` / `resume_run` 把 `interact_plan` / `goal_type` 注入 state
+- `build_agent_services` 自动探测 `device_interactor`（若 device_adapter 实现了 DeviceInteractor Protocol）
+
+### Tests
+- `tests/test_interact.py`（新）—— 12 个 INTERACT 用例：节点单测（空 plan / happy / partial / 无效 / 无 interactor / 限速）+ 状态机路由 + 端到端闭环
+- `tests/test_scheduler.py` —— 新增 2 个限速测试（device_comment / account 维度）
+- `tests/test_api.py` —— 既有 20 个用例不退化；interactions router 加载
+- 全量：**349 passed, 1 skipped, 0 failed**
+
+### Out of scope（v0.6 明确不做）
+- 日常养号（warmup）：排到 v1.0
+- follow / share / collect 互动：留 v1.0
+- LLM 现场搜索 XHS 同类笔记：需 APK 端 search API，排 v0.7
+- APK 真机联调：排 v0.7
+- `/interactions` 写入/编辑/删除 API：v0.6 只读
+- 评论反 AI 检测 / 人设微调：v1.0
 
 ---
 

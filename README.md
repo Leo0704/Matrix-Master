@@ -6,7 +6,7 @@
 
 ## 状态
 
-- **当前版本**：v0.5.0（开发启动，Batch 1 完成：db / llm / monitoring / scheduler）
+- **当前版本**：v0.6.0（v0.5 闭环 349 测试全绿 + 互动闭环 MVP：发后流量互推 like + comment）
 - **文档**：完整（22 份），详见 [docs/README.md](./docs/README.md)
 - **代码**：脚手架阶段
 
@@ -106,10 +106,10 @@ pytest
 | v0.2 | 技术选型与架构初版 | ✅ |
 | v0.3 | 详细设计扩展 | ✅ |
 | v0.4 | 完整文档集 | ✅ |
-| v0.5 | Backend 脚手架 + db/llm/monitoring/scheduler 4 模块 | 🚧 当前 |
-| v0.6 | 上层业务模块（kb/device/api/agent） | ⏳ |
-| v0.7 | MVP 端到端跑通 | ⏳ |
-| v1.0 | 多设备 + 互动闭环 | ⏳ |
+| v0.5 | Backend 脚手架 + db/llm/monitoring/scheduler 4 模块 | ✅ |
+| v0.6 | 互动闭环 MVP（发后流量互推 like + comment） | ✅ 当前 |
+| v0.7 | MVP 端到端跑通（含 APK 真机联调） | ⏳ |
+| v1.0 | 多设备 + 互动全动作（follow/share/collect）+ 日常养号 | ⏳ |
 
 ## 贡献
 

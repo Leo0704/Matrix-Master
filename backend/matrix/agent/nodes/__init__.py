@@ -5,6 +5,7 @@ from .analyze import analyze_node
 from .collect import collect_node
 from .dispatch import dispatch_node
 from .draft import draft_node
+from .interact import interact_node
 from .publish import publish_node
 from .research import research_node
 from .review import review_node
@@ -19,6 +20,7 @@ __all__ = [
     "schedule_node",
     "dispatch_node",
     "publish_node",
+    "interact_node",
     "collect_node",
     "analyze_node",
     "alert_node",

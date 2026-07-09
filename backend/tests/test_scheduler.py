@@ -355,6 +355,37 @@ class TestRateLimiter:
         assert d.reason == "daily_cap_device_interact"
 
     @pytest.mark.asyncio
+    async def test_daily_cap_device_comment(self):
+        """v0.6: comment action 也走 device_interact quota（30/day）。"""
+        rl = _no_jitter_limiter()
+        noon = datetime(2026, 7, 8, 12, 0)
+        rl._clock = fixed_clock(noon)  # type: ignore[assignment]
+        device = uuid4()
+        for _ in range(30):
+            await rl.record(make_task(action="device_comment", device_id=device))
+        task = make_task(action="device_comment", device_id=device)
+        d = await rl.throttle(task)
+        assert not d.ok
+        assert d.reason == "daily_cap_device_interact"
+
+    @pytest.mark.asyncio
+    async def test_account_cap_device_comment(self):
+        """v0.6: account 维度的 comment cap（20/day）。"""
+        rl = _no_jitter_limiter()
+        noon = datetime(2026, 7, 8, 12, 0)
+        rl._clock = fixed_clock(noon)  # type: ignore[assignment]
+        device = uuid4()
+        account = uuid4()
+        for _ in range(20):
+            await rl.record(
+                make_task(action="device_comment", device_id=device, account_id=account)
+            )
+        task = make_task(action="device_comment", device_id=device, account_id=account)
+        d = await rl.throttle(task)
+        assert not d.ok
+        assert d.reason == "daily_cap_account_interact"
+
+    @pytest.mark.asyncio
     async def test_token_bucket_exhaustion(self):
         # capacity=1 → 第二次需等令牌（timeout 短会超时）
         rl = RateLimiter(

@@ -60,8 +60,12 @@ class RunManager:
         goal_type: str = "publish_note",
         entry: str = State.RESEARCH.value,
         brief: dict[str, Any] | None = None,
+        interact_plan: list[dict[str, Any]] | None = None,
     ) -> UUID:
-        """创建一条 run，返回 run_id。"""
+        """创建一条 run，返回 run_id。
+
+        v0.6 新增 ``interact_plan``：发后流量互推目标列表。
+        """
         run_id = uuid4()
         payload: dict[str, Any] = {
             "goal_text": goal_text or "",
@@ -70,6 +74,8 @@ class RunManager:
         }
         if brief:
             payload["brief"] = brief
+        if interact_plan:
+            payload["interact_plan"] = interact_plan
         await self.repo.create_run(
             run_id=run_id,
             goal_id=goal_id,
@@ -104,20 +110,31 @@ class RunManager:
         }
         state["entry"] = payload.get("entry", State.RESEARCH.value)
         state["goal_text"] = payload.get("goal_text", "")
+        state["goal_type"] = payload.get("goal_type", "publish_note")
         # 主题摘要：从 run.payload 注入（chat 路由写库时已塞入）
         brief = payload.get("brief")
         if isinstance(brief, dict) and brief:
             state["brief"] = brief
+        # v0.6 互动计划：发后流量互推（list[{note_id, kind, content_template?}])
+        interact_plan = payload.get("interact_plan")
+        if isinstance(interact_plan, list) and interact_plan:
+            state["interact_plan"] = interact_plan
+        else:
+            state["interact_plan"] = []
 
         result = await self.sm.ainvoke(state)
 
+        # run 状态判定：last_error_snapshot 非空 → 失败
+        # （alert_node 会清 last_error，但留底在 last_error_snapshot；这是错误触发的可靠信号）
+        ended_state = str(result.get("current_state", State.IDLE.value))
+        is_failed = result.get("last_error_snapshot") is not None
         await self.repo.update_run(
             run_id,
-            current_state=str(result.get("current_state", State.IDLE.value)),
-            status=RunStatus.SUCCESS.value
-            if result.get("last_error") is None
-            else RunStatus.FAILED.value,
-            payload_merge={"last_state": result.get("current_state")},
+            current_state=ended_state,
+            status=RunStatus.FAILED.value
+            if is_failed
+            else RunStatus.SUCCESS.value,
+            payload_merge={"last_state": ended_state},
             ended_at=_utcnow(),
         )
         return result
@@ -191,6 +208,12 @@ class RunManager:
                 "_resume_from": target_state,
             }
         )
+        # v0.6: resume 时补 interact_plan（从 run.payload 回填）
+        if "interact_plan" not in new_state and isinstance(run.payload, dict):
+            cp_plan = run.payload.get("interact_plan")
+            if isinstance(cp_plan, list):
+                new_state["interact_plan"] = cp_plan
+        new_state.setdefault("interact_plan", [])
         # resume 时如 checkpoint payload 没 brief，从 run.payload 补
         if not new_state.get("brief") and isinstance(run.payload, dict):
             run_brief = run.payload.get("brief")
@@ -200,13 +223,16 @@ class RunManager:
             new_state["_alert_ack"] = True
         result = await self.sm.ainvoke(new_state)
 
+        # run 状态判定：last_error_snapshot 非空 → 失败
+        ended_state = str(result.get("current_state", State.IDLE.value))
+        is_failed = result.get("last_error_snapshot") is not None
         await self.repo.update_run(
             run_id,
-            current_state=str(result.get("current_state", State.IDLE.value)),
-            status=RunStatus.SUCCESS.value
-            if result.get("last_error") is None
-            else RunStatus.FAILED.value,
-            payload_merge={"last_state": result.get("current_state")},
+            current_state=ended_state,
+            status=RunStatus.FAILED.value
+            if is_failed
+            else RunStatus.SUCCESS.value,
+            payload_merge={"last_state": ended_state},
             ended_at=_utcnow(),
         )
         return result

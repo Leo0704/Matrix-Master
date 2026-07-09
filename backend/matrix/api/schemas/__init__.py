@@ -26,6 +26,12 @@ from matrix.api.schemas.device import (
 )
 from matrix.api.schemas.goal import Goal, GoalCreate, GoalListResponse, GoalType, ThemeTarget
 from matrix.api.schemas.health import ErrorDetail, ErrorResponse, Health, OkResponse
+from matrix.api.schemas.interaction import (
+    Interaction,
+    InteractionListResponse,
+    InteractionResult,
+    InteractionType,
+)
 from matrix.api.schemas.kb import (
     KbDocument,
     KbDocumentCreate,
@@ -76,6 +82,10 @@ __all__ = [
     "GoalListResponse",
     "GoalType",
     "Health",
+    "Interaction",
+    "InteractionListResponse",
+    "InteractionResult",
+    "InteractionType",
     "LlmCostPoint",
     "LlmCostResponse",
     "KbDocument",

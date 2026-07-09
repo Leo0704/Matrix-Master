@@ -1,15 +1,18 @@
 """LangGraph 状态机。
 
-按 SDD §5.1 转移表实现 9 个主状态 + 2 个异常/中间态：
+按 SDD §5.1 转移表实现 10 个主状态 + 2 个异常/中间态：
 
 - 主状态: IDLE / RESEARCH / DRAFT / REVIEW / SCHEDULE / DISPATCH /
-  PUBLISH / COLLECT / ANALYZE
+  PUBLISH / INTERACT / COLLECT / ANALYZE
 - 异常态: ALERT（任意 fail 落入）、REVISE（review 失败回炉）
 
 每个状态是一个独立节点函数（见 ``matrix.agent.nodes``），
 状态间通过 ``add_conditional_edges`` 决定下一个状态。
 
 run-time 流程：RunManager.create_run() → start_run() → state_machine.invoke(state)。
+
+v0.6 新增 INTERACT：PUBLISH 成功后，若 ``interact_plan`` 非空则跳到 INTERACT
+做发后流量互推（点赞 + 评论同类热门），结束后回 COLLECT 走回采。
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ from .guards import (
     GuardConfig,
     route_after_collect,
     route_after_dispatch,
+    route_after_interact,
     route_after_publish,
     route_after_research,
     route_after_review,
@@ -37,6 +41,7 @@ from .nodes import (
     collect_node,
     dispatch_node,
     draft_node,
+    interact_node,
     publish_node,
     research_node,
     review_node,
@@ -95,7 +100,7 @@ class StateMachine:
         """构造并返回编译后的 langgraph 图。"""
         g = StateGraph(AgentState)
 
-        # 注册 11 个节点（9 主 + REVISE / ALERT）；每个节点用包装器自动
+        # 注册 12 个节点（10 主 + REVISE / ALERT）；每个节点用包装器自动
         # 在 partial update 末尾注入 ``current_state``，便于读 checkpoint。
         g.add_node(State.IDLE.value, _wrap(State.IDLE.value, _idle_entry))
         g.add_node(State.RESEARCH.value, _wrap(State.RESEARCH.value, research_node))
@@ -105,6 +110,7 @@ class StateMachine:
         g.add_node(State.SCHEDULE.value, _wrap(State.SCHEDULE.value, schedule_node))
         g.add_node(State.DISPATCH.value, _wrap(State.DISPATCH.value, dispatch_node))
         g.add_node(State.PUBLISH.value, _wrap(State.PUBLISH.value, publish_node))
+        g.add_node(State.INTERACT.value, _wrap(State.INTERACT.value, interact_node))  # v0.6
         g.add_node(State.COLLECT.value, _wrap(State.COLLECT.value, collect_node))
         g.add_node(State.ANALYZE.value, _wrap(State.ANALYZE.value, analyze_node))
         g.add_node(State.ALERT.value, _wrap(State.ALERT.value, alert_node))
@@ -178,10 +184,21 @@ class StateMachine:
             },
         )
 
-        # PUBLISH → COLLECT | ALERT
+        # PUBLISH → INTERACT | COLLECT | ALERT（v0.6：发后互动）
         g.add_conditional_edges(
             State.PUBLISH.value,
             lambda s: route_after_publish(s, cfg),
+            {
+                State.INTERACT.value: State.INTERACT.value,
+                State.COLLECT.value: State.COLLECT.value,
+                State.ALERT.value: State.ALERT.value,
+            },
+        )
+
+        # INTERACT → COLLECT | ALERT
+        g.add_conditional_edges(
+            State.INTERACT.value,
+            lambda s: route_after_interact(s, cfg),
             {
                 State.COLLECT.value: State.COLLECT.value,
                 State.ALERT.value: State.ALERT.value,

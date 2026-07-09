@@ -97,6 +97,7 @@ export function Settings() {
         <TabsList>
           <TabsTrigger value="general">通用</TabsTrigger>
           <TabsTrigger value="llm">LLM</TabsTrigger>
+          <TabsTrigger value="review">审核</TabsTrigger>
           <TabsTrigger value="integration">集成</TabsTrigger>
           <TabsTrigger value="danger">应急</TabsTrigger>
         </TabsList>
@@ -151,6 +152,33 @@ export function Settings() {
                 type="number"
                 defaultValue="10"
                 description="超过 80% 会触发 BUDGET_EXCEEDED 告警"
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="review" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">REVIEW 节点判据</CardTitle>
+              <CardDescription>
+                阈值控制草稿的自动通过标准；空值时节点用硬编码默认值（0.85 / 0.60）
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <SettingField
+                settingKey="review.dup_threshold"
+                label="重复度阈值（0-1）"
+                type="number"
+                defaultValue="0.85"
+                description="与历史爆款相似度低于此值才通过；越小越严格"
+              />
+              <SettingField
+                settingKey="review.human_threshold"
+                label="拟人化阈值（0-1）"
+                type="number"
+                defaultValue="0.60"
+                description="拟人化评分高于此值才通过；越大越严格"
               />
             </CardContent>
           </Card>

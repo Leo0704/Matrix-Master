@@ -66,3 +66,20 @@ class CachedMessages:
         else:
             sys_payload = self.system
         return sys_payload, self._messages
+
+
+# ---------------------------------------------------------------------------
+# OpenAI prompt-cache 开关
+# ---------------------------------------------------------------------------
+
+# OpenAI 自动 prompt cache 起点（字符数，按 4 字符 ≈ 1 token 估算的保守值）
+_OPENAI_CACHE_MIN_CHARS = 1024
+
+
+def openai_prompt_caching_enabled(prompt: str) -> bool:
+    """OpenAI prompt 足够长时才值得走 cache。
+
+    OpenAI 官方起点是 1024 tokens；这里按字符数粗算（≈ 4 字符 / token）。
+    仅作启发式开关；真实是否 cache 由 API 决定。
+    """
+    return len(prompt) >= _OPENAI_CACHE_MIN_CHARS

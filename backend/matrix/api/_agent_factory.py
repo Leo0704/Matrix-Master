@@ -52,6 +52,29 @@ class _LazyWriter:
             return await store.create_document(**kwargs)
 
 
+class _LazyConfigReader:
+    """懒读 app_config — 每次 get 时从 factory 拿新 session 查最新值。"""
+
+    def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
+        self._factory = factory
+
+    async def get(self, key: str, default: Any) -> Any:
+        from sqlalchemy import select
+
+        from matrix.db.models import AppConfig
+
+        async with self._factory() as session:
+            row = (
+                await session.execute(select(AppConfig).where(AppConfig.key == key))
+            ).scalar_one_or_none()
+            if row is None or row.value is None:
+                return default
+            # 约定：settings.tsx 写值时包成 ``{"value": <scalar>}``，此处解包
+            if isinstance(row.value, dict) and "value" in row.value:
+                return row.value["value"]
+            return row.value
+
+
 async def build_runtime_services(
     session_factory: async_sessionmaker[AsyncSession],
     *,
@@ -79,5 +102,6 @@ async def build_runtime_services(
         kb_retriever=_LazyRetriever(session_factory, embedder),
         kb_writer=_LazyWriter(session_factory, embedder),
         usage_tracker=usage_tracker,
+        config=_LazyConfigReader(session_factory),
     )
     return services

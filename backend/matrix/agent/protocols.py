@@ -65,6 +65,17 @@ class KBWriter(Protocol):
         """创建或更新一个 kb_documents。"""
 
 
+@runtime_checkable
+class ConfigReader(Protocol):
+    """运行时配置读取（app_config 表）。
+
+    集成层（api/_agent_factory.py）实现：每次 ``get`` 调用时从 session 读最新值，
+    节点代码与 kb 接口一致走 Protocol 抽象，便于测试替换。
+    """
+
+    async def get(self, key: str, default: Any) -> Any: ...
+
+
 # ---------------------------------------------------------------------------
 # 设备（matrix.device 集成层落地点）
 # ---------------------------------------------------------------------------
@@ -117,6 +128,42 @@ class DeviceCollector(Protocol):
         scope: str = "recent_24h",
     ) -> dict[str, int]:
         """返回 {'views','likes','collects','comments','follows_gained'}。"""
+
+
+# ---------------------------------------------------------------------------
+# 互动（v0.6）—— like / comment
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class InteractResult:
+    """APK 互动回报。"""
+
+    ok: bool
+    interaction_id: UUID
+    error_code: str | None = None
+    error_message: str | None = None
+
+
+@runtime_checkable
+class DeviceInteractor(Protocol):
+    """设备互动接口（v0.6 MVP：仅 like + comment）。
+
+    集成层（matrix.device）实现：Agent interact 节点走阻塞式协议（等 APK 回报）。
+    action 取值：'like' | 'comment'。
+    """
+
+    async def interact(
+        self,
+        *,
+        device_id: UUID,
+        account_id: UUID,
+        action: str,  # 'like' | 'comment'
+        target_note_id: str,
+        content: str | None = None,
+        request_id: str,
+        timeout: float = 60.0,
+    ) -> InteractResult: ...
 
 
 # ---------------------------------------------------------------------------

@@ -150,7 +150,8 @@ async def test_get_session_always_closes():
 # ---------------------------------------------------------------------------
 
 
-# 全部 23 张表（外加 Base），按 schema.sql 顺序
+# 全部 24 张表（外加 Base），按 schema.sql 顺序 + 004 migration 加的 alerts
+# （schema.sql 尚未同步 alerts；migration 是事实源）
 EXPECTED_TABLES = [
     "devices",
     "device_hmac_keys",
@@ -174,6 +175,7 @@ EXPECTED_TABLES = [
     "comments",
     "llm_usage",
     "audit_logs",
+    "alerts",
     "app_config",
 ]
 
@@ -247,7 +249,7 @@ def test_tableless_match_schema():
 
 
 def test_tableless_count():
-    """models 模块声明的 Base 子类数量应为 23。"""
+    """models 模块声明的 Base 子类数量应为 24（含 migration 004 加的 alerts）。"""
     from sqlalchemy.orm import DeclarativeBase
 
     from matrix.db import models
@@ -259,7 +261,7 @@ def test_tableless_count():
     ]
     # Base 自己也要排除
     subclasses = [s for s in subclasses if s is not models.Base]
-    assert len(subclasses) == 23, f"got {len(subclasses)}: {[s.__name__ for s in subclasses]}"
+    assert len(subclasses) == 24, f"got {len(subclasses)}: {[s.__name__ for s in subclasses]}"
 
 
 def test_base_is_declarative():
@@ -402,7 +404,7 @@ def test_kb_chunk_instantiation():
 
 
 def test_models_metadata_contains_all_tables():
-    """Base.metadata 应包含全部 23 张表的 Table 对象。"""
+    """Base.metadata 应包含全部 24 张表的 Table 对象（含 migration 004 加的 alerts）。"""
     from matrix.db.models import Base
 
     table_names = set(Base.metadata.tables.keys())

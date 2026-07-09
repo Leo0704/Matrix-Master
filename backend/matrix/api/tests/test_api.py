@@ -234,6 +234,50 @@ async def client(app) -> AsyncIterator[AsyncClient]:
 
 
 # ---------------------------------------------------------------------------
+# Mock LLM — 让 chat 路由走 FakeLLM，不发真实网络请求
+# ---------------------------------------------------------------------------
+
+
+class _FakeLLM:
+    """最小的 LLMClient：返回固定 JSON。"""
+
+    provider = "fake"
+
+    def __init__(self, text: str = "{}") -> None:
+        self._text = text
+
+    async def complete(self, *args, **kwargs):
+        from matrix.llm.clients import CompletionResult
+
+        return CompletionResult(
+            text=self._text,
+            model="fake",
+            prompt_tokens=1,
+            completion_tokens=1,
+            latency_ms=1,
+            provider=self.provider,
+        )
+
+
+@pytest.fixture
+def mock_llm(monkeypatch):
+    """把 chat 路由里的 get_default_client 换成假客户端。
+
+    接受 ``text`` 参数指定返回文本；默认返回 ``theme_confirmed: true`` 的 JSON。
+    """
+
+    def _install(text: str) -> None:
+        fake = _FakeLLM(text=text)
+        from matrix.api.routes import chat as chat_mod
+        from matrix.llm import router as router_mod
+
+        monkeypatch.setattr(chat_mod, "get_default_client", lambda: fake)
+        monkeypatch.setattr(router_mod, "get_default_client", lambda: fake)
+
+    return _install
+
+
+# ---------------------------------------------------------------------------
 # /health
 # ---------------------------------------------------------------------------
 
@@ -537,7 +581,16 @@ async def test_cancel_agent_run_not_found(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_chat_publish_note(client: AsyncClient) -> None:
+async def test_chat_publish_note(
+    client: AsyncClient, mock_llm, fake_session: FakeAsyncSession
+) -> None:
+    # mock LLM 返回 theme_confirmed=true → 走 create_goal 路径
+    mock_llm(
+        '{"reply": "好的，这就安排", '
+        '"theme_confirmed": true, '
+        '"theme": {"theme": "夏日穿搭", "audience": "大学生", '
+        '"product_category": "穿搭", "goal_type": "publish_note"}}'
+    )
     r = await client.post("/api/v1/chat", json={"message": "发一条笔记"})
     assert r.status_code == 200
     body = r.json()
@@ -547,7 +600,12 @@ async def test_chat_publish_note(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_chat_pause(client: AsyncClient, fake_session: FakeAsyncSession) -> None:
+async def test_chat_pause(
+    client: AsyncClient, mock_llm, fake_session: FakeAsyncSession
+) -> None:
+    # 先塞一条 running run，再发暂停
+    fake_session.seed(_mk_run(status="running"))
+    await fake_session.flush()
     r1 = await client.post("/api/v1/chat", json={"message": "发一条笔记"})
     assert r1.status_code == 200
     r2 = await client.post("/api/v1/chat", json={"message": "暂停"})

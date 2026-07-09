@@ -36,7 +36,12 @@ def is_in_active_window(
 
 def _to_local(now: datetime, device_tz: str) -> datetime:
     if now.tzinfo is not None:
-        return now
+        # aware datetime: 转到设备本地时区再判 hour
+        try:
+            return now.astimezone(ZoneInfo(device_tz))
+        except ZoneInfoNotFoundError:
+            return now
+    # naive datetime: 视为设备本地时间，仅附加 tzinfo
     try:
         tz = ZoneInfo(device_tz)
     except ZoneInfoNotFoundError:

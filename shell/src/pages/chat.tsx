@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { CheckCircle2, RotateCcw, Send, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -46,7 +46,6 @@ export function Chat() {
   const [goalId, setGoalId] = useState<string | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const chat = useChat();
-  const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   // 持久化 + 自动滚到底

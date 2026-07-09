@@ -14,7 +14,7 @@ from tests.test_agent import (
 )
 
 from matrix.agent.bootstrap import build_agent_services, build_run_manager
-from matrix.device.adapters import MockDeviceAdapter
+from tests._fake_adapters import MockDeviceAdapter
 
 
 async def test_closed_loop_runs_end_to_end():
@@ -81,6 +81,8 @@ async def test_closed_loop_fails_when_publish_fails():
     state = await rm.start_run(run_id)
 
     assert state["current_state"] == "ALERT"
-    assert state.get("last_error") is not None
+    # ALERT 节点会清 last_error，但会把错误快照到 last_error_snapshot
+    assert state.get("last_error_snapshot") is not None
+    assert state.get("last_error_snapshot", {}).get("code")
     status = await rm.get_run_status(run_id)
     assert status["status"] == "failed"
