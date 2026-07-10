@@ -21,7 +21,6 @@ const nav = [
   { to: '/chat', label: '对话', icon: MessageSquare },
   { to: '/devices', label: '设备', icon: Smartphone },
   { to: '/accounts', label: '账号', icon: Users },
-  { to: '/personas', label: '人设', icon: UserCircle },
   { to: '/notes', label: '内容', icon: FileText },
   { to: '/goals', label: '目标', icon: Target },
   { to: '/agent-runs', label: 'Agent', icon: Activity },

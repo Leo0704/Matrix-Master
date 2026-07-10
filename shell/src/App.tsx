@@ -5,7 +5,6 @@ import { Devices } from './pages/devices';
 import { DeviceDetail } from './pages/device-detail';
 import { Accounts } from './pages/accounts';
 import { AccountDetail } from './pages/account-detail';
-import { Personas } from './pages/personas';
 import { Notes } from './pages/notes';
 import { NoteDetail } from './pages/note-detail';
 import { Goals } from './pages/goals';
@@ -38,7 +37,6 @@ export function App() {
         <Route path="/devices/:id" element={<DeviceDetail />} />
         <Route path="/accounts" element={<Accounts />} />
         <Route path="/accounts/:id" element={<AccountDetail />} />
-        <Route path="/personas" element={<Personas />} />
         <Route path="/notes" element={<Notes />} />
         <Route path="/notes/:id" element={<NoteDetail />} />
         <Route path="/goals" element={<Goals />} />
