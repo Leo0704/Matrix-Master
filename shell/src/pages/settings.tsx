@@ -153,7 +153,7 @@ export function Settings() {
         <TabsContent value="review" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">REVIEW 节点判据</CardTitle>
+              <CardTitle className="text-base">AI 检查时判据</CardTitle>
               <CardDescription>
                 阈值控制草稿的自动通过标准；空值时节点用硬编码默认值（0.85 / 0.60）
               </CardDescription>

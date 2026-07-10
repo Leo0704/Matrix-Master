@@ -42,7 +42,7 @@ export function Goals() {
             <DialogHeader>
               <DialogTitle>新建目标</DialogTitle>
               <DialogDescription>
-                用自然语言描述目标；Agent 会自动检索知识库并启动新 run。
+                用自然语言描述目标；AI 会自动检索知识库并启动新 run。
               </DialogDescription>
             </DialogHeader>
             <GoalForm onCreated={() => setOpen(false)} />
@@ -53,7 +53,7 @@ export function Goals() {
       {isLoading && <LoadingBlock />}
       {error && <ErrorState error={error} onRetry={() => refetch()} />}
       {!isLoading && items.length === 0 && (
-        <EmptyState title="无目标" description="创建第一个目标让 Agent 开始工作" />
+        <EmptyState title="无目标" description="创建第一个目标让 AI 开始工作" />
       )}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">

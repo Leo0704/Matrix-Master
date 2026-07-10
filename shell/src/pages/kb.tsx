@@ -117,7 +117,7 @@ function RuleTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          规则库：哪些词不能写、哪些话不能说。每行前面加 <code>[forbidden]</code> 标记的，就是 AI 写笔记时绝对不能用的违禁词。
+          规则库：哪些词不能写、哪些话不能说。每行前面加 <code>[禁]</code> 标记的，就是 AI 写笔记时绝对不能用的违禁词。
         </p>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
@@ -129,7 +129,7 @@ function RuleTab() {
             <DialogHeader>
               <DialogTitle>新建规则</DialogTitle>
               <DialogDescription>
-                这些规则 AI 写笔记时会自动参考。每行加 <code>[forbidden]</code> 标记的词，AI 一写就报错。
+                这些规则 AI 写笔记时会自动参考。每行加 <code>[禁]</code> 标记的词，AI 一写就报错。
               </DialogDescription>
             </DialogHeader>
             <RuleForm
@@ -193,11 +193,11 @@ function RuleCard({
   onPublish: () => void;
   publishing: boolean;
 }) {
-  // 解析 [forbidden] 行做卡片预览
+  // 解析 [禁] 行做卡片预览
   const forbiddenWords = useMemo(() => {
     const words: string[] = [];
     for (const line of (doc.content ?? '').split(/\r?\n/)) {
-      const m = line.match(/^\[forbidden\]\s*(.+)$/i);
+      const m = line.match(/^\[(禁|forbidden)\]\s*(.+)$/i);
       if (m && m[1]) words.push(m[1].trim());
     }
     return words;
@@ -206,7 +206,7 @@ function RuleCard({
     () =>
       (doc.content ?? '')
         .split(/\r?\n/)
-        .filter((l) => l.trim() && !/^\[forbidden\]\s*/i.test(l)),
+        .filter((l) => l.trim() && !/^\[(禁|forbidden)\]\s*/i.test(l)),
     [doc.content],
   );
 

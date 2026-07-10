@@ -70,7 +70,7 @@ export function Dashboard() {
         </div>
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle className="text-base">最近 Agent 运行</CardTitle>
+            <CardTitle className="text-base">最近 AI 运行</CardTitle>
           </CardHeader>
           <CardContent>
             {runs.isLoading && <Skeleton className="h-32 w-full" />}

@@ -188,7 +188,7 @@ export function Notes() {
           <DialogContent className="max-w-xl">
             <DialogHeader>
               <DialogTitle>新建笔记</DialogTitle>
-              <DialogDescription>手动写一条笔记。Agent run 也会自动创建。</DialogDescription>
+              <DialogDescription>手动写一条笔记。AI run 也会自动创建。</DialogDescription>
             </DialogHeader>
             <NoteForm
               defaultAccountId={defaultAccountId}
@@ -221,7 +221,7 @@ export function Notes() {
           {isLoading && <LoadingBlock />}
           {error && <ErrorState error={error} onRetry={() => refetch()} />}
           {!isLoading && items.length === 0 && (
-            <EmptyState title="无笔记" description="目标创建后 Agent 会自动生成笔记" />
+            <EmptyState title="无笔记" description="目标创建后 AI 会自动生成笔记" />
           )}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
             {items.map((n) => (

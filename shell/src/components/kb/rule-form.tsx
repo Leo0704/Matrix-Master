@@ -14,8 +14,8 @@ interface RuleFormProps {
 
 /**
  * 规则表单：title + content。
- * content 约定每行一条 [forbidden] 词（或自由文本做检索素材）。
- * 提供"违禁词列表"快捷输入：逗号分隔，自动转成 [forbidden] 多行格式。
+ * content 约定每行一条 [禁] 词（或自由文本做检索素材）。
+ * 提供"违禁词列表"快捷输入：逗号分隔，自动转成 [禁] 多行格式。
  */
 export function RuleForm({ initial, onSubmit, onCancel, submitting }: RuleFormProps) {
   const [title, setTitle] = useState(initial?.title ?? '');
@@ -29,12 +29,12 @@ export function RuleForm({ initial, onSubmit, onCancel, submitting }: RuleFormPr
     }
   }, [initial]);
 
-  // 解析已有 content 里的 [forbidden] 词 → 回填到快捷输入框
+  // 解析已有 content 里的 [禁] 词 → 回填到快捷输入框
   useEffect(() => {
     const lines = (initial?.content ?? '').split(/\r?\n/);
     const found: string[] = [];
     for (const line of lines) {
-      const m = line.match(/^\[forbidden\]\s*(.+)$/i);
+      const m = line.match(/^\[(禁|forbidden)\]\s*(.+)$/i);
       if (m && m[1]) found.push(m[1].trim());
     }
     if (found.length) setWords(found.join(', '));
@@ -42,15 +42,15 @@ export function RuleForm({ initial, onSubmit, onCancel, submitting }: RuleFormPr
 
   async function handleSubmit() {
     if (!title.trim()) return;
-    // 合并：[forbidden] 行 + 用户原始 content
+    // 合并：[禁] 行 + 用户原始 content
     const forbiddenLines = words
       .split(/[,，\s]+/)
       .map((s) => s.trim())
       .filter(Boolean)
-      .map((w) => `[forbidden] ${w}`);
+      .map((w) => `[禁] ${w}`);
     const baseContent = content
       .split(/\r?\n/)
-      .filter((l) => l.trim() && !/^\[forbidden\]\s*/i.test(l));
+      .filter((l) => l.trim() && !/^\[(禁|forbidden)\]\s*/i.test(l));
     const finalContent = [...forbiddenLines, ...baseContent].join('\n').trim();
     if (!finalContent) return;
     await onSubmit({
@@ -73,7 +73,7 @@ export function RuleForm({ initial, onSubmit, onCancel, submitting }: RuleFormPr
         />
       </div>
       <div className="space-y-1">
-        <Label htmlFor="rule-words">违禁词列表（逗号分隔，自动加 [forbidden] 前缀）</Label>
+        <Label htmlFor="rule-words">违禁词列表（逗号分隔，自动加 [禁] 前缀）</Label>
         <Textarea
           id="rule-words"
           rows={3}
@@ -89,7 +89,7 @@ export function RuleForm({ initial, onSubmit, onCancel, submitting }: RuleFormPr
           rows={3}
           value={content}
           onChange={(e) => setContent(e.target.value)}
-          placeholder="自由文本，每行一条；会被 DRAFT / REVIEW 节点检索"
+          placeholder="自由文本，每行一条；AI 写笔记时会参考"
         />
       </div>
       <div className="flex items-center justify-end gap-2 pt-2">

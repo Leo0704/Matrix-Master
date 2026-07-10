@@ -45,7 +45,7 @@ export function Data() {
             {isLoading && <LoadingBlock />}
             {error && <ErrorState error={error} onRetry={() => refetch()} />}
             {!isLoading && items.length === 0 && (
-              <EmptyState title="无笔记" description="点「新建笔记」或等 Agent 自动创建" />
+              <EmptyState title="无笔记" description="点「新建笔记」或等 AI 自动创建" />
             )}
             {items.length > 0 && (
               <Table>

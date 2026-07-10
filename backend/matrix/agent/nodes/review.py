@@ -58,11 +58,11 @@ async def review_node(state: AgentState) -> dict[str, Any]:
         )
         for c in rule_chunks:
             text = c.text or ""
-            if "[forbidden]" in text.lower():
+            if "[禁]" in text or "[forbidden]" in text.lower():
                 word = text.split(":", 1)[-1].strip()
                 # 去掉 [forbidden] 前缀
-                if word.lower().startswith("[forbidden]"):
-                    word = word[len("[forbidden]"):].strip()
+                if word.lower().startswith("[forbidden]") or word.lower().startswith("[禁]"):
+                    word = word.replace("[forbidden]", "").replace("[禁]", "").strip()
                 if word:
                     forbidden_words.append(word)
         similar_chunks = await services.kb_retriever.retrieve(

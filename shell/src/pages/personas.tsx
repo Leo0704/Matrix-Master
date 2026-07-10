@@ -159,7 +159,7 @@ export function Personas() {
           <DialogContent>
             <DialogHeader>
               <DialogTitle>新建人设</DialogTitle>
-              <DialogDescription>人设会被 DRAFT 节点检索用于改写文案。</DialogDescription>
+              <DialogDescription>人设会被 AI 写笔记时检索用于改写文案。</DialogDescription>
             </DialogHeader>
             <PersonaForm
               onSubmit={handleCreate}
@@ -230,7 +230,7 @@ export function Personas() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>编辑人设</DialogTitle>
-            <DialogDescription>修改后 DRAFT 节点立即看到新版本。</DialogDescription>
+            <DialogDescription>修改后 AI 写笔记时立即看到新版本。</DialogDescription>
           </DialogHeader>
           {editing && (
             <PersonaForm
