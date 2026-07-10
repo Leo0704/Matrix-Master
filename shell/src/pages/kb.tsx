@@ -34,7 +34,7 @@ export function KB() {
     <div className="space-y-4">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">知识库</h1>
-        <p className="text-sm text-muted-foreground">Agent 写笔记的参考材料库，按类型分 4 个 tab</p>
+        <p className="text-sm text-muted-foreground">AI 写笔记的参考材料库，按类型分 4 个 tab</p>
       </div>
 
       <Tabs defaultValue="brand">
@@ -76,7 +76,7 @@ function RuleTab() {
   async function handleCreate(body: KbDocumentCreate) {
     try {
       await createMut.mutateAsync(body);
-      toast({ title: '规则已创建', description: '尚未发布，Agent 不可见' });
+      toast({ title: '规则已创建', description: '尚未发布，AI 还看不到' });
       setOpen(false);
     } catch (e) {
       toast({ title: '创建失败', description: (e as Error).message, variant: 'destructive' });
@@ -107,7 +107,7 @@ function RuleTab() {
   async function handlePublish(doc: KbDocument) {
     try {
       await publishMut.mutateAsync({ id: doc.id, reviewer: 'operator' });
-      toast({ title: '已发布', description: 'Agent 现可检索' });
+      toast({ title: '已发布', description: 'AI 现在能用' });
     } catch (e) {
       toast({ title: '发布失败', description: (e as Error).message, variant: 'destructive' });
     }
@@ -117,7 +117,7 @@ function RuleTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          规则库：DRAFT / REVIEW 节点会检索这里。带 <code>[forbidden]</code> 前缀的行会被解析为违禁词。
+          规则库：哪些词不能写、哪些话不能说。每行前面加 <code>[forbidden]</code> 标记的，就是 AI 写笔记时绝对不能用的违禁词。
         </p>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
@@ -129,7 +129,7 @@ function RuleTab() {
             <DialogHeader>
               <DialogTitle>新建规则</DialogTitle>
               <DialogDescription>
-                规则内容由 DRAFT / REVIEW 节点按相似度检索；违禁词命中即判草稿失败。
+                这些规则 AI 写笔记时会自动参考。每行加 <code>[forbidden]</code> 标记的词，AI 一写就报错。
               </DialogDescription>
             </DialogHeader>
             <RuleForm
@@ -164,7 +164,7 @@ function RuleTab() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>编辑规则</DialogTitle>
-            <DialogDescription>修改内容会自动重新切块 + 重新计算 embedding。</DialogDescription>
+            <DialogDescription>改完保存，AI 写笔记时会用最新内容。</DialogDescription>
           </DialogHeader>
           {editing && (
             <RuleForm
@@ -260,6 +260,12 @@ function RuleCard({
 
 
 // ---------- 通用 Tab：brand / persona / history 复用 ----------
+const TYPE_HINTS: Record<'brand' | 'persona' | 'history', string> = {
+  brand: '卖什么产品、给谁用、什么风格、什么价格。AI 写笔记时会按这些写。',
+  persona: '笔记用什么口吻写——亲切的、活泼的、还是专业的。AI 写笔记时模仿这个口吻。',
+  history: '之前发过的爆款笔记正文。AI 写新笔记时模仿你的爆款套路。',
+};
+
 function TypeTab({ ktype, label }: { ktype: 'brand' | 'persona' | 'history'; label: string }) {
   const { data, isLoading, error, refetch } = useKbDocuments({ type: ktype });
   const deleteMut = useDeleteKbDocument();
@@ -280,7 +286,7 @@ function TypeTab({ ktype, label }: { ktype: 'brand' | 'persona' | 'history'; lab
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">{label}：拖文件上传，Agent 在 DRAFT/REVIEW 阶段按相似度检索。</p>
+        <p className="text-sm text-muted-foreground">{label}：{TYPE_HINTS[ktype]}</p>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
             <Button>
@@ -290,7 +296,7 @@ function TypeTab({ ktype, label }: { ktype: 'brand' | 'persona' | 'history'; lab
           <DialogContent>
             <DialogHeader>
               <DialogTitle>上传{label}</DialogTitle>
-              <DialogDescription>支持 .md / .txt 文件。提交后自动切块 + 计算 embedding + 立即发布。</DialogDescription>
+              <DialogDescription>支持 .md / .txt 文件。提交后自动分段理解 + 立即生效。</DialogDescription>
             </DialogHeader>
             <TypeForm ktype={ktype} onCancel={() => setOpen(false)} />
           </DialogContent>
@@ -363,7 +369,7 @@ function TypeForm({ ktype, onCancel }: {
     if (!file) return;
     try {
       const doc = await uploadMut.mutateAsync({ file, type: ktype, title: title || undefined, is_published: true });
-      toast({ title: '上传成功', description: `${doc.title} 已发布，Agent 可检索` });
+      toast({ title: '上传成功', description: `${doc.title} 已发布，AI 现在能用` });
       setFile(null); setTitle(''); onCancel();
     } catch (e) {
       const msg = (e as Error)?.message || '上传失败';
