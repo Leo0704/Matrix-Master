@@ -18,7 +18,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -170,6 +170,52 @@ async def create_document(
         type=body.type,
         published=body.is_published,
     )
+    return _to_schema(doc)
+
+
+@router.post(
+    "/documents/upload", response_model=KbDocument, status_code=status.HTTP_201_CREATED
+)
+async def upload_document(
+    file: UploadFile = File(...),
+    type: str = Form(...),
+    title: Optional[str] = Form(None),
+    is_published: bool = Form(True),
+    session: AsyncSession = Depends(get_db),
+) -> KbDocument:
+    """拖文件上传：支持 .md / .txt。文件内容作为正文，标题默认用文件名（去后缀）。"""
+    if type not in KB_TYPES:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"invalid type: {type!r}; must be one of {sorted(KB_TYPES)}",
+        )
+    suffix = (file.filename or "").lower().rsplit(".", 1)[-1] if file.filename else ""
+    if suffix not in ("md", "txt"):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"unsupported file type: .{suffix}; only .md / .txt",
+        )
+    raw = await file.read()
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            content = raw.decode("gbk")
+        except UnicodeDecodeError:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "file is not utf-8 / gbk text",
+            )
+    if not content.strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "file is empty")
+    if not title:
+        title = (file.filename or "未命名").rsplit(".", 1)[0]
+
+    store = KbStore(session, await _get_embedder())
+    doc = await store.create_document(
+        type=type, content=content, title=title, is_published=is_published,
+    )
+    logger.info("kb.api.upload", doc_id=doc.id, type=type, filename=file.filename)
     return _to_schema(doc)
 
 

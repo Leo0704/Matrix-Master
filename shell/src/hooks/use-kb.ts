@@ -40,6 +40,23 @@ export function useCreateKbDocument() {
   });
 }
 
+export function useUploadKbDocument() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ file, type, title, is_published }: {
+      file: File; type: KbType; title?: string; is_published?: boolean;
+    }) => {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('type', type);
+      if (title) form.append('title', title);
+      form.append('is_published', String(is_published ?? true));
+      return apiClient.postForm<KbDocument>('/kb/documents/upload', form);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['kb-documents'] }),
+  });
+}
+
 export function useUpdateKbDocument() {
   const qc = useQueryClient();
   return useMutation({

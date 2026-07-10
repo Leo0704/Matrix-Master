@@ -67,6 +67,10 @@ export class ApiClient {
   post<T>(url: string, body?: unknown, config?: AxiosRequestConfig): Promise<T> {
     return this.http.post<T>(url, body, config).then((r) => r.data);
   }
+  postForm<T>(url: string, form: FormData): Promise<T> {
+    // axios 自动设 multipart Content-Type + boundary
+    return this.http.post<T>(url, form).then((r) => r.data);
+  }
   put<T>(url: string, body?: unknown, config?: AxiosRequestConfig): Promise<T> {
     return this.http.put<T>(url, body, config).then((r) => r.data);
   }
