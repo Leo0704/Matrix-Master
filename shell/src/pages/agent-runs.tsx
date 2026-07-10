@@ -7,6 +7,7 @@ import { ErrorState } from '@/components/common/error-state';
 import { EmptyState } from '@/components/common/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatRelative } from '@/lib/format';
+import { formatState } from '@/types/api';
 
 export function AgentRuns() {
   const { data, isLoading, error, refetch } = useAgentRuns({ limit: 50 });
