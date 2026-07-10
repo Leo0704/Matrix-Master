@@ -377,7 +377,7 @@ function TypeForm({ ktype, onCancel }: {
         onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
-        className={\`rounded-lg border-2 border-dashed p-8 text-center transition-colors \${dragging ? 'border-primary bg-primary/5' : 'border-muted-foreground/30'}\`}
+        className={`rounded-lg border-2 border-dashed p-8 text-center transition-colors ${dragging ? 'border-primary bg-primary/5' : 'border-muted-foreground/30'}`}
       >
         {file ? (
           <div className="space-y-1">
