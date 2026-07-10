@@ -80,7 +80,7 @@ export function AgentRunDetail() {
                         : 'rounded bg-muted px-2 py-1 text-muted-foreground'
                     }
                   >
-                    {s}
+                    {formatState(s)}
                   </span>
                 ))}
               </div>
