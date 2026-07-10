@@ -84,7 +84,7 @@ export function Dashboard() {
                   className="flex items-center justify-between rounded-md border p-2 text-sm"
                 >
                   <span className="font-mono text-xs">{r.id.slice(0, 8)}…</span>
-                  <span className="text-muted-foreground">state: {r.current_state}</span>
+                  <span className="text-muted-foreground">state: {formatState(r.current_state)}</span>
                   <span>{r.status}</span>
                 </li>
               ))}

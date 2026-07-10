@@ -36,7 +36,7 @@ export function AgentRuns() {
                     <div>
                       <CardTitle className="text-sm font-mono">{r.id}</CardTitle>
                       <p className="text-xs text-muted-foreground">
-                        state: <span className="font-mono">{r.current_state}</span>
+                        state: <span className="font-mono">{formatState(r.current_state)}</span>
                         {' · '}
                         {formatRelative(r.started_at)}
                       </p>
