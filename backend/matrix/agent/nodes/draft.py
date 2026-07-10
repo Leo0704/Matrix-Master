@@ -24,19 +24,10 @@ async def draft_node(state: AgentState) -> dict[str, Any]:
     topic = state.get("selected_topic") or {}
     topic_title = topic.get("title", "") if isinstance(topic, dict) else ""
     topic_rationale = topic.get("rationale", "") if isinstance(topic, dict) else ""
-    # 商品库检索 query：优先用 brief["theme"] 收窄到具体商品类目
-    brief = state.get("brief") if isinstance(state.get("brief"), dict) else None
-    product_query = (
-        (brief.get("theme") if brief else None)
-        or (brief.get("product_category") if brief else None)
-        or topic_title
-    ).strip() or topic_title or "(no product context)"
-
-    # 1. 取 persona / 违禁词 / 品牌 / 商品事实
+    # 1. 取 persona / 违禁词 / 品牌
     persona_chunks = []
     rule_chunks = []
     brand_chunks = []
-    product_chunks = []
     try:
         persona_chunks = await services.kb_retriever.retrieve(
             RetrieveQuery(query=topic_title, doc_types=("persona",), top_k=2)
@@ -47,13 +38,9 @@ async def draft_node(state: AgentState) -> dict[str, Any]:
         brand_chunks = await services.kb_retriever.retrieve(
             RetrieveQuery(query=topic_title, doc_types=("brand",), top_k=1)
         )
-        # 商品事实库：按 brief 主题/类目检索
-        product_chunks = await services.kb_retriever.retrieve(
-            RetrieveQuery(query=product_query, doc_types=("product",), top_k=3)
-        )
     except Exception:
         logger.exception("draft.kb_retrieve failed")
-        rule_chunks, persona_chunks, brand_chunks, product_chunks = [], [], [], []
+        rule_chunks, persona_chunks, brand_chunks = [], [], []
 
     persona_name = ""
     persona_tone = ""
@@ -83,7 +70,6 @@ async def draft_node(state: AgentState) -> dict[str, Any]:
         persona_tone=persona_tone or "(neutral)",
         forbidden_words=", ".join(forbidden_words) or "(none)",
         brand=join_chunks(brand_chunks),
-        product_facts=join_chunks(product_chunks) if product_chunks else "(no product facts)",
     )
     # 主题摘要（brief）作为最高优先级上下文放 prompt 顶部
     brief_section = format_brief(state.get("brief") if isinstance(state.get("brief"), dict) else None)

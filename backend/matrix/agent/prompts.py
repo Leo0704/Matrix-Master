@@ -43,7 +43,6 @@ DRAFT_USER = (
     "人设语气: {persona_tone}\n"
     "违禁词: {forbidden_words}\n"
     "品牌定位参考: {brand}\n"
-    "商品事实（来自知识库商品库）: {product_facts}\n\n"
     "输出 JSON：{{\"title\": str, \"content\": str, \"tags\": [str, ...]}}"
 )
 

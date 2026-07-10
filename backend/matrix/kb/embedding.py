@@ -40,7 +40,7 @@ class EmbeddingService:
         self,
         client: EmbeddingClient,
         *,
-        default_model: str = "text-embedding-3-small",
+        default_model: str = "BAAI/bge-m3",
         batch_size: int = DEFAULT_BATCH_SIZE,
         cache_size: int = DEFAULT_CACHE_SIZE,
     ) -> None:

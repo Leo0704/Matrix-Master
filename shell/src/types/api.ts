@@ -291,10 +291,7 @@ export type KbType =
   | 'brand'
   | 'persona'
   | 'rule'
-  | 'topic'
-  | 'history'
-  | 'template'
-  | 'product';
+  | 'history';
 
 export interface KbDocument {
   id: string;

@@ -31,7 +31,27 @@ class _LazyRetriever:
     async def retrieve(self, query: Any, **kwargs: Any) -> Any:
         async with self._factory() as session:
             r = Retriever(session, self._embedder)
-            return await r.retrieve(query, **kwargs)
+            # 兼容 RetrieveQuery dataclass / dict / 关键字
+            if hasattr(query, "query"):
+                text = query.query
+                type_ = kwargs.pop("type", getattr(query, "doc_type", None) or _doc_type_from_doc_types(getattr(query, "doc_types", None)))
+                top_k = kwargs.pop("top_k", getattr(query, "top_k", 5))
+            elif isinstance(query, dict):
+                text = query.get("query", "")
+                type_ = kwargs.pop("type", query.get("type") or _doc_type_from_doc_types(query.get("doc_types")))
+                top_k = kwargs.pop("top_k", query.get("top_k", 5))
+            else:
+                text, type_, top_k = query, kwargs.pop("type", ""), kwargs.pop("top_k", 5)
+            return await r.retrieve(text, type=type_ or "history", top_k=top_k, **kwargs)
+
+
+def _doc_type_from_doc_types(doc_types: Any) -> str:
+    if not doc_types:
+        return ""
+    # 单一 doc_types 走最常用值；多值取第一个
+    if isinstance(doc_types, (list, tuple, set)):
+        return next(iter(doc_types), "")
+    return str(doc_types)
 
 
 class _LazyWriter:
@@ -56,6 +76,10 @@ class _LazyConfigReader:
 
     def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
         self._factory = factory
+
+    # 兼容 alert_scanner / watchdog 直接 await reader(key) 的调用风格
+    async def __call__(self, key: str, default: Any = None) -> Any:
+        return await self.get(key, default)
 
     async def get(self, key: str, default: Any) -> Any:
         from sqlalchemy import select
@@ -94,21 +118,29 @@ async def build_runtime_services(
     """
     llm = llm_factory()
     if embedding_client_cls is None:
-        # 兜底：尝试 OpenAI Embedding 客户端
         from matrix.llm.embeddings import EmbeddingClient
-
         embedding_client_cls = EmbeddingClient
-    embedder = EmbeddingService(embedding_client_cls())
+    # 无论 caller 传不传 cls，都从 settings 读 api_key + base_url（硅基流动等需要切换）
+    from matrix.config import get_settings
+
+    _emb_settings = get_settings()
+    embedder = EmbeddingService(embedding_client_cls(
+        api_key=_emb_settings.openai_api_key,
+        base_url=_emb_settings.embedding_base_url,
+    ))
 
     if scheduler is None:
         from matrix.scheduler import DefaultSlotPicker
 
         scheduler = DefaultSlotPicker(session_factory)
 
+    from matrix.device.adapters import ApkHttpClient
+
     services = build_agent_services(
         llm=llm,
         kb_retriever=_LazyRetriever(session_factory, embedder),
         kb_writer=_LazyWriter(session_factory, embedder),
+        device_adapter=ApkHttpClient(),
         config=_LazyConfigReader(session_factory),
         task_writer=task_writer,
         scheduler=scheduler,

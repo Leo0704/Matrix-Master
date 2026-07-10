@@ -255,11 +255,11 @@ class Retriever:
                 c.chunk_index  AS chunk_index,
                 c.text         AS text,
                 d.metadata     AS metadata,
-                1 - (c.embedding <=> :query_vec_str::vector) AS distance
+                1 - (c.embedding <=> CAST(:query_vec_str AS vector)) AS distance
             FROM kb_chunks c
             JOIN kb_documents d ON d.id = c.doc_id
             WHERE {where_sql}
-            ORDER BY c.embedding <=> :query_vec_str::vector
+            ORDER BY c.embedding <=> CAST(:query_vec_str AS vector)
             LIMIT :limit
             """
         )

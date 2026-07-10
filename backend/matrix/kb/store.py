@@ -27,11 +27,9 @@ from .embedding import EmbeddingService
 logger = get_logger(__name__)
 
 
-# 允许的 doc.type
-# - brand / persona / rule / topic / history / template: 知识库原有类型
-# - product: 商品事实库（matrix-plan §主题贯穿改造），DRAFT 写稿时按此检索
+# 允许的 doc.type（agent research/draft/review 节点真查的就是这 4 个）
 KB_TYPES: frozenset[str] = frozenset(
-    {"brand", "persona", "rule", "topic", "history", "template", "product"}
+    {"brand", "persona", "rule", "history"}
 )
 
 

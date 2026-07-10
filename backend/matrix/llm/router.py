@@ -1,18 +1,3 @@
-"""LLM 客户端路由器：按模型名路由到对应 client。
-
-v0.7 Phase 1：provider 表替代"按前缀硬匹配"。国产 model 全部复用
-``OpenAIClient(base_url=..., api_key=...)``（DeepSeek / 通义 / GLM / 豆包
-都走 OpenAI 兼容协议）。
-
-启动优先级：
-1. ``MATRIX_LLM_PROVIDER`` env（默认 ``tongyi``）→ 默认 client
-2. ``get_client(model_name)`` 按 model name 派发 provider
-
-所有客户端进程内单例缓存，cache_key 包含 (protocol, base_url, api_key)
-避免多 provider 撞同一实例。
-
-配置源：``matrix.config.Settings``（吃 ``.env`` / 环境变量）。
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -90,10 +75,10 @@ PROVIDERS: dict[str, ProviderSpec] = {
         label="豆包 Seedance",
     ),
     "minimax": ProviderSpec(
-        protocol="openai",
-        base_url="https://api.minimaxi.com/v1",
+        protocol="anthropic",
+        base_url="https://api.minimaxi.com/anthropic",
         api_key_env="MINIMAX_API_KEY",
-        label="MiniMax M3",
+        label="MiniMax M3 (Anthropic 兼容)",
     ),
 }
 

@@ -54,8 +54,15 @@ router = APIRouter(prefix="/kb", tags=["kb"])
 
 
 async def _get_embedder() -> EmbeddingService:
-    """返回进程级缓存的 embedding 服务。生产依赖 OPENAI_API_KEY 环境变量。"""
-    return await get_embedder(EmbeddingClient)
+    """返回进程级缓存的 embedding 服务。从 settings 读 api_key + base_url（硅基流动等 OpenAI 兼容服务）。"""
+    from matrix.config import get_settings
+
+    s = get_settings()
+    return await get_embedder(
+        EmbeddingClient,
+        api_key=s.openai_api_key,
+        base_url=s.embedding_base_url,
+    )
 
 
 def _to_schema(d: KbDocumentORM) -> KbDocument:

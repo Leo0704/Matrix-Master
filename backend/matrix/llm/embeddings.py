@@ -18,9 +18,11 @@ logger = get_logger(__name__)
 
 
 # 模型 → 维度
+# 硅基流动免费：https://siliconflow.cn/pricing（按 token 计费，BAAI/bge-m3 大多 0 元）
 EMBEDDING_DIMENSIONS: dict[str, int] = {
     "text-embedding-3-small": 1536,
     "text-embedding-3-large": 3072,
+    "BAAI/bge-m3": 1024,
 }
 
 

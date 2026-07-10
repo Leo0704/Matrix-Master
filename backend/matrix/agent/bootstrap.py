@@ -36,6 +36,7 @@ def build_agent_services(
     checkpoint_writer: Any | None = None,
     interaction_writer: Any | None = None,
     rate_limiter: Any | None = None,
+    config: Any | None = None,
     model: str = "sonnet",
 ) -> AgentServices:
     """组装 AgentServices。``device_adapter`` 必传（生产路径 = ``ApkHttpClient``）。
@@ -64,6 +65,7 @@ def build_agent_services(
         device_collector=device_adapter,
         device_interactor=device_interactor,
         notifier=notifier,
+        config=config,
         model=model,
         scheduler=scheduler,
         task_writer=task_writer,
