@@ -118,6 +118,8 @@ services:
     image: matrix-master-backend:latest
     container_name: matrix-backend
     working_dir: /app/backend
+    env_file:
+      - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://matrix:matrix_dev@postgres:5432/matrix
       PYTHONPATH: /app/backend

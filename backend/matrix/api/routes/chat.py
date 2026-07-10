@@ -29,6 +29,7 @@ from matrix.db.models import AgentRun, Goal as GoalORM
 from matrix.llm.errors import LLMError
 from matrix.llm.retry import retry_with_backoff
 from matrix.llm.router import get_default_client
+from matrix.config import get_settings
 from matrix.monitoring.logging import get_logger
 
 logger = get_logger(__name__)
@@ -68,9 +69,10 @@ def _parse_llm_json(raw: str) -> dict[str, Any]:
 @retry_with_backoff(max_attempts=3, backoff=(1.0, 3.0, 9.0))
 async def _call_llm(prompt: str, system: str) -> str:
     client = get_default_client()
+    settings = get_settings()
     result = await client.complete(
         prompt,
-        model="sonnet",
+        model=settings.matrix_llm_model or "MiniMax-M3",
         max_tokens=512,
         temperature=0.3,
         system=system,

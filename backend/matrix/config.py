@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     zhipuai_api_key: Optional[str] = None
     doubao_api_key: Optional[str] = None
     deepseek_api_key: Optional[str] = None
-    MiniMax_api_key: Optional[str] = None
+    minimax_api_key: Optional[str] = None
 
     # ===== LLM 路由默认值 =====
     matrix_llm_provider: str = Field(default="tongyi")
@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     dashscope_base_url: Optional[str] = None
     zhipuai_base_url: Optional[str] = None
     doubao_base_url: Optional[str] = None
-    MiniMax_base_url: Optional[str] = None
+    minimax_base_url: Optional[str] = None
 
     # ===== Tailscale / Headscale =====
     ts_api_url: Optional[str] = None

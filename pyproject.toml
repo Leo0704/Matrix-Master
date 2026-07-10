@@ -48,6 +48,7 @@ dependencies = [
     "tenacity>=8.2.0",
     "pyyaml>=6.0.1",
     "keyring>=24.3.0",
+    "slowapi>=0.1.9",
 ]
 
 [project.optional-dependencies]

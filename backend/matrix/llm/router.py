@@ -89,7 +89,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
         api_key_env="DOUBAO_API_KEY",
         label="豆包 Seedance",
     ),
-    "MiniMax": ProviderSpec(
+    "minimax": ProviderSpec(
         protocol="openai",
         base_url="https://api.minimaxi.com/v1",
         api_key_env="MINIMAX_API_KEY",
@@ -106,7 +106,7 @@ _PREFIX_PROVIDERS: tuple[tuple[str, str], ...] = (
     ("qwen-", "tongyi"),
     ("glm-", "glm"),
     ("doubao-", "doubao"),
-    ("MiniMax-", "MiniMax"),
+    ("MiniMax-", "minimax"),
     ("claude-", "anthropic"),
 )
 
@@ -217,7 +217,7 @@ def _default_model_for(provider: str) -> str:
         "tongyi": "qwen-plus",
         "glm": "glm-4-plus",
         "doubao": "doubao-pro-32k",
-        "MiniMax": "MiniMax-M3",
+        "minimax": "MiniMax-M3",
     }.get(provider, "qwen-plus")
 
 
