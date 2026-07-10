@@ -207,6 +207,25 @@ export type AgentState =
   | 'ANALYZE'
   | 'ALERT';
 
+// 状态机状态名 → 中文大白话（运营者看的）。后端逻辑不动，前端渲染用。
+export const STATE_LABELS: Record<AgentState, string> = {
+  IDLE: '空闲',
+  RESEARCH: '找资料',
+  DRAFT: '写草稿',
+  REVIEW: '检查草稿',
+  REVISE: '改稿',
+  SCHEDULE: '排时间',
+  DISPATCH: '派给手机',
+  PUBLISH: '发布',
+  COLLECT: '收数据',
+  ANALYZE: '分析',
+  ALERT: '告警',
+};
+
+export function formatState(state: string): string {
+  return (STATE_LABELS as Record<string, string>)[state] ?? state;
+}
+
 export interface AgentRun {
   id: string;
   goal_id?: string;
