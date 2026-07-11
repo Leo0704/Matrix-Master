@@ -96,7 +96,9 @@ export function Settings() {
       <Tabs defaultValue="general">
         <TabsList>
           <TabsTrigger value="general">通用</TabsTrigger>
-          <TabsTrigger value="llm">LLM</TabsTrigger>
+          <TabsTrigger value="llm">文本大模型</TabsTrigger>
+          <TabsTrigger value="image">图像大模型</TabsTrigger>
+          <TabsTrigger value="embedding">嵌入大模型</TabsTrigger>
           <TabsTrigger value="review">审核</TabsTrigger>
           <TabsTrigger value="integration">集成</TabsTrigger>
           <TabsTrigger value="danger">应急</TabsTrigger>
@@ -130,22 +132,71 @@ export function Settings() {
         <TabsContent value="llm" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">LLM 配置</CardTitle>
-              <CardDescription>API key 存 app_config 表（生产建议改用系统 keyring）</CardDescription>
+              <CardTitle className="text-base">文本大模型</CardTitle>
+              <CardDescription>
+                写笔记 / 主题识别 / 检查草稿用的语言模型。哪家的 key 填了，就能用哪家。
+                API key 存在 app_config 表（生产建议改用系统 keyring）。
+              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <SettingField
-                settingKey="llm.api_key_anthropic"
-                label="Anthropic API Key"
-                type="password"
-                description="sk-ant-…"
-              />
-              <SettingField
-                settingKey="llm.api_key_openai"
-                label="OpenAI API Key"
-                type="password"
-                description="sk-…"
-              />
+              <SettingField settingKey="llm.api_key_anthropic" label="Anthropic（Claude）" type="password" description="sk-ant-…" />
+              <SettingField settingKey="llm.api_key_openai" label="OpenAI（GPT）" type="password" description="sk-…" />
+              <SettingField settingKey="openai_api_key" label="OpenAI（兼容 key，给智谱/硅基流动等通用）" type="password" description="sk-…" />
+              <SettingField settingKey="dashscope_api_key" label="阿里通义千问（DASHSCOPE_API_KEY）" type="password" description="sk-…" />
+              <SettingField settingKey="deepseek_api_key" label="DeepSeek（DEEPSEEK_API_KEY）" type="password" description="sk-…" />
+              <SettingField settingKey="zhipuai_api_key" label="智谱 GLM（ZHIPUAI_API_KEY）" type="password" description="sk-…" />
+              <SettingField settingKey="doubao_api_key" label="豆包（火山方舟 DOUBAO_API_KEY）" type="password" description="sk-…" />
+              <SettingField settingKey="minimax_api_key" label="MiniMax（MINIMAX_API_KEY，本系统当前默认）" type="password" description="sk-…" />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">路由默认</CardTitle>
+              <CardDescription>指定新任务用哪个 provider + 模型。留空走 provider 默认模型。</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <SettingField settingKey="matrix_llm_provider" label="默认 provider（anthropic / openai / deepseek / tongyi / glm / doubao / minimax）" description="MATRIX_LLM_PROVIDER" />
+              <SettingField settingKey="matrix_llm_model" label="默认模型名（空走 provider 默认）" description="MATRIX_LLM_MODEL" />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="image" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">图像大模型</CardTitle>
+              <CardDescription>
+                写小红书笔记时自动配图用的模型。哪家的 key 填了，就能用哪家。
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <SettingField settingKey="openai_api_key" label="通用（OpenAI / 兼容的 OpenAI key）" type="password" description="sk-…" />
+              <SettingField settingKey="dashscope_api_key" label="通义 Wanxiang（DASHSCOPE_API_KEY）" type="password" description="sk-…" />
+              <SettingField settingKey="zhipuai_api_key" label="智谱 CogView（ZHIPUAI_API_KEY）" type="password" description="sk-…" />
+              <SettingField settingKey="doubao_api_key" label="豆包 Seedream（DOUBAO_API_KEY）" type="password" description="sk-…" />
+              <SettingField settingKey="minimax_api_key" label="MiniMax 文生图（MINIMAX_API_KEY）" type="password" description="sk-…" />
+              <SettingField settingKey="dashscope_base_url" label="通义 base_url（空走默认）" description="DASHSCOPE_BASE_URL" />
+              <SettingField settingKey="zhipuai_base_url" label="智谱 base_url（空走默认）" description="ZHIPUAI_BASE_URL" />
+              <SettingField settingKey="doubao_base_url" label="豆包 base_url（空走默认）" description="DOUBAO_BASE_URL" />
+              <SettingField settingKey="minimax_base_url" label="MiniMax base_url（默认 https://api.minimaxi.com）" description="MINIMAX_BASE_URL" />
+              <SettingField settingKey="matrix_image_provider" label="默认图像 provider（in_memory / tongyi_wanxiang / zhipu_cogview / doubao_seedream / MiniMax_image_gen）" description="MATRIX_IMAGE_PROVIDER" />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="embedding" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">嵌入大模型</CardTitle>
+              <CardDescription>
+                把知识库文档转成向量用的模型。哪家的 key + base_url 填了，就能用哪家。
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <SettingField settingKey="openai_api_key" label="OpenAI（text-embedding-3-small/large）" type="password" description="sk-…" />
+              <SettingField settingKey="embedding_base_url" label="自定义 base_url（空走 OpenAI 官方）" description="EMBEDDING_BASE_URL — 填硅基流动就写 https://api.siliconflow.cn/v1" />
+              <SettingField settingKey="minimax_api_key" label="MiniMax（如果你的 embedding 也走 MiniMax）" type="password" description="sk-…" />
+              <SettingField settingKey="minimax_base_url" label="MiniMax base_url（embedding 端点）" description="MINIMAX_BASE_URL" />
             </CardContent>
           </Card>
         </TabsContent>
