@@ -1,5 +1,19 @@
 """Pydantic schema 集合。"""
-from matrix.api.schemas.account import Account, AccountCreate, AccountListResponse
+from matrix.api.schemas.account import (
+    Account,
+    AccountCreate,
+    AccountListResponse,
+    AccountUpdate,
+)
+from matrix.api.schemas.device import (
+    Device,
+    DeviceListResponse,
+    DevicePairRequest,
+    DevicePairResponse,
+    DeviceRegisterRequest,
+    DeviceUnbindResponse,
+    DeviceUpdate,
+)
 from matrix.api.schemas.agent_run import AgentRun, AgentRunListResponse
 from matrix.api.schemas.alerts import (
     AlertItem,
@@ -9,20 +23,21 @@ from matrix.api.schemas.alerts import (
     AlertSeverity,
 )
 from matrix.api.schemas.analytics import (
-    AccountRiskBucket,
-    AccountRiskResponse,
-    TaskThroughputPoint,
-    TaskThroughputResponse,
+    AccountContentStats,
+    AccountContentStatsResponse,
 )
 from matrix.api.schemas.chat import ChatAction, ChatHistoryMessage, ChatRequest, ChatResponse
-from matrix.api.schemas.device import (
-    Device,
-    DeviceListResponse,
-    DevicePairRequest,
-    DevicePairResponse,
-    DeviceRegisterRequest,
+from matrix.api.schemas.goal import (
+    Goal,
+    GoalCreate,
+    GoalUpdate,
+    GoalListResponse,
+    GoalPhase,
+    GoalRound,
+    GoalRoundListResponse,
+    GoalType,
+    ThemeTarget,
 )
-from matrix.api.schemas.goal import Goal, GoalCreate, GoalListResponse, GoalType, ThemeTarget
 from matrix.api.schemas.health import ErrorDetail, ErrorResponse, Health, OkResponse
 from matrix.api.schemas.interaction import (
     Interaction,
@@ -55,8 +70,9 @@ __all__ = [
     "Account",
     "AccountCreate",
     "AccountListResponse",
-    "AccountRiskBucket",
-    "AccountRiskResponse",
+    "AccountUpdate",
+    "AccountContentStats",
+    "AccountContentStatsResponse",
     "AgentRun",
     "AgentRunListResponse",
     "AlertItem",
@@ -73,11 +89,17 @@ __all__ = [
     "DevicePairRequest",
     "DevicePairResponse",
     "DeviceRegisterRequest",
+    "DeviceUnbindResponse",
+    "DeviceUpdate",
     "ErrorDetail",
     "ErrorResponse",
     "Goal",
     "GoalCreate",
+    "GoalUpdate",
     "GoalListResponse",
+    "GoalPhase",
+    "GoalRound",
+    "GoalRoundListResponse",
     "GoalType",
     "Health",
     "Interaction",
@@ -94,8 +116,6 @@ __all__ = [
     "KbSearchRequest",
     "KbSearchResponse",
     "KbType",
-    "TaskThroughputPoint",
-    "TaskThroughputResponse",
     "Note",
     "NoteCreate",
     "NoteListResponse",

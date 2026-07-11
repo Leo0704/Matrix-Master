@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import { useGoals } from '@/hooks/use-goals';
 import { GoalForm } from '@/components/goals/goal-form';
@@ -60,7 +61,8 @@ export function Goals() {
         {isLoading
           ? Array.from({ length: 2 }).map((_, i) => <Skeleton key={i} className="h-32 w-full" />)
           : items.map((g) => (
-              <Card key={g.id}>
+              <Link key={g.id} to={`/goals/${g.id}`} className="block">
+              <Card className="transition-colors hover:border-primary/50 hover:bg-muted/40">
                 <CardHeader>
                   <CardTitle className="flex items-center justify-between text-base">
                     <span>{g.type}</span>
@@ -94,6 +96,7 @@ export function Goals() {
                   )}
                 </CardContent>
               </Card>
+              </Link>
             ))}
       </div>
     </div>

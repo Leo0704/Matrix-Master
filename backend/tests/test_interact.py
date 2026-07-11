@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -22,7 +25,7 @@ from matrix.agent._services import (
 )
 from matrix.agent.guards import GuardConfig
 from matrix.agent.nodes.interact import interact_node
-from matrix.agent.protocols import InteractResult
+from matrix.agent.protocols import ChosenSlot, InteractResult
 from matrix.agent.run_manager import RunManager
 from matrix.agent.state_machine import build_state_machine
 from matrix.agent.types import State
@@ -243,7 +246,12 @@ async def test_interact_node_rate_limiter_throttles():
     """限速命中 → 该项记 daily_cap，interactor 不被调。"""
 
     # 用一个超低阈值的 limiter 来强制触发
-    rl = RateLimiter(device_interact_per_day=2)
+    # 注入 clock 显式放在活跃窗（09:00-23:00 Asia/Shanghai）内，避免 UTC 跑测试时被拒
+    from datetime import datetime
+    rl = RateLimiter(
+        device_interact_per_day=2,
+        clock=lambda: datetime(2026, 7, 9, 12, 0),  # 12 点在 09-23 窗内
+    )
     interactor = FakeDeviceInteractor()
     set_services(_make_services(interactor=interactor, rate_limiter=rl))
     plan = [
@@ -342,6 +350,17 @@ async def test_publish_then_interact_runs_end_to_end():
     services.device_publisher = interactor  # 复用同一 fake 当 publisher
     services.device_interactor = interactor
     services.interaction_writer = writer
+    # 注入 scheduler，避免 SCHEDULE 节点因 NO_SCHEDULER 进 ALERT
+    services.scheduler = SimpleNamespace(
+        choose_slot=AsyncMock(
+            return_value=ChosenSlot(
+                device_id=uuid.uuid4(),
+                account_id=uuid.uuid4(),
+                reason="slot_picker.match",
+                scheduled_at=datetime(2026, 7, 9, 12, 0, tzinfo=UTC),
+            )
+        )
+    )
     rm = RunManager(services=services, repository=InMemoryAgentRepository())
 
     run_id = await rm.create_run(

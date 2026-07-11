@@ -30,12 +30,42 @@ import { toast } from '@/components/ui/use-toast';
 import type { KbDocument, KbDocumentCreate } from '@/types/api';
 
 export function KB() {
+  // 拉全部未发布文档（limit 200 够用），顶部 banner 用
+  const { data: allData } = useKbDocuments({ is_published: false, limit: 200 });
+  const unpublished = allData?.items ?? [];
+  const countByType: Record<string, number> = {};
+  for (const d of unpublished) {
+    countByType[d.type] = (countByType[d.type] ?? 0) + 1;
+  }
+
   return (
     <div className="space-y-4">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">知识库</h1>
         <p className="text-sm text-muted-foreground">AI 写笔记的参考材料库，按类型分 4 个 tab</p>
       </div>
+
+      {/* 待发布 banner：中控复盘写到 KB 默认未发布，需要人工 review 后才生效 */}
+      {unpublished.length > 0 && (
+        <Card className="border-orange-300 bg-orange-50/50">
+          <CardHeader>
+            <CardTitle className="flex items-center justify-between text-base text-orange-700">
+              <span>
+                ⏰ 有 {unpublished.length} 篇文档待 review（AI 还看不到）
+              </span>
+              <span className="text-xs font-normal text-orange-600">
+                {Object.entries(countByType)
+                  .map(([t, n]) => `${t}: ${n}`)
+                  .join(' · ')}
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-orange-600">
+            中控每轮复盘自动写到 KB，<b>默认未发布</b>。点文档上的「发布」按钮即可生效。
+            复盘不发布 → 下一轮拆任务时 LLM 看不到历史经验。
+          </CardContent>
+        </Card>
+      )}
 
       <Tabs defaultValue="brand">
         <TabsList>

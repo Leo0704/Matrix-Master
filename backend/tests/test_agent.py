@@ -349,6 +349,7 @@ def make_services(
     publisher: DevicePublisher | None = None,
     collector: FakeDeviceCollector | None = None,
     task_writer: Any = None,
+    note_writer: Any = None,
     scheduler: Any | None = None,
 ) -> AgentServices:
     return AgentServices(
@@ -359,6 +360,7 @@ def make_services(
         device_collector=collector or FakeDeviceCollector(),
         notifier=recording_notifier,
         task_writer=task_writer,
+        note_writer=note_writer,
         scheduler=scheduler,
     )
 
@@ -471,6 +473,7 @@ class TestGuards:
         assert route_after_publish({"publish_result": {"ok": True}}, cfg) == State.COLLECT
         assert route_after_publish({"publish_result": {"ok": False}}, cfg) == State.ALERT
         assert route_after_collect({"note_metrics": {"views": 1}}, cfg) == State.ANALYZE
+        assert route_after_collect({"note_metrics": {"likes": 1}}, cfg) == State.ANALYZE
         assert route_after_collect({"note_metrics": {}}, cfg) == State.ALERT
         assert route_idle({"entry": "RESEARCH"}, cfg) == State.RESEARCH
         assert route_idle({"entry": "ANALYZE"}, cfg) == State.ANALYZE
@@ -579,6 +582,60 @@ class TestNodes:
         assert result["draft"]["title"] == "夏日穿搭 3 招"
         assert result["draft"]["tags"] == ["穿搭", "夏日"]
         assert result["last_error"] is None
+
+    @pytest.mark.asyncio
+    async def test_draft_persists_note(self):
+        """DRAFT 阶段草稿就落库（status='draft'，account_id=None）。
+
+        即使后续 DISPATCH/PUBLISH 失败，前端「草稿」页也能看到内容。
+        """
+        llm = FakeLLM(
+            mapping={
+                "你是小红书爆款文案写手": json.dumps(
+                    {"title": "草稿标题", "content": "正文内容", "tags": ["t1", "t2"]}
+                )
+            }
+        )
+        captured: list[dict] = []
+
+        async def fake_note_writer(record: dict) -> None:
+            captured.append(dict(record))
+
+        set_services(
+            make_services(
+                llm=llm,
+                kb=FakeKBRetriever(),
+                note_writer=fake_note_writer,
+            )
+        )
+        result = await draft_node(
+            {"selected_topic": {"title": "主题", "rationale": "r"}, "research_chunks": []}
+        )
+        assert len(captured) == 1
+        rec = captured[0]
+        assert rec["id"] == result["draft"]["note_id"]
+        assert rec["title"] == "草稿标题"
+        assert rec["content"] == "正文内容"
+        assert rec["tags"] == ["t1", "t2"]
+        assert rec["status"] == "draft"
+        assert rec["account_id"] is None  # DRAFT 阶段还不知道账号
+
+    @pytest.mark.asyncio
+    async def test_draft_skips_note_writer_if_unset(self):
+        """note_writer 为 None 时 DRAFT 仍正常返回（不强制依赖 DB 持久化）。"""
+        llm = FakeLLM(
+            mapping={
+                "你是小红书爆款文案写手": json.dumps(
+                    {"title": "t", "content": "c", "tags": []}
+                )
+            }
+        )
+        set_services(make_services(llm=llm, kb=FakeKBRetriever(), note_writer=None))
+        result = await draft_node(
+            {"selected_topic": {"title": "x", "rationale": "r"}, "research_chunks": []}
+        )
+        assert result["last_error"] is None
+        assert result["draft"]["title"] == "t"
 
     @pytest.mark.asyncio
     async def test_review_passes(self):
@@ -721,6 +778,67 @@ class TestNodes:
         )
         assert result["publish_result"]["ok"] is True
         assert result["publish_result"]["platform_note_id"] == "p123"
+
+    @pytest.mark.asyncio
+    async def test_publish_success_updates_note(self):
+        """PUBLISH 成功后把 notes 行更新成 status='published' + 绑账号 + 填平台回执。"""
+        publisher = FakeDevicePublisher(ok=True)
+        captured: list[dict] = []
+
+        async def fake_note_writer(record: dict) -> None:
+            captured.append(dict(record))
+
+        account_id = str(uuid4())
+        note_id = uuid4()
+        set_services(make_services(publisher=publisher, note_writer=fake_note_writer))
+        result = await publish_node(
+            {
+                "created_task_ids": ["t1"],
+                "draft": {
+                    "note_id": note_id,
+                    "title": "t",
+                    "content": "c",
+                    "tags": ["a"],
+                    "images": [],
+                },
+                "slot": {"device_id": str(uuid4()), "account_id": account_id},
+            }
+        )
+        assert result["publish_result"]["ok"] is True
+        assert len(captured) == 1
+        rec = captured[0]
+        assert rec["id"] == note_id
+        assert rec["status"] == "published"
+        assert str(rec["account_id"]) == account_id
+        assert rec["platform_note_id"] == "p123"
+        assert rec["platform_url"] is not None and "/p123" in rec["platform_url"]
+        assert rec["published_at"] is not None
+
+    @pytest.mark.asyncio
+    async def test_publish_failure_does_not_touch_note(self):
+        """PUBLISH 失败时不动 notes（保留 DRAFT 阶段写的 status='draft'）。"""
+        publisher = FakeDevicePublisher(ok=False, error_code="RISK_BLOCKED")
+        captured: list[dict] = []
+
+        async def fake_note_writer(record: dict) -> None:
+            captured.append(dict(record))
+
+        set_services(make_services(publisher=publisher, note_writer=fake_note_writer))
+        result = await publish_node(
+            {
+                "created_task_ids": ["t1"],
+                "draft": {
+                    "note_id": uuid4(),
+                    "title": "t",
+                    "content": "c",
+                    "tags": [],
+                    "images": [],
+                },
+                "slot": {"device_id": str(uuid4()), "account_id": str(uuid4())},
+            }
+        )
+        assert result["publish_result"]["ok"] is False
+        assert captured == []  # 没写 notes
 
     @pytest.mark.asyncio
     async def test_publish_failure_routes_to_alert(self):
@@ -980,6 +1098,28 @@ class TestNodes:
         )
         assert any(p["code"] == "PUBLISH_FAILED" for (_, p) in _NOTIFY_LOG)
         assert result["last_error"] is None
+        # 有真实错误时：snapshot 必须保留 code/message，否则事后排查无据
+        assert result["last_error_snapshot"] == {
+            "code": "PUBLISH_FAILED",
+            "message": "denied",
+        }
+
+    @pytest.mark.asyncio
+    async def test_alert_no_real_error_writes_none_snapshot(self):
+        """守卫把空 candidates 路由到 ALERT 时，last_error 为空 → snapshot=None。
+
+        否则 RunManager.start_run 把"等人工 ack"误判成 FAILED。
+        """
+        set_services(make_services())
+        result = await alert_node(
+            {
+                "run_id": uuid4(),
+                "last_error": None,  # 守卫路由来的 ALERT，无真实错误
+                "current_state": "RESEARCH",
+            }
+        )
+        assert result["last_error"] is None
+        assert result["last_error_snapshot"] is None  # 关键：空 err → None，不是 {}
 
 
 # ---------------------------------------------------------------------------

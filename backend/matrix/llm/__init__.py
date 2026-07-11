@@ -19,6 +19,7 @@ from .clients import (
     CompletionResult,
     LLMClient,
     OpenAIClient,
+    _fix_surrogates,
     resolve_model,
 )
 from .embeddings import (
@@ -55,6 +56,7 @@ __all__ = [
     "CompletionResult",
     "MODEL_ALIASES",
     "resolve_model",
+    "_fix_surrogates",
     # embeddings
     "EmbeddingClient",
     "EMBEDDING_DIMENSIONS",

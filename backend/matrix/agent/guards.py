@@ -222,7 +222,7 @@ def collect_has_metrics(state: AgentState, cfg: GuardConfig) -> bool:
     if not cfg.require_note_metrics:
         return True
     metrics = state.get("note_metrics") or {}
-    return metrics.get("views", 0) >= 0 and "views" in metrics
+    return bool(metrics)
 
 
 def collect_no_metrics_to_alert(state: AgentState, cfg: GuardConfig) -> bool:

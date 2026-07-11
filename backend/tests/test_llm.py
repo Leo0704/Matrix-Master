@@ -21,6 +21,7 @@ from matrix.llm import (
     LLMTimeoutError,
     OpenAIClient,
     RateLimitError,
+    _fix_surrogates,
     get_client,
     reset_client_cache,
     resolve_model,
@@ -504,3 +505,118 @@ class TestPromptCaching:
     def test_openai_cache_threshold(self):
         assert openai_prompt_caching_enabled("a" * 1024) is True
         assert openai_prompt_caching_enabled("short") is False
+
+
+# ---------------------------------------------------------------------------
+# 孤儿代理对（emoji 修复）
+# ---------------------------------------------------------------------------
+
+
+class TestFixSurrogates:
+    def test_passthrough_normal_string(self):
+        assert _fix_surrogates("hello") == "hello"
+
+    def test_passthrough_complete_emoji(self):
+        """完整 emoji 字符串（已经是 single codepoint）原样返回。"""
+        assert _fix_surrogates("种草 🩵💖") == "种草 🩵💖"
+
+    def test_reassembles_split_surrogate_pair(self):
+        """手动构造两个独立码点：修复后应合并成完整 emoji，utf-8 可编码。"""
+        # 0xD83E + 0xDD75 → U+1F975 🥵
+        broken = "心情" + chr(0xD83E) + chr(0xDD75) + "玛丽珍"
+        # 修复前 utf-8 编码会失败
+        with pytest.raises(UnicodeEncodeError):
+            broken.encode("utf-8")
+        # 修复后变成 6 字符 + 完整 codepoint
+        fixed = _fix_surrogates(broken)
+        assert len(fixed) == 6
+        assert ord(fixed[2]) == 0x1F975  # 🥵
+        # utf-8 编码 OK
+        fixed.encode("utf-8")
+
+    def test_lone_surrogate_kept_as_is(self):
+        """单边 orphan（high 或 low）无法配对，原样保留（保守不丢字符）。"""
+        s = "心情" + chr(0xD83E)  # 单高代理
+        assert _fix_surrogates(s) == s
+
+    def test_empty_and_ascii_unchanged(self):
+        assert _fix_surrogates("") == ""
+        assert _fix_surrogates("ascii only") == "ascii only"
+
+    def test_mixed_text(self):
+        """中英文 + orphan 混合：英文/中文/emoji 都正常，orphan 配对。"""
+        broken = "Hello " + chr(0xD83D) + chr(0xDE00) + " world"
+        fixed = _fix_surrogates(broken)
+        assert "Hello" in fixed
+        assert "world" in fixed
+        assert "😀" in fixed
+        fixed.encode("utf-8")  # 不抛错
+
+
+# ---------------------------------------------------------------------------
+# Anthropic 客户端：emoji prompt + 重试
+# ---------------------------------------------------------------------------
+
+
+class TestAnthropicClientSurrogatesAndRetry:
+    async def test_prompt_with_emoji_passes_to_sdk(self):
+        """prompt 含真实 emoji 时 SDK 调用参数里 emoji 不应丢失。"""
+        client = AnthropicClient(api_key="test")
+        client._client.messages.create = AsyncMock(
+            return_value=_make_anthropic_response("ok")
+        )
+
+        await client.complete("种草 🩵💖", model="sonnet", timeout=5)
+        call = client._client.messages.create.await_args
+        sent = call.kwargs["messages"][0]["content"]
+        # emoji 必须保留下来
+        assert "🩵" in sent
+        assert "💖" in sent
+
+    async def test_lone_surrogate_prompt_does_not_crash(self):
+        """prompt 含孤儿代理对时（json round-trip 出来的）也能正常调 SDK。"""
+        client = AnthropicClient(api_key="test")
+        client._client.messages.create = AsyncMock(
+            return_value=_make_anthropic_response("ok")
+        )
+
+        # 模拟 json 走一圈后产生的孤儿代理对
+        broken = "种草 ".encode("utf-16", errors="surrogatepass").decode("utf-16")
+        await client.complete(broken + "🩵", model="sonnet", timeout=5)
+        # 不抛 UnicodeEncodeError = 通过
+
+    async def test_retries_transient_error(self, monkeypatch):
+        """LLMError 会被重试，第二次成功。"""
+        # 把 retry 的 sleep 短路掉加速测试
+        monkeypatch.setattr("matrix.llm.retry.asyncio.sleep", AsyncMock())
+        client = AnthropicClient(api_key="test")
+        call_count = 0
+
+        async def side_effect(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                raise LLMError("transient")
+            return _make_anthropic_response("ok")
+
+        client._client.messages.create = AsyncMock(side_effect=side_effect)
+        result = await client.complete("p", model="sonnet", timeout=5)
+        assert result.text == "ok"
+        assert call_count == 2
+
+    async def test_exhausts_retries_then_raises(self, monkeypatch):
+        """3 次都失败后抛最后一次的错。"""
+        monkeypatch.setattr("matrix.llm.retry.asyncio.sleep", AsyncMock())
+        client = AnthropicClient(api_key="test")
+        call_count = 0
+
+        async def side_effect(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            raise LLMError(f"fail-{call_count}")
+
+        client._client.messages.create = AsyncMock(side_effect=side_effect)
+        with pytest.raises(LLMError) as ei:
+            await client.complete("p", model="sonnet", timeout=5)
+        assert "fail-3" in str(ei.value)
+        assert call_count == 3

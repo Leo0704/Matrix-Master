@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from matrix.monitoring.logging import get_logger
 from typing import Any
 from uuid import UUID
@@ -17,6 +19,9 @@ async def publish_node(state: AgentState) -> dict[str, Any]:
 
     返回 ``{ok, platform_note_id, platform_url, error_*}``，guard 依此决定
     转移方向。
+
+    v0.7 Phase 5：成功后通过 ``note_writer`` 把对应 notes 行更新成
+    ``status='published'`` + 绑 account_id / 平台回执。失败时不动 notes。
     """
     services = get_services()
     created_tasks = state.get("created_task_ids") or []
@@ -56,6 +61,29 @@ async def publish_node(state: AgentState) -> dict[str, Any]:
             "error_code": "PUBLISH_RAISED",
             "error_message": str(exc),
         }
+
+    # 把发布结果写回 notes 表（DRAFT 阶段已写入 status='draft' 的行）
+    if publish_result["ok"]:
+        note_writer = getattr(services, "note_writer", None)
+        note_id = _as_uuid(draft.get("note_id"))
+        if note_writer is not None and note_id is not None:
+            try:
+                await note_writer(
+                    {
+                        "id": note_id,
+                        "account_id": _as_uuid(slot.get("account_id")),
+                        "title": str(draft.get("title", "")),
+                        "content": str(draft.get("content", "")),
+                        "images": list(draft.get("images") or []),
+                        "tags": list(draft.get("tags") or []),
+                        "status": "published",
+                        "platform_note_id": publish_result.get("platform_note_id"),
+                        "platform_url": publish_result.get("platform_url"),
+                        "published_at": datetime.now(UTC),
+                    }
+                )
+            except Exception:
+                logger.exception("publish.note_writer failed")
 
     return {
         "publish_result": publish_result,

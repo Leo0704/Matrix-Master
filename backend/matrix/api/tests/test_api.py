@@ -112,6 +112,10 @@ class FakeAsyncSession:
     async def close(self) -> None:
         self.closed = True
 
+    async def delete(self, obj: Any) -> None:
+        # 从 db.store 真删
+        self._db.store.pop((type(obj), obj.id), None)
+
     async def get(self, cls: type, pk: Any):
         obj = self._db.store.get((cls, pk))
         if obj is None:
@@ -344,6 +348,8 @@ async def test_register_device(client: AsyncClient) -> None:
     assert body["nickname"] == "pixel-1"
     assert body["status"] == "pending"
     assert "id" in body
+    assert body["pair_code"].isdigit()
+    assert len(body["pair_code"]) == 6
 
 
 @pytest.mark.asyncio
@@ -356,14 +362,32 @@ async def test_get_device_not_found(client: AsyncClient) -> None:
 async def test_pair_device(client: AsyncClient, fake_session: FakeAsyncSession) -> None:
     d = _mk_device()
     fake_session.seed(d)
+    registration = await client.post(
+        "/api/v1/devices",
+        json={
+            "nickname": "pair-source",
+            "model": "Pixel 7",
+            "android_version": "14",
+            "apk_version": "0.1.0",
+            "tailnet_ip": "100.64.0.2",
+        },
+    )
+    pair_source = registration.json()
     r = await client.post(
-        f"/api/v1/devices/{d.id}/pair",
-        json={"pair_code": "123456", "hmac_key_id": "key-1"},
+        f"/api/v1/devices/{pair_source['id']}/pair",
+        json={"pair_code": pair_source["pair_code"]},
     )
     assert r.status_code == 200
     body = r.json()
+    assert body["key_id"].startswith("hmk_")
     assert "hmac_key" in body
     assert len(body["hmac_key"]) > 16  # base64 of 32B
+
+    replay = await client.post(
+        f"/api/v1/devices/{pair_source['id']}/pair",
+        json={"pair_code": pair_source["pair_code"]},
+    )
+    assert replay.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -374,7 +398,7 @@ async def test_pair_device_bad_code(
     fake_session.seed(d)
     r = await client.post(
         f"/api/v1/devices/{d.id}/pair",
-        json={"pair_code": "abc", "hmac_key_id": "key-1"},
+        json={"pair_code": "000000"},
     )
     assert r.status_code == 400
 
@@ -526,6 +550,144 @@ async def test_create_goal(client: AsyncClient) -> None:
     assert body["type"] == "publish_note"
     assert body["status"] == "active"
     assert body["target"] == {"count": 3}
+
+
+@pytest.mark.asyncio
+async def test_patch_goal_tuning_fields(client: AsyncClient) -> None:
+    """v0.7 第 1 期：PATCH /goals/{id} 能改 max_rounds / target_likes / notes_per_round。"""
+    # 先建一个 goal
+    r = await client.post(
+        "/api/v1/goals",
+        json={
+            "type": "publish_note",
+            "target": {"theme": "测试"},
+            "target_likes": 100,
+            "notes_per_round": 3,
+            "max_rounds": 2,
+        },
+    )
+    assert r.status_code == 201
+    goal_id = r.json()["id"]
+
+    # 改 3 个字段
+    r = await client.patch(
+        f"/api/v1/goals/{goal_id}",
+        json={"target_likes": 500, "notes_per_round": 5, "max_rounds": 4},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["target_likes"] == 500
+    assert body["notes_per_round"] == 5
+    assert body["max_rounds"] == 4
+
+    # 部分更新：只改一个字段，其他不动
+    r = await client.patch(
+        f"/api/v1/goals/{goal_id}",
+        json={"target_likes": 1000},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["target_likes"] == 1000
+    assert body["notes_per_round"] == 5  # 没动
+    assert body["max_rounds"] == 4  # 没动
+
+    # 验证：notes_per_round 范围校验（>20 应 422）
+    r = await client.patch(
+        f"/api/v1/goals/{goal_id}",
+        json={"notes_per_round": 100},
+    )
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_patch_goal_type_and_target(client: AsyncClient) -> None:
+    """v0.7 B：PATCH /goals/{id} 能改 type 和 target（换方向继续）。"""
+    r = await client.post(
+        "/api/v1/goals",
+        json={"type": "natural_language", "target": {"theme": "原主题"}},
+    )
+    assert r.status_code == 201
+    goal_id = r.json()["id"]
+
+    # 改 type + target
+    r = await client.patch(
+        f"/api/v1/goals/{goal_id}",
+        json={
+            "type": "publish_note",
+            "target": {"theme": "新主题", "audience": "20-30岁"},
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["type"] == "publish_note"
+    assert body["target"]["theme"] == "新主题"
+    assert body["target"]["audience"] == "20-30岁"
+
+    # 验证：非法 type 422
+    r = await client.patch(
+        f"/api/v1/goals/{goal_id}",
+        json={"type": "not_a_real_type"},
+    )
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_delete_goal_hard_delete(client: AsyncClient) -> None:
+    """v0.7：DELETE /goals/{id} 物理删。删后 GET 404，list 不再返回。"""
+    r = await client.post(
+        "/api/v1/goals",
+        json={"type": "natural_language", "target": {"theme": "删我"}},
+    )
+    assert r.status_code == 201
+    goal_id = r.json()["id"]
+
+    # 删
+    r = await client.delete(f"/api/v1/goals/{goal_id}")
+    assert r.status_code == 204
+
+    # 删了后 GET 返 404
+    r = await client.get(f"/api/v1/goals/{goal_id}")
+    assert r.status_code == 404
+
+    # list 不再返回
+    r = await client.get("/api/v1/goals")
+    assert goal_id not in [g["id"] for g in r.json()["items"]]
+
+    # 删两次也是 404（幂等）
+    r = await client.delete(f"/api/v1/goals/{goal_id}")
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_patch_goal_status_cancelled(client: AsyncClient) -> None:
+    """v0.7 B：PATCH /goals/{id} 把 status 改成 cancelled，手动停 goal。"""
+    r = await client.post(
+        "/api/v1/goals",
+        json={"type": "publish_note", "target": {"theme": "x"}},
+    )
+    assert r.status_code == 201
+    goal_id = r.json()["id"]
+    assert r.json()["status"] == "active"
+
+    # 改成 cancelled
+    r = await client.patch(
+        f"/api/v1/goals/{goal_id}",
+        json={"status": "cancelled"},
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "cancelled"
+
+    # 验证：再 GET 仍是 cancelled
+    r = await client.get(f"/api/v1/goals/{goal_id}")
+    assert r.status_code == 200
+    assert r.json()["status"] == "cancelled"
+
+    # 验证：非法 status 422
+    r = await client.patch(
+        f"/api/v1/goals/{goal_id}",
+        json={"status": "frozen"},
+    )
+    assert r.status_code == 422
 
 
 # ---------------------------------------------------------------------------

@@ -116,6 +116,25 @@ async def draft_node(state: AgentState) -> dict[str, Any]:
         "images": [],  # 配图占位；上传图片交给 publish 之前的 IMAGE_GEN 流程
         "tags": tags,
     }
+    # v0.7 Phase 5：草稿阶段就落库 notes 表（status='draft'，account_id 待 DISPATCH 时绑）。
+    # 这样即使后续 SCHEDULE/DISPATCH/PUBLISH 失败（无设备、无账号），老板在「草稿」页也能看到内容。
+    note_writer = getattr(services, "note_writer", None)
+    if note_writer is not None:
+        try:
+            await note_writer(
+                {
+                    "id": draft["note_id"],
+                    "account_id": None,
+                    "title": draft["title"],
+                    "content": draft["content"],
+                    "images": draft["images"],
+                    "tags": draft["tags"],
+                    "status": "draft",
+                }
+            )
+        except Exception:
+            logger.exception("draft.note_writer failed")
+
     return {
         "draft": draft,
         "review_rules": rule_chunks,

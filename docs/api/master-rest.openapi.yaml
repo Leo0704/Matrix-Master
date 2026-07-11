@@ -61,7 +61,7 @@ paths:
               $ref: '#/components/schemas/DeviceRegisterRequest'
       responses:
         '201':
-          description: 注册成功
+          description: 注册成功，响应中的 pair_code 仅用于这一次配对，10 分钟后失效。
           content:
             application/json:
               schema:
@@ -94,14 +94,11 @@ paths:
           application/json:
             schema:
               type: object
-              required: [pair_code, hmac_key_id]
+              required: [pair_code]
               properties:
                 pair_code:
                   type: string
                   description: 6 位数字配对码
-                hmac_key_id:
-                  type: string
-                  description: 主控生成的密钥 ID
       responses:
         '200':
           description: 配对成功，body 包含一次性 HMAC 密钥
@@ -110,6 +107,9 @@ paths:
               schema:
                 type: object
                 properties:
+                  key_id:
+                    type: string
+                    description: 主控签发的密钥 ID
                   hmac_key:
                     type: string
                     description: base64 编码的密钥，APK 收到后立即用 Keystore 加密保存

@@ -139,7 +139,7 @@ class KeyManager:
             )
             .values(revoked_at=datetime.now(timezone.utc))
         )
-        return int(result.rowcount or 0)
+        return int(getattr(result, "rowcount", 0) or 0)
 
     async def rotate_if_expired(self, device_id: UUID) -> Optional[IssuedKey]:
         """如果设备当前 key 超过 ``rotation_days``，自动轮换。

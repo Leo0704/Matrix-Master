@@ -30,15 +30,21 @@ class AgentRunWorker:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         poll_interval: float = 1.0,
+        max_retries: int = 5,
     ) -> None:
         if poll_interval <= 0:
             raise ValueError(f"poll_interval must be > 0, got {poll_interval}")
+        if max_retries < 1:
+            raise ValueError(f"max_retries must be >= 1, got {max_retries}")
         self._session_factory = session_factory
         self._poll_interval = poll_interval
+        self._max_retries = max_retries
         self._stop_event: asyncio.Event = asyncio.Event()
         self._task: Optional[asyncio.Task] = None
         # 防止重复启动同一 run（同一 run_id 只起一次协程）
         self._in_flight: set = set()
+        # 失败重试计数：run_id -> 失败次数；in-memory，重启清零
+        self._retry_count: dict = {}
 
     @property
     def is_running(self) -> bool:
@@ -62,13 +68,32 @@ class AgentRunWorker:
             asyncio.create_task(self._run_one(r.id))
 
     async def _run_one(self, run_id) -> None:
-        """拉起一条 run 的状态机。失败也不阻塞 worker 循环。"""
+        """拉起一条 run 的状态机。失败也不阻塞 worker 循环。
+
+        失败重试计数 in-memory，避免对同一条坏 run 每秒重试；
+        达到 ``max_retries`` 后让 watchdog（默认 10 分钟阈值）标 timeout。
+        """
         try:
             manager = get_manager()
             await manager.start_run(run_id)
+            # 成功：清掉失败计数
+            self._retry_count.pop(run_id, None)
             logger.info("agent_run_worker.completed", run_id=run_id)
         except Exception:
-            logger.exception("agent_run_worker.failed", run_id=run_id)
+            self._retry_count[run_id] = self._retry_count.get(run_id, 0) + 1
+            logger.exception(
+                "agent_run_worker.failed",
+                run_id=run_id,
+                retries=self._retry_count[run_id],
+                max_retries=self._max_retries,
+            )
+            if self._retry_count[run_id] >= self._max_retries:
+                # 本地重试耗尽；不再积极重试，让 watchdog 兜底标 timeout
+                logger.warning(
+                    "agent_run_worker.retries_exhausted",
+                    run_id=run_id,
+                    retries=self._retry_count[run_id],
+                )
         finally:
             self._in_flight.discard(run_id)
 

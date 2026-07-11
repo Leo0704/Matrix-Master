@@ -57,6 +57,8 @@ class AgentServices:
     checkpoint_writer: Callable[..., Awaitable[Any]] | None = None
     # 写 task 默认 callable（test 可换；None 则跳过持久化）
     task_writer: Callable[..., Awaitable[Any]] | None = None
+    # 写 notes 草稿 callable（v0.7 Phase 5：DRAFT 节点落库，签名为 async (record: dict) -> UUID；None 则跳过持久化）
+    note_writer: Callable[..., Awaitable[Any]] | None = None
     # 写 interaction 记录 callable（v0.6；签名为 async (record: dict) -> UUID；None 则只返 state 不落库）
     interaction_writer: Callable[..., Awaitable[Any]] | None = None
     # 限速器（v0.6 互动节点用；None 则跳过限速，dev 模式）

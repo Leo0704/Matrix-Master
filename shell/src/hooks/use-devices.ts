@@ -26,3 +26,37 @@ export function useRegisterDevice() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['devices'] }),
   });
 }
+
+export interface DeviceUpdateBody {
+  nickname?: string;
+  tags?: string[];
+}
+
+export function useUpdateDevice() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: DeviceUpdateBody }) =>
+      apiClient.patch<Device>(`/devices/${id}`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['devices'] });
+      qc.invalidateQueries({ queryKey: ['device'] });
+    },
+  });
+}
+
+/** 解绑设备：把绑到这台设备上的账号 device_id 清空（设备坏了换新机场景） */
+export function useUnbindDevice() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiClient.post<{ device_id: string; unbound_account_handle: string | null }>(
+        `/devices/${id}/unbind`,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['devices'] });
+      qc.invalidateQueries({ queryKey: ['device'] });
+      qc.invalidateQueries({ queryKey: ['accounts'] });
+      qc.invalidateQueries({ queryKey: ['account-content-stats'] });
+    },
+  });
+}

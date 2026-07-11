@@ -38,15 +38,15 @@ export function AddDeviceDialog({ trigger }: { trigger?: React.ReactNode }) {
 
   async function handleSubmit() {
     try {
-      await register.mutateAsync({
+      const device = await register.mutateAsync({
         nickname,
         model,
         android_version: android,
         apk_version: apkVer,
         tailnet_ip: tailnetIp,
       });
-      // Generate a fake 6-digit pair code (real backend does this)
-      setPairCode(String(Math.floor(100000 + Math.random() * 900000)));
+      if (!device.pair_code) throw new Error('主控没有返回配对码');
+      setPairCode(device.pair_code);
       setStep('pair');
       toast({ title: '设备已注册', description: '请在手机端输入配对码' });
     } catch (e) {

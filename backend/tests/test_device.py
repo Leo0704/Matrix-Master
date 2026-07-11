@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -1106,35 +1107,70 @@ class TestDeviceAPI:
 
 
 # ---------------------------------------------------------------------------
-# ApkHttpClient.collect: views=null 不假装成 0
+# ApkHttpClient: APK 契约 + HMAC
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 class TestApkHttpClientCollect:
+    @staticmethod
+    def _endpoint():
+        from matrix.device.adapters import ApkEndpoint
+
+        return ApkEndpoint(base_url="http://apk.local:8080", hmac_key=b"k" * 32)
+
+    async def test_endpoint_resolver_loads_device_address_and_secret(self) -> None:
+        from types import SimpleNamespace
+
+        from matrix.device.endpoints import DeviceEndpointResolver
+
+        device = make_device(hmac_key_id="hmk_test")
+
+        class Session:
+            async def get(self, model, key):
+                if model is Device:
+                    return device if key == device.id else None
+                return SimpleNamespace(value={"secret": base64.b64encode(b"s" * 32).decode("ascii")})
+
+        class SessionContext:
+            async def __aenter__(self):
+                return Session()
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                return None
+
+        resolver = DeviceEndpointResolver(lambda: SessionContext())
+        endpoint = await resolver(device.id)
+
+        assert endpoint.base_url == "http://100.64.0.1:8765"
+        assert endpoint.hmac_key == b"s" * 32
+
     async def test_skips_null_views(self) -> None:
         """APK 端 NoteMetric.views=null 时，HTTP client 应丢弃该键（不变成 0）。
 
         避免下游 collect_node / ANALYZE 误以为"浏览量真的是 0"。
         """
-        from matrix.device.adapters import ApkEndpoint, ApkHttpClient
+        from matrix.device.adapters import ApkHttpClient
 
         async with respx.mock(base_url="http://apk.local:8080") as mock:
             mock.post("/xhs/collect_metrics").mock(
                 return_value=httpx.Response(
                     200,
                     json={
-                        "views": None,
-                        "likes": 10,
-                        "collects": 2,
-                        "comments": 1,
-                        "follows_gained": 0,
+                        "ok": True,
+                        "data": [{
+                            "views": None,
+                            "likes": 10,
+                            "collects": 2,
+                            "comments": 1,
+                            "follows_gained": 0,
+                        }],
                     },
                 )
             )
             async with ApkHttpClient(
                 resolver=AsyncMock(
-                    return_value=ApkEndpoint(base_url="http://apk.local:8080")
+                    return_value=self._endpoint()
                 ),
             ) as client:
                 result = await client.collect(
@@ -1148,24 +1184,27 @@ class TestApkHttpClientCollect:
 
     async def test_returns_int_values_when_all_present(self) -> None:
         """正常路径：APK 返回全字段时，dict 包含全部 5 个键且为 int。"""
-        from matrix.device.adapters import ApkEndpoint, ApkHttpClient
+        from matrix.device.adapters import ApkHttpClient
 
         async with respx.mock(base_url="http://apk.local:8080") as mock:
             mock.post("/xhs/collect_metrics").mock(
                 return_value=httpx.Response(
                     200,
                     json={
-                        "views": 100,
-                        "likes": 5,
-                        "collects": 1,
-                        "comments": 0,
-                        "follows_gained": 0,
+                        "ok": True,
+                        "data": [{
+                            "views": 100,
+                            "likes": 5,
+                            "collects": 1,
+                            "comments": 0,
+                            "follows_gained": 0,
+                        }],
                     },
                 )
             )
             async with ApkHttpClient(
                 resolver=AsyncMock(
-                    return_value=ApkEndpoint(base_url="http://apk.local:8080")
+                    return_value=self._endpoint()
                 ),
             ) as client:
                 result = await client.collect(
@@ -1180,3 +1219,68 @@ class TestApkHttpClientCollect:
                 "comments": 0,
                 "follows_gained": 0,
             }
+
+    async def test_collect_signs_the_exact_body_and_sends_request_id(self) -> None:
+        from matrix.device.adapters import ApkHttpClient
+
+        async with respx.mock(base_url="http://apk.local:8080") as mock:
+            route = mock.post("/xhs/collect_metrics").mock(
+                return_value=httpx.Response(200, json={"ok": True, "data": [{"likes": 2}]})
+            )
+            async with ApkHttpClient(
+                resolver=AsyncMock(return_value=self._endpoint()),
+            ) as client:
+                await client.collect(
+                    device_id=uuid.uuid4(), account_id=uuid.uuid4(), platform_note_id="p1"
+                )
+
+        request = route.calls[-1].request
+        payload = json.loads(request.content)
+        assert payload["request_id"] == request.headers["X-Request-Id"]
+        assert verify_signature(
+            b"k" * 32,
+            request.headers["X-Timestamp"],
+            request.headers["X-Request-Id"],
+            request.content,
+            request.headers["X-Signature"],
+        )
+
+    async def test_publish_and_interact_follow_apk_envelopes(self) -> None:
+        from matrix.device.adapters import ApkHttpClient
+
+        async with respx.mock(base_url="http://apk.local:8080") as mock:
+            publish_route = mock.post("/xhs/publish").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={"ok": True, "data": {"platform_note_id": "note-1", "url": "https://xhs/note-1"}},
+                )
+            )
+            interact_route = mock.post("/xhs/interact").mock(
+                return_value=httpx.Response(200, json={"ok": True})
+            )
+            async with ApkHttpClient(
+                resolver=AsyncMock(return_value=self._endpoint()),
+            ) as client:
+                published = await client.publish(
+                    device_id=uuid.uuid4(),
+                    account_id=uuid.uuid4(),
+                    title="t",
+                    content="c",
+                    images=[],
+                    tags=[],
+                    request_id="publish-1",
+                )
+                interacted = await client.interact(
+                    device_id=uuid.uuid4(),
+                    account_id=uuid.uuid4(),
+                    action="like",
+                    target_note_id="note-2",
+                    request_id="interact-1",
+                )
+
+        assert published.ok is True
+        assert published.platform_note_id == "note-1"
+        assert published.platform_url == "https://xhs/note-1"
+        assert interacted.ok is True
+        assert json.loads(interact_route.calls[-1].request.content)["target"] == {"note_id": "note-2"}
+        assert publish_route.calls[-1].request.headers["X-Signature"]

@@ -1,26 +1,20 @@
 import { NavLink } from 'react-router-dom';
 import {
-  LayoutDashboard,
   MessageSquare,
   Smartphone,
-  Users,
-  UserCircle,
   FileText,
   Target,
   Activity,
   BarChart3,
   BookOpen,
   Bell,
-  Settings,
 } from 'lucide-react';
 import { useUIStore } from '@/stores/ui-store';
 import { cn } from '@/lib/utils';
 
 const nav = [
-  { to: '/dashboard', label: '总览', icon: LayoutDashboard },
   { to: '/chat', label: '对话', icon: MessageSquare },
   { to: '/devices', label: '设备', icon: Smartphone },
-  { to: '/accounts', label: '账号', icon: Users },
   { to: '/notes', label: '内容', icon: FileText },
   { to: '/goals', label: '目标', icon: Target },
   { to: '/agent-runs', label: 'Agent', icon: Activity },

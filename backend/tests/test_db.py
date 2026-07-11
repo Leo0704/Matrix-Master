@@ -147,8 +147,9 @@ async def test_get_session_always_closes():
 # ---------------------------------------------------------------------------
 
 
-# 全部 24 张表（外加 Base），按 schema.sql 顺序 + 004 migration 加的 alerts
-# （schema.sql 尚未同步 alerts；migration 是事实源）
+# 全部 25 张表（外加 Base），按 schema.sql 顺序 + 004 migration 加的 alerts
+# + 008 migration 加的 goal_rounds
+# （schema.sql 尚未同步；migration 是事实源）
 EXPECTED_TABLES = [
     "devices",
     "device_hmac_keys",
@@ -164,6 +165,7 @@ EXPECTED_TABLES = [
     "kb_documents",
     "kb_chunks",
     "goals",
+    "goal_rounds",
     "plans",
     "tasks",
     "agent_runs",
@@ -248,7 +250,7 @@ def test_tableless_match_schema():
 
 
 def test_tableless_count():
-    """models 模块声明的 Base 子类数量应为 24（含 Alert + DailyCounter，去掉 LlmUsage）。"""
+    """models 模块声明的 Base 子类数量应为 25（含 Alert + DailyCounter + GoalRound，去掉 LlmUsage）。"""
     from sqlalchemy.orm import DeclarativeBase
 
     from matrix.db import models
@@ -260,7 +262,7 @@ def test_tableless_count():
     ]
     # Base 自己也要排除
     subclasses = [s for s in subclasses if s is not models.Base]
-    assert len(subclasses) == 24, f"got {len(subclasses)}: {[s.__name__ for s in subclasses]}"
+    assert len(subclasses) == 25, f"got {len(subclasses)}: {[s.__name__ for s in subclasses]}"
 
 
 def test_base_is_declarative():

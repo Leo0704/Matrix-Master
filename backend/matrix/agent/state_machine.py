@@ -80,9 +80,18 @@ class StateMachine:
         return self._graph
 
     async def ainvoke(self, state: dict[str, Any] | AgentState) -> AgentState:
-        """异步执行直到终态（ALERT / 任务完成）。"""
+        """异步执行直到终态（ALERT / 任务完成）。
+
+        节点抛未捕获异常时，记录日志后重新抛出——``RunManager.start_run``
+        的外层 try/except 会负责把 run 标 FAILED。这里只做日志，避免
+        ``update_run`` 被跳过造成 run 永远卡在 running。
+        """
         compiled = self.compile()
-        result = await compiled.ainvoke(dict(state))
+        try:
+            result = await compiled.ainvoke(dict(state))
+        except Exception:
+            logger.exception("state_machine.ainvoke_failed", state=state.get("current_state"))
+            raise
         return result  # type: ignore[return-value]
 
     def invoke(self, state: dict[str, Any] | AgentState) -> AgentState:

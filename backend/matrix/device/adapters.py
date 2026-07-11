@@ -9,9 +9,9 @@ v0.6.1：移除原 ``MockDeviceAdapter``（搬到 ``tests/_fake_adapters.py``）
 """
 from __future__ import annotations
 
-from matrix.monitoring.logging import get_logger
+import json
+import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from uuid import UUID, uuid4
 
 import httpx
@@ -23,16 +23,11 @@ from matrix.agent.protocols import (
     InteractResult,
     PublishResult,
 )
+from matrix.device.endpoints import ApkEndpoint
+from matrix.device.hmac import compute_signature
+from matrix.monitoring.logging import get_logger
 
 logger = get_logger(__name__)
-
-
-@dataclass
-class ApkEndpoint:
-    """某设备在 tailnet 上的 APK 访问信息。"""
-
-    base_url: str
-    hmac_key: str | None = None
 
 
 class ApkHttpClient(DevicePublisher, DeviceCollector, DeviceInteractor):
@@ -55,12 +50,53 @@ class ApkHttpClient(DevicePublisher, DeviceCollector, DeviceInteractor):
         self._owns_client = client is None
         self._timeout = timeout
 
+    async def __aenter__(self) -> ApkHttpClient:
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
+        await self.aclose()
+
     async def _endpoint(self, device_id: UUID) -> ApkEndpoint:
         if self._resolver is None:
             raise RuntimeError(
                 f"ApkHttpClient 未配置 resolver，无法定位 device={device_id} 的 APK"
             )
         return await self._resolver(device_id)
+
+    @staticmethod
+    def _body(payload: dict) -> bytes:
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+    @staticmethod
+    def _headers(endpoint: ApkEndpoint, request_id: str, body: bytes) -> dict[str, str]:
+        timestamp = str(int(time.time()))
+        return {
+            "Content-Type": "application/json",
+            "X-Timestamp": timestamp,
+            "X-Request-Id": request_id,
+            "X-Signature": compute_signature(endpoint.hmac_key, timestamp, request_id, body),
+        }
+
+    async def _post(
+        self,
+        endpoint: ApkEndpoint,
+        path: str,
+        payload: dict,
+        request_id: str,
+        timeout: float,
+    ) -> dict:
+        body = self._body(payload)
+        response = await self._client.post(
+            f"{endpoint.base_url}{path}",
+            content=body,
+            headers=self._headers(endpoint, request_id, body),
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict) or data.get("ok") is not True:
+            raise RuntimeError("APK returned an invalid success response")
+        return data
 
     async def publish(
         self,
@@ -76,9 +112,10 @@ class ApkHttpClient(DevicePublisher, DeviceCollector, DeviceInteractor):
     ) -> PublishResult:
         ep = await self._endpoint(device_id)
         try:
-            resp = await self._client.post(
-                f"{ep.base_url}/xhs/publish",
-                json={
+            response = await self._post(
+                ep,
+                "/xhs/publish",
+                {
                     "account_id": str(account_id),
                     "title": title,
                     "content": content,
@@ -86,15 +123,17 @@ class ApkHttpClient(DevicePublisher, DeviceCollector, DeviceInteractor):
                     "tags": tags,
                     "request_id": request_id,
                 },
-                timeout=min(timeout, self._timeout) or self._timeout,
+                request_id,
+                min(timeout, self._timeout) or self._timeout,
             )
-            resp.raise_for_status()
-            data = resp.json()
+            data = response.get("data")
+            if not isinstance(data, dict) or not data.get("platform_note_id"):
+                raise RuntimeError("APK publish response is missing platform_note_id")
             return PublishResult(
                 ok=True,
                 note_id=uuid4(),
                 platform_note_id=str(data.get("platform_note_id") or ""),
-                platform_url=data.get("platform_url"),
+                platform_url=data.get("url"),
             )
         except httpx.TimeoutException as exc:
             return PublishResult(ok=False, note_id=uuid4(), error_code="TIMEOUT", error_message=str(exc))
@@ -118,17 +157,28 @@ class ApkHttpClient(DevicePublisher, DeviceCollector, DeviceInteractor):
         scope: str = "recent_24h",
     ) -> dict[str, int]:
         ep = await self._endpoint(device_id)
-        resp = await self._client.post(
-            f"{ep.base_url}/xhs/collect_metrics",
-            json={
+        request_id = str(uuid4())
+        response = await self._post(
+            ep,
+            "/xhs/collect_metrics",
+            {
                 "account_id": str(account_id),
                 "platform_note_id": platform_note_id,
                 "scope": scope,
+                "request_id": request_id,
             },
-            timeout=self._timeout,
+            request_id,
+            self._timeout,
         )
-        resp.raise_for_status()
-        data = resp.json()
+        rows = response.get("data")
+        if not isinstance(rows, list) or not rows:
+            raise RuntimeError("APK collect response has no metrics")
+        data = next(
+            (row for row in rows if isinstance(row, dict) and row.get("note_id") == platform_note_id),
+            rows[0],
+        )
+        if not isinstance(data, dict):
+            raise RuntimeError("APK collect response has invalid metrics")
         # APK 可能对未采集字段返回 null（见 NoteMetric.views），不假装成 0；
         # 直接丢弃 None 键，下游 collect_node 会跳过，ANALYZE 节点就能识别"未采集"。
         return {
@@ -156,19 +206,19 @@ class ApkHttpClient(DevicePublisher, DeviceCollector, DeviceInteractor):
         """
         ep = await self._endpoint(device_id)
         try:
-            resp = await self._client.post(
-                f"{ep.base_url}/xhs/interact",
-                json={
+            await self._post(
+                ep,
+                "/xhs/interact",
+                {
                     "account_id": str(account_id),
                     "action": action,
-                    "target_note_id": target_note_id,
+                    "target": {"note_id": target_note_id},
                     "content": content,
                     "request_id": request_id,
                 },
-                timeout=min(timeout, self._timeout) or self._timeout,
+                request_id,
+                min(timeout, self._timeout) or self._timeout,
             )
-            resp.raise_for_status()
-            data = resp.json()
             return InteractResult(
                 ok=True,
                 interaction_id=uuid4(),

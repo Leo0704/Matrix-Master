@@ -28,6 +28,7 @@ from matrix.api.routes import (
     chat as chat_routes,
     devices as devices_routes,
     goals as goals_routes,
+    learning as learning_routes,
     health as health_routes,
     interactions as interactions_routes,
     kb as kb_routes,
@@ -40,6 +41,10 @@ from matrix.api.routes import (
 from matrix.agent._default_repository import DefaultAgentRepository
 from matrix.agent.bootstrap import build_run_manager
 from matrix.agent.run_manager import init_manager
+from matrix.agent.orchestrator_runner import (
+    GoalOrchestratorWorker,
+    set_orchestrator_worker,
+)
 from matrix.agent.runner import AgentRunWorker, set_worker
 from matrix.api.schemas import ErrorDetail, ErrorResponse
 from matrix.db import create_engine
@@ -121,6 +126,14 @@ def create_app(
             set_worker(worker)
             app.state.agent_worker = worker
 
+            # goal orchestrator：每 5s 扫一次 phase≠DONE 的 goal，调 advance_goal
+            orchestrator = GoalOrchestratorWorker(
+                app.state.db_session_factory, poll_interval=5.0
+            )
+            orchestrator.start()
+            set_orchestrator_worker(orchestrator)
+            app.state.goal_orchestrator = orchestrator
+
             # v0.7 Phase 4：watchdog 兜底卡死 run（每 30s 扫一次）
             try:
                 from matrix.agent.watcher import (
@@ -135,7 +148,7 @@ def create_app(
                     config=WatchdogConfig(
                         poll_interval_sec=30.0,
                         stuck_threshold_sec=600,
-                        dry_run=True,  # 默认观察一周再切真实
+                        dry_run=False,  # worker 失败重试耗尽后由 watchdog 兜底标 timeout
                     ),
                 )
                 # v0.7 P2-1：从 app_config 表覆盖 watchdog 配置（运维可在线调阈值）
@@ -178,8 +191,11 @@ def create_app(
         # scheduler 失败不能阻塞 lifespan（dev 环境没 DB / 没 APK 也能起 API）
         try:
             from matrix.device.adapters import ApkHttpClient
+            from matrix.device.endpoints import DeviceEndpointResolver
 
-            apk_client = ApkHttpClient()
+            apk_client = ApkHttpClient(
+                resolver=DeviceEndpointResolver(app.state.db_session_factory)
+            )
             app.state.apk_client = apk_client
             from matrix.scheduler.rate_limiter import DbDailyCounter
 
@@ -228,6 +244,13 @@ def create_app(
                 await worker.stop()
             except Exception:  # pragma: no cover
                 logger.warning("agent worker stop failed", exc_info=True)
+        # 停 goal orchestrator
+        orchestrator = getattr(app.state, "goal_orchestrator", None)
+        if orchestrator is not None:
+            try:
+                await orchestrator.stop()
+            except Exception:  # pragma: no cover
+                logger.warning("goal orchestrator stop failed", exc_info=True)
         # v0.7 Phase 4: 停 watchdog
         watchdog = getattr(app.state, "agent_watchdog", None)
         if watchdog is not None:
@@ -237,10 +260,11 @@ def create_app(
                 logger.warning("agent watchdog stop failed", exc_info=True)
                 logger.exception("agent worker stop failed")
         # v0.7 P0-1: 停调度器
+        # Scheduler.stop() 是同步方法（只 set 事件），不要 await
         scheduler = getattr(app.state, "scheduler", None)
         if scheduler is not None:
             try:
-                await scheduler.stop()
+                scheduler.stop()
             except Exception:  # pragma: no cover
                 logger.warning("scheduler stop failed", exc_info=True)
         scheduler_task = getattr(app.state, "scheduler_task", None)
@@ -307,6 +331,7 @@ def create_app(
     app.include_router(personas_routes.router, prefix=API_PREFIX)
     app.include_router(notes_routes.router, prefix=API_PREFIX)
     app.include_router(goals_routes.router, prefix=API_PREFIX)
+    app.include_router(learning_routes.router, prefix=API_PREFIX)
     app.include_router(settings_routes.router, prefix=API_PREFIX)
     app.include_router(agent_runs_routes.router, prefix=API_PREFIX)
     app.include_router(chat_routes.router, prefix=API_PREFIX)

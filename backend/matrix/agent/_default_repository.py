@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-from matrix.monitoring.logging import get_logger
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, AsyncIterator
 from uuid import UUID
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from matrix.monitoring.logging import get_logger
 
 from matrix.db.models import AgentCheckpoint as AgentCheckpointModel
 from matrix.db.models import AgentRun as AgentRunModel
@@ -64,17 +68,28 @@ def _orm_to_cp_row(row: AgentCheckpointModel) -> AgentCheckpointRow:
 
 
 class DefaultAgentRepository:
-    """基于 ``matrix.db.session.get_session`` 的生产实现。"""
+    """基于 ``matrix.db.session.get_session`` 的生产实现。
+
+    所有读写都走 ``_session()`` 自动 commit；SQLAlchemy AsyncSession 单独
+    ``async with factory()`` 不会自动 commit（不像同步 Session），
+    必须用 ``matrix.db.session.get_session()`` 的显式 commit/rollback。
+    """
 
     def __init__(self, session_factory=None) -> None:
         self._custom_session_factory = session_factory
 
-    def _session(self) -> Any:
+    @asynccontextmanager
+    async def _session(self) -> AsyncIterator[AsyncSession]:
         if self._custom_session_factory is not None:
-            return self._custom_session_factory()
-        from matrix.db.session import get_session_factory
+            # 测试场景：传入的 factory 通常 pytest fixture 自己管 commit
+            async with self._custom_session_factory() as session:
+                yield session
+                return
+        from matrix.db.session import get_session
 
-        return get_session_factory()()
+        # 生产场景：get_session() 退出时显式 commit / rollback
+        async with get_session() as session:
+            yield session
 
     async def create_run(
         self,

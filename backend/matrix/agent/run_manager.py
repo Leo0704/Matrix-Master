@@ -95,7 +95,11 @@ class RunManager:
         return run_id
 
     async def start_run(self, run_id: UUID) -> AgentState:
-        """驱动 state machine 一直跑到 END。"""
+        """驱动 state machine 一直跑到 END。
+
+        ainvoke 抛未捕获异常时，保证 ``update_run`` 仍能把 run 标 FAILED，
+        避免 ``runner._run_one`` 的 try/except 吞掉异常后 run 永远卡在 running。
+        """
         run = await self.repo.get_run(run_id)
         if run is None:
             raise ValueError(f"agent_run not found: {run_id}")
@@ -122,7 +126,27 @@ class RunManager:
         else:
             state["interact_plan"] = []
 
-        result = await self.sm.ainvoke(state)
+        try:
+            result = await self.sm.ainvoke(state)
+        except Exception as exc:
+            logger.exception("agent_run.crashed", run_id=run_id)
+            # 兜底：把异常写回 DB，避免 run 永远卡在 running
+            snapshot = {"code": "UNCAUGHT_CRASH", "message": str(exc)}
+            await self.repo.update_run(
+                run_id,
+                status=RunStatus.FAILED.value,
+                payload_merge={
+                    "last_state": State.IDLE.value,
+                    "last_error_snapshot": snapshot,
+                },
+                ended_at=_utcnow(),
+            )
+            # 把异常信息塞进 state 返回，调用方仍能看到
+            return {
+                **state,
+                "current_state": State.IDLE.value,
+                "last_error_snapshot": snapshot,
+            }
 
         # run 状态判定：last_error_snapshot 非空 → 失败
         # （alert_node 会清 last_error，但留底在 last_error_snapshot；这是错误触发的可靠信号）

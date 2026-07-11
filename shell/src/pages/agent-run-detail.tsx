@@ -7,6 +7,7 @@ import { ErrorState } from '@/components/common/error-state';
 import { LoadingBlock } from '@/components/common/loading-spinner';
 import { Button } from '@/components/ui/button';
 import { formatDate, formatRelative } from '@/lib/format';
+import { formatState } from '@/types/api';
 import { toast } from '@/components/ui/use-toast';
 
 const STATE_ORDER = [

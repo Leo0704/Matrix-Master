@@ -6,6 +6,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useDevice } from '@/hooks/use-devices';
+import { useAccounts } from '@/hooks/use-accounts';
 import { LoadingSpinner } from '@/components/common/loading-spinner';
 import { ErrorState } from '@/components/common/error-state';
 import { StatusBadge } from '@/components/common/status-badge';
@@ -22,6 +23,8 @@ export function DeviceDetailDrawer({
   onOpenChange: (v: boolean) => void;
 }) {
   const { data, isLoading, error, refetch } = useDevice(id ?? undefined);
+  const accountsQ = useAccounts(id ? { device_id: id } : undefined);
+  const account = accountsQ.data?.items?.[0];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -50,7 +53,6 @@ export function DeviceDetailDrawer({
                   <Row k="ID" v={data.id} mono />
                   <Row k="Tailnet IP" v={data.tailnet_ip ?? '—'} mono />
                   <Row k="APK 版本" v={data.apk_version ?? '—'} />
-                  <Row k="绑定账号" v={String(data.bound_accounts ?? 0)} />
                   <Row k="最后心跳" v={formatRelative(data.last_heartbeat)} />
                   <Row k="注册时间" v={formatDate(data.last_heartbeat)} />
                   {data.tags && data.tags.length > 0 && (
@@ -58,6 +60,21 @@ export function DeviceDetailDrawer({
                   )}
                 </CardContent>
               </Card>
+              {account && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-sm">绑定账号</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2 text-sm">
+                    <Row k="Handle" v={`@${account.handle}`} />
+                    <Row
+                      k="状态"
+                      v={account.status}
+                    />
+                    <Row k="最后活跃" v={formatRelative(account.last_active)} />
+                  </CardContent>
+                </Card>
+              )}
             </div>
           )}
         </div>

@@ -55,8 +55,10 @@ async def alert_node(state: AgentState) -> dict[str, Any]:
     # 等待人工 / RunManager 注入 ack；不自动 ack
     return {
         "alert": alert_payload,
-        # 快照：保留触发 ALERT 的错误，方便事后排查 / 接口返回
-        "last_error_snapshot": err or None,
+        # 快照：保留触发 ALERT 的错误，方便事后排查 / 接口返回。
+        # 没真实错误（如 RESEARCH 守卫把空 candidates 路由到 ALERT）时写 None，
+        # 避免 RunManager.start_run 把"等人工 ack"误判为 FAILED。
+        "last_error_snapshot": err if err else None,
         # 把 last_error 清掉，避免 ALERT 下游 guard 误判
         "last_error": None,
     }

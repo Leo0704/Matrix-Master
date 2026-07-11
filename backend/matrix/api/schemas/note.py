@@ -20,7 +20,8 @@ NoteStatus = Literal[
 
 class Note(BaseModel):
     id: uuid.UUID
-    account_id: uuid.UUID
+    # v0.7 Phase 5：DRAFT 阶段草稿先落库时 account_id 未知，绑账号等 DISPATCH 成功后才填
+    account_id: Optional[uuid.UUID] = None
     title: str
     content: str
     images: list[str] = Field(default_factory=list)
@@ -33,7 +34,7 @@ class Note(BaseModel):
 
 
 class NoteCreate(BaseModel):
-    account_id: uuid.UUID
+    account_id: Optional[uuid.UUID] = None
     title: str
     content: str
     images: list[str] = Field(default_factory=list)

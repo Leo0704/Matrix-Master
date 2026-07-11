@@ -41,7 +41,7 @@ class WatchdogConfig:
 
     poll_interval_sec: float = 30.0
     stuck_threshold_sec: int = 600  # 10 min
-    dry_run: bool = True  # 默认 True 上线观察一周再切真实
+    dry_run: bool = False  # 默认开启真实标 timeout，作为 worker 失败重试耗尽后的兜底
 
 
 class _ScannerProtocol:

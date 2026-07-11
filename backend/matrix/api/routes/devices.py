@@ -6,8 +6,8 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import secrets
+import time
 import uuid
 from typing import Optional
 
@@ -22,16 +22,26 @@ from matrix.api.schemas import (
     DevicePairRequest,
     DevicePairResponse,
     DeviceRegisterRequest,
+    DeviceUnbindResponse,
+    DeviceUpdate,
 )
-from matrix.db.models import Account, Device as DeviceORM, DeviceHmacKey
+from matrix.db.models import Account, AppConfig, Device as DeviceORM
+from matrix.device.key_manager import KeyManager
 from matrix.monitoring.logging import get_logger
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/devices", tags=["devices"])
+_PAIR_CODE_TTL_SECONDS = 600
+_pair_codes: dict[str, tuple[uuid.UUID, float]] = {}
 
 
-def _to_schema(d: DeviceORM, bound_accounts: int = 0) -> Device:
+def _to_schema(
+    d: DeviceORM,
+    bound_accounts: int = 0,
+    bound_account_handle: str | None = None,
+    pair_code: str | None = None,
+) -> Device:
     return Device(
         id=d.id,
         nickname=d.nickname,
@@ -43,16 +53,48 @@ def _to_schema(d: DeviceORM, bound_accounts: int = 0) -> Device:
         status=d.status,  # type: ignore[arg-type]
         last_heartbeat=d.last_heartbeat,
         bound_accounts=bound_accounts,
+        bound_account_handle=bound_account_handle,
+        pair_code=pair_code,
     )
+
+
+def _issue_pair_code(device_id: uuid.UUID) -> str:
+    now = time.monotonic()
+    for code, (_, expires_at) in list(_pair_codes.items()):
+        if expires_at <= now:
+            _pair_codes.pop(code, None)
+    while True:
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        if code not in _pair_codes:
+            _pair_codes[code] = (device_id, now + _PAIR_CODE_TTL_SECONDS)
+            return code
+
+
+def _consume_pair_code(device_id: uuid.UUID, pair_code: str) -> bool:
+    entry = _pair_codes.get(pair_code)
+    if entry is None:
+        return False
+    expected_device_id, expires_at = entry
+    if expires_at <= time.monotonic():
+        _pair_codes.pop(pair_code, None)
+        return False
+    if expected_device_id != device_id:
+        return False
+    _pair_codes.pop(pair_code, None)
+    return True
 
 
 @router.get("", response_model=DeviceListResponse)
 async def list_devices(
     status_filter: Optional[str] = Query(None, alias="status"),
     tag: Optional[str] = Query(None),
+    include_disabled: bool = Query(False, description="默认排除已退役设备（status=disabled）"),
     session: AsyncSession = Depends(get_db),
 ) -> DeviceListResponse:
     stmt = select(DeviceORM).where(DeviceORM.deleted_at.is_(None))
+    if not include_disabled:
+        # 默认排除 status='disabled'（"解绑"=设备退役后自动从列表消失）
+        stmt = stmt.where(DeviceORM.status != "disabled")
     if status_filter:
         stmt = stmt.where(DeviceORM.status == status_filter)
     if tag:
@@ -60,19 +102,25 @@ async def list_devices(
     stmt = stmt.order_by(DeviceORM.created_at.desc())
 
     rows = (await session.execute(stmt)).scalars().all()
-    # bound_accounts 一次性 count
+    # bound_accounts 一次性 count + handle（严格 1 机 1 账号下最多一个）
     counts: dict[uuid.UUID, int] = {}
+    handles: dict[uuid.UUID, str] = {}
     if rows:
         ids = [r.id for r in rows]
-        cnt_stmt = (
-            select(Account.device_id, func.count(Account.id))
-            .where(Account.device_id.in_(ids), Account.deleted_at.is_(None))
-            .group_by(Account.device_id)
+        bind_stmt = select(Account.device_id, Account.handle).where(
+            Account.device_id.in_(ids), Account.deleted_at.is_(None)
         )
-        for did, c in (await session.execute(cnt_stmt)).all():
-            counts[did] = int(c)
+        for did, h in (await session.execute(bind_stmt)).all():
+            counts[did] = counts.get(did, 0) + 1
+            # 1:1 下至多覆盖一次；若多个则取第一个（应被 migration unique 阻止）
+            handles.setdefault(did, h)
 
-    return DeviceListResponse(items=[_to_schema(r, counts.get(r.id, 0)) for r in rows])
+    return DeviceListResponse(
+        items=[
+            _to_schema(r, counts.get(r.id, 0), handles.get(r.id))
+            for r in rows
+        ]
+    )
 
 
 @router.post("", response_model=Device, status_code=status.HTTP_201_CREATED)
@@ -92,7 +140,7 @@ async def register_device(
     )
     session.add(d)
     await session.flush()
-    return _to_schema(d)
+    return _to_schema(d, pair_code=_issue_pair_code(d.id))
 
 
 @router.get("/{device_id}", response_model=Device)
@@ -103,6 +151,15 @@ async def get_device(
     d = await session.get(DeviceORM, device_id)
     if d is None or d.deleted_at is not None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
+    bind_row = (
+        await session.execute(
+            select(Account.handle).where(
+                Account.device_id == device_id,
+                Account.deleted_at.is_(None),
+            )
+        )
+    ).first()
+    handle = bind_row[0] if bind_row else None
     cnt = (
         await session.execute(
             select(func.count(Account.id)).where(
@@ -111,7 +168,7 @@ async def get_device(
             )
         )
     ).scalar_one()
-    return _to_schema(d, int(cnt))
+    return _to_schema(d, int(cnt), handle)
 
 
 @router.post("/{device_id}/pair", response_model=DevicePairResponse)
@@ -120,35 +177,113 @@ async def pair_device(
     body: DevicePairRequest,
     session: AsyncSession = Depends(get_db),
 ) -> DevicePairResponse:
-    """配对：验证配对码后下发一次性 HMAC 密钥。
+    """消费主控签发的一次性配对码并下发新的 HMAC 密钥。"""
+    d = await session.get(DeviceORM, device_id)
+    if d is None or d.deleted_at is not None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
 
-    实现：
-    - pair_code 在生产环境应当通过短信 / 屏幕显示下发并与 device.adb_serial 绑定；
-      本端做长度校验即可。
-    - 生成 32 字节随机密钥，base64 返回给 APK；DB 只存 hash（key_hash）。
+    if not _consume_pair_code(device_id, body.pair_code):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "invalid, expired, or already used pair code"
+        )
+
+    key_manager = KeyManager(session)
+    await key_manager.revoke_all(device_id)
+    issued = await key_manager.issue_key(device_id)
+    d.hmac_key_id = issued.key_id
+    secret_key = f"hmac_secret:{issued.key_id}"
+    secret_value = {"secret": base64.b64encode(issued.secret).decode("ascii")}
+    secret_row = await session.get(AppConfig, secret_key)
+    if secret_row is None:
+        session.add(
+            AppConfig(
+                key=secret_key,
+                value=secret_value,
+                description="Internal device HMAC secret; never expose through settings API.",
+            )
+        )
+    else:
+        secret_row.value = secret_value
+    if d.status == "pending":
+        d.status = "active"
+    await session.flush()
+    return DevicePairResponse(
+        key_id=issued.key_id,
+        hmac_key=secret_value["secret"],
+    )
+
+
+@router.patch("/{device_id}", response_model=Device)
+async def update_device(
+    device_id: uuid.UUID,
+    body: DeviceUpdate,
+    session: AsyncSession = Depends(get_db),
+) -> Device:
+    """改设备 nickname / tags（局部更新）。"""
+    d = await session.get(DeviceORM, device_id)
+    if d is None or d.deleted_at is not None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
+    if body.nickname is not None:
+        d.nickname = body.nickname
+    if body.tags is not None:
+        d.tags = body.tags
+    await session.flush()
+    # 重新拿一次返回带 handles
+    bind_row = (
+        await session.execute(
+            select(Account.handle).where(
+                Account.device_id == device_id,
+                Account.deleted_at.is_(None),
+            )
+        )
+    ).first()
+    handle = bind_row[0] if bind_row else None
+    cnt = (
+        await session.execute(
+            select(func.count(Account.id)).where(
+                Account.device_id == device_id,
+                Account.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one()
+    return _to_schema(d, int(cnt), handle)
+
+
+@router.post("/{device_id}/unbind", response_model=DeviceUnbindResponse)
+async def unbind_device(
+    device_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+) -> DeviceUnbindResponse:
+    """设备退役：清空绑到这台设备上的 active 账号的 device_id + 标 disabled。
+
+    业务语义：**设备 = 手机**。"解绑"实际上就是"设备坏了 / 不要了"，
+    所以一次性做两件事：
+      - 把绑在这台设备上的账号 device_id 清 NULL（账号数据不丢）
+      - 把设备 status 改成 'disabled'，从设备列表自动消失（list 默认排除）
+
+    注意：notes 仍挂在账号下，账号历史完整；只是这台手机不再参与运营。
     """
     d = await session.get(DeviceORM, device_id)
     if d is None or d.deleted_at is not None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
 
-    if not body.pair_code.isdigit() or len(body.pair_code) != 6:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "pair_code must be 6 digits",
+    bind_rows = (
+        await session.execute(
+            select(Account).where(
+                Account.device_id == device_id,
+                Account.deleted_at.is_(None),
+            )
         )
+    ).scalars().all()
 
-    raw_key = secrets.token_bytes(32)
-    key_b64 = base64.b64encode(raw_key).decode("ascii")
-    key_hash = hashlib.sha256(raw_key).digest()
-
-    hk = DeviceHmacKey(
-        id=body.hmac_key_id,
-        device_id=device_id,
-        key_hash=key_hash,
-    )
-    session.add(hk)
-    d.hmac_key_id = body.hmac_key_id
-    if d.status == "pending":
-        d.status = "active"
+    unbound_handle: str | None = None
+    for acc in bind_rows:
+        if unbound_handle is None:
+            unbound_handle = acc.handle
+        acc.device_id = None
+    d.status = "disabled"
     await session.flush()
-    return DevicePairResponse(hmac_key=key_b64)
+    return DeviceUnbindResponse(
+        device_id=device_id,
+        unbound_account_handle=unbound_handle,
+    )

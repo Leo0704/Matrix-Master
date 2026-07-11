@@ -8,7 +8,7 @@ export function NotFound() {
       <h1 className="text-xl font-semibold">页面不存在</h1>
       <p className="text-sm text-muted-foreground">您访问的路径不存在或已被移除</p>
       <Button asChild>
-        <Link to="/dashboard">回到总览</Link>
+        <Link to="/chat">回到首页</Link>
       </Button>
     </div>
   );

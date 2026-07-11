@@ -335,8 +335,8 @@ class Note(Base):
         primary_key=True,
         server_default=sa_text('uuid_generate_v4()'),
     )
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey('accounts.id'), nullable=False
+    account_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('accounts.id'), nullable=True
     )
     title: Mapped[str] = mapped_column(String(256), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -488,6 +488,25 @@ class Goal(Base):
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default=sa_text("'active'")
     )
+    # v0.7：goal-level orchestrator 状态机（5 阶段 + DONE）
+    phase: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=sa_text("'PENDING'")
+    )
+    current_round: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=sa_text('1')
+    )
+    max_rounds: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=sa_text('3')
+    )
+    # v0.7 第 1 期优化：可调字段（老板创建 goal 时可指定）
+    target_likes: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=sa_text('500')
+    )
+    notes_per_round: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=sa_text('3')
+    )
+    learning_summary: Mapped[Optional[str]] = mapped_column(Text)
+    phase_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=sa_text('NOW()')
     )
@@ -501,6 +520,57 @@ class Goal(Base):
             "status IN ('active', 'achieved', 'failed', 'cancelled')",
             name='goals_status_check',
         ),
+        CheckConstraint(
+            "phase IN ('PENDING','PREPARING','EXECUTING','MONITORING',"
+            "'SUMMARIZING','DECIDING','DONE')",
+            name='goals_phase_check',
+        ),
+        CheckConstraint(
+            "notes_per_round BETWEEN 1 AND 20",
+            name='goals_notes_per_round_range_check',
+        ),
+    )
+
+
+class GoalRound(Base):
+    """每轮运营记录：goal_id + round_number + KPI 汇总 + 起止时间。"""
+
+    __tablename__ = 'goal_rounds'
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=sa_text('uuid_generate_v4()'),
+    )
+    goal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('goals.id', ondelete='CASCADE'), nullable=False
+    )
+    round_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=sa_text('NOW()')
+    )
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    kpi_summary: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=sa_text("'{}'::jsonb")
+    )
+    notes_created: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=sa_text('0')
+    )
+    total_views: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=sa_text('0')
+    )
+    total_likes: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=sa_text('0')
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=sa_text('NOW()')
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=sa_text('NOW()')
+    )
+
+    __table_args__ = (
+        UniqueConstraint('goal_id', 'round_number', name='goal_rounds_goal_round_uniq'),
     )
 
 

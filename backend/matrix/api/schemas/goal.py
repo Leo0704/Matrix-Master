@@ -9,6 +9,17 @@ from pydantic import BaseModel, ConfigDict, Field
 
 GoalStatus = Literal["active", "achieved", "failed", "cancelled"]
 
+# Goal-level orchestrator phase（v0.7 第 1 期"中控运营"）
+GoalPhase = Literal[
+    "PENDING",
+    "PREPARING",
+    "EXECUTING",
+    "MONITORING",
+    "SUMMARIZING",
+    "DECIDING",
+    "DONE",
+]
+
 # 统一的 Goal.type 字面值。
 # 历史来源：
 # - chat 路由关键词分类：publish_note / interact / collect_metrics / warmup / login / generic
@@ -52,12 +63,62 @@ class Goal(BaseModel):
     target: dict[str, Any] = Field(default_factory=dict)
     deadline: Optional[datetime] = None
     status: GoalStatus = "active"
+    # v0.7 第 1 期：orchestrator 状态机字段
+    phase: GoalPhase = "PENDING"
+    current_round: int = 1
+    max_rounds: int = 3
+    # v0.7 第 1 期优化：可调字段（前端创建 goal 时可指定）
+    target_likes: int = 500  # KPI 阈值
+    notes_per_round: int = 3  # 每轮多少篇
+    learning_summary: Optional[str] = None
+    phase_updated_at: Optional[datetime] = None
+
+
+class GoalRound(BaseModel):
+    """每轮运营记录（v0.7 第 1 期）。"""
+
+    id: uuid.UUID
+    goal_id: uuid.UUID
+    round_number: int
+    started_at: datetime
+    ended_at: Optional[datetime] = None
+    kpi_summary: dict[str, Any] = Field(default_factory=dict)
+    notes_created: int = 0
+    total_views: int = 0
+    total_likes: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class GoalRoundListResponse(BaseModel):
+    items: list[GoalRound]
+    total: int = 0
 
 
 class GoalCreate(BaseModel):
     type: GoalType
     target: dict[str, Any] = Field(default_factory=dict)
     deadline: Optional[datetime] = None
+    # 可调字段（不传就用 DB default）
+    target_likes: Optional[int] = Field(default=None, ge=1, le=1_000_000)
+    notes_per_round: Optional[int] = Field(default=None, ge=1, le=20)
+    max_rounds: Optional[int] = Field(default=None, ge=1, le=20)
+
+
+class GoalUpdate(BaseModel):
+    """局部更新 — 所有字段可选，None 表示该字段不动。
+
+    注意：target 是结构化主题对象，更新会**整体覆盖**旧值（不是 merge）。
+    支持把 status 改成 'cancelled' 来手动停 goal（v0.7 B）。
+    """
+
+    type: Optional[GoalType] = None
+    target: Optional[dict[str, Any]] = None
+    deadline: Optional[datetime] = None
+    target_likes: Optional[int] = Field(default=None, ge=1, le=1_000_000)
+    notes_per_round: Optional[int] = Field(default=None, ge=1, le=20)
+    max_rounds: Optional[int] = Field(default=None, ge=1, le=20)
+    status: Optional["GoalStatus"] = None
 
 
 class GoalListResponse(BaseModel):
@@ -67,7 +128,11 @@ class GoalListResponse(BaseModel):
 __all__ = [
     "Goal",
     "GoalCreate",
+    "GoalUpdate",
     "GoalListResponse",
+    "GoalRound",
+    "GoalRoundListResponse",
+    "GoalPhase",
     "GoalStatus",
     "GoalType",
     "ThemeTarget",

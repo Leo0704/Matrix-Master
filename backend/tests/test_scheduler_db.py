@@ -224,7 +224,8 @@ class TestDbTaskStatusWriter:
         await writer.mark_running(task)
 
         stmt = session.execute.call_args.args[0]
-        values = stmt.compile(compile_kwargs={"literal_binds": True})
+        # SQLAlchemy 2.x: stmt.compile() 返回 Compiled 对象，必须 str() 转字符串
+        values = str(stmt.compile(compile_kwargs={"literal_binds": True}))
         assert "status" in values
         assert "attempts" in values
         session.commit.assert_awaited_once()
@@ -237,7 +238,8 @@ class TestDbTaskStatusWriter:
         now = datetime.now(timezone.utc)
         await writer.mark_success(task, now)
         stmt = session.execute.call_args.args[0]
-        values = stmt.compile(compile_kwargs={"literal_binds": True})
+        # SQLAlchemy 2.x: stmt.compile() 返回 Compiled 对象，必须 str() 转字符串
+        values = str(stmt.compile(compile_kwargs={"literal_binds": True}))
         assert "success" in values
         assert "executed_at" in values
 
@@ -249,9 +251,11 @@ class TestDbTaskStatusWriter:
         now = datetime.now(timezone.utc)
         await writer.mark_failed(task, {"code": "EXECUTOR_FALSE", "message": "x"}, now)
         stmt = session.execute.call_args.args[0]
-        values = stmt.compile(compile_kwargs={"literal_binds": True})
-        assert "failed" in values
-        assert "last_error" in values
+        # JSONB 列无内置 literal renderer；SQLAlchemy 2.x 默认渲染为 :param 占位符。
+        # 改从 compile().params 取实际值检查，避免触发 JSONB literal render。
+        params = stmt.compile().params
+        assert params.get("status") == "failed"
+        assert params.get("last_error") == {"code": "EXECUTOR_FALSE", "message": "x"}
 
 
 # ---------------------------------------------------------------------------

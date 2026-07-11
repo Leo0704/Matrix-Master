@@ -33,6 +33,7 @@ def build_agent_services(
     notifier: Any | None = None,
     scheduler: Any | None = None,
     task_writer: Any | None = None,
+    note_writer: Any | None = None,
     checkpoint_writer: Any | None = None,
     interaction_writer: Any | None = None,
     rate_limiter: Any | None = None,
@@ -43,6 +44,9 @@ def build_agent_services(
 
     v0.6：若 ``device_adapter`` 实现了 ``DeviceInteractor`` Protocol，自动作为
     ``device_interactor`` 注入。``interaction_writer`` / ``rate_limiter`` 可选注入。
+
+    v0.7 Phase 5：``note_writer`` 默认 None → DRAFT 节点不落库；
+    生产路径会传一个 ``_db_note_writer`` 把草稿写进 ``notes`` 表（status='draft'）。
 
     测试场景下用 ``tests._fake_adapters.MockDeviceAdapter`` 注入。
     """
@@ -69,10 +73,61 @@ def build_agent_services(
         model=model,
         scheduler=scheduler,
         task_writer=task_writer,
+        note_writer=note_writer,
         checkpoint_writer=checkpoint_writer,
         interaction_writer=interaction_writer,
         rate_limiter=rate_limiter,
     )
+
+
+# ---------------------------------------------------------------------------
+# notes writer（v0.7 Phase 5：DRAFT 阶段落库）
+# ---------------------------------------------------------------------------
+
+
+async def db_note_writer(record: dict[str, Any]) -> Any:
+    """生产 note_writer：把 DRAFT 草稿或 PUBLISH 结果 upsert 到 ``notes`` 表。
+
+    record schema：
+        - ``id`` (UUID) — 已生成的 note_id（DRAFT 节点生成的 uuid4）
+        - ``account_id`` (UUID | None) — DISPATCH 时绑定；DRAFT 阶段为 None
+        - ``title``, ``content``, ``images``, ``tags``
+        - ``status`` — 'draft' / 'scheduled' / 'published' / 'failed'
+        - ``platform_note_id``, ``platform_url`` (可选，PUBLISH 时填)
+        - ``published_at`` (datetime | None，PUBLISH 时填)
+    """
+    from sqlalchemy import select
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    from matrix.db.models import Note
+    from matrix.db.session import get_session
+
+    payload = dict(record)
+    # INSERT ... ON CONFLICT (id) DO UPDATE：幂等，DRAFT/PUBLISH 多次调用安全
+    stmt = pg_insert(Note).values(**payload)
+    update_cols = {
+        c: stmt.excluded[c]
+        for c in (
+            "account_id",
+            "title",
+            "content",
+            "images",
+            "tags",
+            "status",
+            "platform_note_id",
+            "platform_url",
+            "published_at",
+        )
+        if c in payload
+    }
+    stmt = stmt.on_conflict_do_update(index_elements=[Note.id], set_=update_cols)
+    async with get_session() as session:
+        await session.execute(stmt)
+        # 读回拿 server-default id（caller 传了 id 就直接用）
+        row = (
+            await session.execute(select(Note).where(Note.id == payload["id"]))
+        ).scalar_one()
+        return row.id
 
 
 def build_run_manager(

@@ -20,6 +20,7 @@ from matrix.db.models import (
     DeviceHeartbeat,
     DeviceHmacKey,
     Goal,
+    GoalRound,
     Interaction,
     KbChunk,
     KbDocument,
@@ -55,6 +56,7 @@ __all__ = [
     "KbChunk",
     # 任务 / Agent
     "Goal",
+    "GoalRound",
     "Plan",
     "Task",
     "AgentRun",

@@ -17,6 +17,36 @@ from typing import Any, ClassVar
 logger = get_logger(__name__)
 
 
+def _fix_surrogates(text: str) -> str:
+    """把紧邻的 high+low surrogate 重新组合成单个 Unicode codepoint。
+
+    场景：LLM 上下文里的 emoji 走 ``json.loads`` 没被自动配对，存为
+    两个独立码点（``chr(0xD83E) + chr(0xDD75)``）。anthropic SDK 二次
+    序列化 ``.encode('utf-8')`` 时会报 ``surrogates not allowed``。
+    紧邻的 high+low 重新配对成完整 codepoint（如 ``\\U0001FA75``），
+    单边 orphan 无法配对则原样保留。
+    """
+    if not text:
+        return text
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        code = ord(ch)
+        if 0xD800 <= code <= 0xDBFF and i + 1 < n:
+            nxt_code = ord(text[i + 1])
+            if 0xDC00 <= nxt_code <= 0xDFFF:
+                # 紧邻对 → 合并成 supplementary plane codepoint
+                cp = 0x10000 + ((code - 0xD800) << 10) + (nxt_code - 0xDC00)
+                out.append(chr(cp))
+                i += 2
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 # ---------------------------------------------------------------------------
 # 数据结构
 # ---------------------------------------------------------------------------
@@ -201,7 +231,16 @@ class AnthropicClient(LLMClient):
         run_id: str | None = None,
         account_id: str | None = None,
     ) -> CompletionResult:
+        from .errors import LLMError as _LLMError
+        from .retry import retry_with_backoff
+
         model = resolve_model(model)
+        # 修复 prompt/system 中的孤儿代理对（LLM 上下文里如果含 emoji，
+        # 经 json.dumps → loads 后会拆成 😀 这种，SDK 二次
+        # 序列化时会抛 UnicodeEncodeError）。
+        prompt = _fix_surrogates(prompt)
+        if system:
+            system = _fix_surrogates(system)
         kwargs: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
@@ -211,19 +250,25 @@ class AnthropicClient(LLMClient):
         if system:
             kwargs["system"] = system
 
+        @retry_with_backoff(max_attempts=3, retry_on=(_LLMError,))
+        async def _call() -> Any:
+            return await asyncio.wait_for(
+                self._client.messages.create(**kwargs), timeout=timeout
+            )
+
         start = time.monotonic()
         try:
-            response = await asyncio.wait_for(self._client.messages.create(**kwargs), timeout=timeout)
+            response = await _call()
         except Exception as exc:  # noqa: BLE001
             raise _map_anthropic_error(exc) from exc
         latency_ms = int((time.monotonic() - start) * 1000)
 
-        # 提取文本
+        # 提取文本（也修一遍，输出里也可能带孤儿代理对）
         text_parts: list[str] = []
         for block in getattr(response, "content", []) or []:
             text = getattr(block, "text", None)
             if text:
-                text_parts.append(text)
+                text_parts.append(_fix_surrogates(text))
         text = "".join(text_parts)
 
         usage = getattr(response, "usage", None)
@@ -268,15 +313,22 @@ class OpenAIClient(LLMClient):
         run_id: str | None = None,
         account_id: str | None = None,
     ) -> CompletionResult:
+        from .errors import LLMError as _LLMError
+        from .retry import retry_with_backoff
+
         model = resolve_model(model)
+        # 同样修复孤儿代理对（OpenAI 客户端偶尔也会报同样错）
+        prompt = _fix_surrogates(prompt)
+        if system:
+            system = _fix_surrogates(system)
         messages: list[dict[str, str]] = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
-        start = time.monotonic()
-        try:
-            response = await asyncio.wait_for(
+        @retry_with_backoff(max_attempts=3, retry_on=(_LLMError,))
+        async def _call() -> Any:
+            return await asyncio.wait_for(
                 self._client.chat.completions.create(
                     model=model,
                     messages=messages,
@@ -285,13 +337,17 @@ class OpenAIClient(LLMClient):
                 ),
                 timeout=timeout,
             )
+
+        start = time.monotonic()
+        try:
+            response = await _call()
         except Exception as exc:  # noqa: BLE001
             raise _map_openai_error(exc) from exc
         latency_ms = int((time.monotonic() - start) * 1000)
 
         text = ""
         if response.choices:
-            text = response.choices[0].message.content or ""
+            text = _fix_surrogates(response.choices[0].message.content or "")
 
         usage = getattr(response, "usage", None)
         prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)

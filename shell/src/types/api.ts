@@ -64,6 +64,9 @@ export interface Device {
   status: DeviceStatus;
   last_heartbeat?: string;
   bound_accounts?: number;
+  /** 绑定账号的 handle（严格 1 机 1 账号下最多一个） */
+  bound_account_handle?: string | null;
+  pair_code?: string;
 }
 
 export interface DeviceRegisterRequest {
@@ -77,10 +80,10 @@ export interface DeviceRegisterRequest {
 
 export interface DevicePairRequest {
   pair_code: string;
-  hmac_key_id: string;
 }
 
 export interface DevicePairResponse {
+  key_id: string;
   hmac_key: string;
 }
 
@@ -124,6 +127,23 @@ export interface PersonaCreate {
   sample_note_ids?: string[];
 }
 
+// ---------- 账号内容表现（数据看板核心指标） ----------
+
+export interface AccountContentStats {
+  account_id?: string | null;
+  handle: string;
+  status: string;
+  /** 关联设备昵称（严格 1 机 1 账号下，每个账号对应一台设备） */
+  device_nickname?: string | null;
+  total_notes: number;
+  published: number;
+  draft: number;
+  scheduled: number;
+  avg_views: number;
+  avg_likes: number;
+  avg_comments: number;
+}
+
 // ---------- Note ----------
 
 export type NoteStatus =
@@ -137,7 +157,8 @@ export type NoteStatus =
 
 export interface Note {
   id: string;
-  account_id: string;
+  /** v0.7 Phase 5：草稿阶段还没绑账号，account_id 可空（DISPATCH 成功后 publish_node 填上） */
+  account_id?: string | null;
   title: string;
   content: string;
   images?: string[];
@@ -183,12 +204,58 @@ export interface Goal {
   target: ThemeTarget | Record<string, unknown>;
   deadline?: string;
   status: GoalStatus;
+  // v0.7 第 1 期：orchestrator 状态机字段
+  phase?: GoalPhase;
+  current_round?: number;
+  max_rounds?: number;
+  target_likes?: number;
+  notes_per_round?: number;
+  learning_summary?: string | null;
+  phase_updated_at?: string | null;
+}
+
+export type GoalPhase =
+  | 'PENDING'
+  | 'PREPARING'
+  | 'EXECUTING'
+  | 'MONITORING'
+  | 'SUMMARIZING'
+  | 'DECIDING'
+  | 'DONE';
+
+export interface GoalRound {
+  id: string;
+  goal_id: string;
+  round_number: number;
+  started_at: string;
+  ended_at?: string | null;
+  kpi_summary: Record<string, unknown>;
+  notes_created: number;
+  total_views: number;
+  total_likes: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface GoalCreate {
   type: GoalType;
   target: ThemeTarget | Record<string, unknown>;
   deadline?: string;
+  // v0.7 第 1 期优化：可调字段（不传用后端 default）
+  target_likes?: number;
+  notes_per_round?: number;
+  max_rounds?: number;
+}
+
+export interface GoalUpdate {
+  type?: GoalType;
+  target?: ThemeTarget | Record<string, unknown>;
+  deadline?: string;
+  /** 停止目标：active → cancelled / failed；后端会用 enum 校验 */
+  status?: GoalStatus;
+  target_likes?: number;
+  notes_per_round?: number;
+  max_rounds?: number;
 }
 
 // ---------- Agent Run ----------
@@ -236,27 +303,6 @@ export interface AgentRun {
   ended_at?: string;
   /** 主题摘要（仅展示用，agent_runs.payload.brief 透传） */
   brief?: ThemeTarget | Record<string, unknown>;
-}
-
-// ---------- Metrics ----------
-
-export interface MetricsSummary {
-  devices?: {
-    total?: number;
-    active?: number;
-    offline?: number;
-  };
-  accounts?: {
-    total?: number;
-    active?: number;
-    high_risk?: number;
-  };
-  tasks?: {
-    pending?: number;
-    running?: number;
-    success_24h?: number;
-    failed_24h?: number;
-  };
 }
 
 // ---------- Chat ----------

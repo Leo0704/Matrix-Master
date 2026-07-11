@@ -1,10 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AppLayout } from './components/layout/app-layout';
-import { Dashboard } from './pages/dashboard';
 import { Devices } from './pages/devices';
 import { DeviceDetail } from './pages/device-detail';
-import { Accounts } from './pages/accounts';
-import { AccountDetail } from './pages/account-detail';
 import { Notes } from './pages/notes';
 import { NoteDetail } from './pages/note-detail';
 import { Goals } from './pages/goals';
@@ -29,13 +26,10 @@ export function App() {
   return (
     <Routes>
       <Route element={<AppLayout />}>
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
-        <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/" element={<Navigate to="/chat" replace />} />
         <Route path="/chat" element={<Chat />} />
         <Route path="/devices" element={<Devices />} />
         <Route path="/devices/:id" element={<DeviceDetail />} />
-        <Route path="/accounts" element={<Accounts />} />
-        <Route path="/accounts/:id" element={<AccountDetail />} />
         <Route path="/notes" element={<Notes />} />
         <Route path="/notes/:id" element={<NoteDetail />} />
         <Route path="/goals" element={<Goals />} />

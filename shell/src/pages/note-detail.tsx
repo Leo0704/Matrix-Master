@@ -82,7 +82,7 @@ export function NoteDetail() {
   );
 }
 
-function Row({ k, v, mono = false }: { k: string; v: string; mono?: boolean }) {
+function Row({ k, v, mono = false }: { k: string; v: string | null | undefined; mono?: boolean }) {
   return (
     <div className="flex items-center justify-between">
       <span className="text-muted-foreground">{k}</span>

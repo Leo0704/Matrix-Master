@@ -19,6 +19,11 @@ from matrix.monitoring.logging import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+_INTERNAL_KEY_PREFIXES = ("hmac_secret:",)
+
+
+def _is_internal_key(key: str) -> bool:
+    return key.startswith(_INTERNAL_KEY_PREFIXES)
 
 
 def _to_schema(row: AppConfig) -> AppSetting:
@@ -35,6 +40,7 @@ async def list_settings(
     session: AsyncSession = Depends(get_db),
 ) -> AppSettingList:
     rows = (await session.execute(select(AppConfig).order_by(AppConfig.key))).scalars().all()
+    rows = [row for row in rows if not _is_internal_key(row.key)]
     return AppSettingList(items=[_to_schema(r) for r in rows])
 
 
@@ -42,6 +48,8 @@ async def list_settings(
 async def get_setting(
     key: str, session: AsyncSession = Depends(get_db)
 ) -> AppSetting:
+    if _is_internal_key(key):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "setting not found")
     row = await session.get(AppConfig, key)
     if row is None:
         # 不存在时返回空值，前端可按需处理（避免 404 让前端逻辑复杂）
@@ -55,6 +63,8 @@ async def upsert_setting(
     body: AppSettingUpsert,
     session: AsyncSession = Depends(get_db),
 ) -> AppSetting:
+    if _is_internal_key(key):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "internal settings cannot be modified")
     row = await session.get(AppConfig, key)
     now = datetime.now(timezone.utc)
     if row is None:

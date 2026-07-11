@@ -48,12 +48,13 @@ function NoteForm({
   submitting,
 }: {
   initial?: Note;
-  defaultAccountId: string;
+  /** v0.7 Phase 5：草稿可能 account_id 为空；空串表示未绑账号 */
+  defaultAccountId: string | null | undefined;
   onSubmit: (body: NoteCreateBody | NoteUpdateBody) => Promise<void>;
   onCancel?: () => void;
   submitting?: boolean;
 }) {
-  const [accountId, setAccountId] = useState(initial?.account_id ?? defaultAccountId);
+  const [accountId, setAccountId] = useState(initial?.account_id ?? defaultAccountId ?? '');
   const [title, setTitle] = useState(initial?.title ?? '');
   const [content, setContent] = useState(initial?.content ?? '');
   const [tagsText, setTagsText] = useState((initial?.tags ?? []).join(', '));
@@ -139,7 +140,7 @@ export function Notes() {
   const [editing, setEditing] = useState<Note | null>(null);
 
   const items = data?.items ?? [];
-  const defaultAccountId = accountsQ.data?.items?.[0]?.id ?? '';
+  const defaultAccountId = accountsQ.data?.items?.[0]?.id;
 
   async function handleCreate(body: NoteCreateBody | NoteUpdateBody) {
     try {

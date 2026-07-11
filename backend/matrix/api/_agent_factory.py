@@ -10,7 +10,7 @@ from typing import Any, Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from matrix.agent.bootstrap import build_agent_services
+from matrix.agent.bootstrap import build_agent_services, db_note_writer
 from matrix.agent._services import AgentServices
 from matrix.kb.embedding import EmbeddingService
 from matrix.kb.retrieval import Retriever
@@ -135,14 +135,16 @@ async def build_runtime_services(
         scheduler = DefaultSlotPicker(session_factory)
 
     from matrix.device.adapters import ApkHttpClient
+    from matrix.device.endpoints import DeviceEndpointResolver
 
     services = build_agent_services(
         llm=llm,
         kb_retriever=_LazyRetriever(session_factory, embedder),
         kb_writer=_LazyWriter(session_factory, embedder),
-        device_adapter=ApkHttpClient(),
+        device_adapter=ApkHttpClient(resolver=DeviceEndpointResolver(session_factory)),
         config=_LazyConfigReader(session_factory),
         task_writer=task_writer,
+        note_writer=db_note_writer,  # v0.7 Phase 5：DRAFT 草稿直接落 notes 表
         scheduler=scheduler,
     )
     return services
