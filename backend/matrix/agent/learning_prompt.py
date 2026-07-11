@@ -12,7 +12,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from matrix.db.models import KbDocument

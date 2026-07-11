@@ -144,8 +144,12 @@ class TestAdvanceGoal:
         exec_result = MagicMock()
         exec_result.scalars.return_value.all.return_value = []
         session.execute = AsyncMock(return_value=exec_result)
+        # 强制 _prepare_round 走「notes_per_round 份占位 brief」分支，避免被全局 _SERVICES / KB mock 干扰
+        target_briefs = [dict(g.target or {}) for _ in range(NOTES_PER_ROUND)]
+        with patch("matrix.agent.orchestrator._decompose_goal", AsyncMock(return_value=target_briefs)), \
+             patch("matrix.agent.orchestrator._fallback_briefs_from_kb", AsyncMock(return_value=target_briefs)):
+            result = await advance_goal(session, g)
 
-        result = await advance_goal(session, g)
         assert result.phase_after == PHASE_EXECUTING
         # 验证 session.add 被调用了 NOTES_PER_ROUND 次（run）+ 1（goal_round）
         assert session.add.call_count == NOTES_PER_ROUND + 1

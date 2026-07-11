@@ -65,4 +65,10 @@ Thumbs.db
 
 # Tauri / 前端构建产物
 shell/dist/
+# tsc / vite / vitest 编译产出（tsc -b + vite build 自动生成）
+/shell/tsconfig*.tsbuildinfo
+/shell/vite.config.js
+/shell/vite.config.d.ts
+/shell/vitest.config.js
+/shell/vitest.config.d.ts
 _real_device_*.py

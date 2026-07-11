@@ -361,6 +361,10 @@ async def test_publish_then_interact_runs_end_to_end():
             )
         )
     )
+    # 活跃窗测试把窗口设成全天，避免受 datetime.now(UTC) 影响（容器时区+8h）
+    services.system_metadata = {
+        "persona_config": {"active_window": {"start": 0, "end": 24}}
+    }
     rm = RunManager(services=services, repository=InMemoryAgentRepository())
 
     run_id = await rm.create_run(

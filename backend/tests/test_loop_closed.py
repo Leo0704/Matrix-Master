@@ -57,6 +57,10 @@ async def test_closed_loop_runs_end_to_end():
         device_adapter=device,
         scheduler=_FakeSlotPicker(),
     )
+    # 活跃窗测试把窗口设成全天，避免受 datetime.now(UTC) 影响（容器时区+8h）
+    services.system_metadata = {
+        "persona_config": {"active_window": {"start": 0, "end": 24}}
+    }
     rm = build_run_manager(services=services, repository=InMemoryAgentRepository())
 
     run_id = await rm.create_run(goal_text="发一篇夏日穿搭笔记", entry="RESEARCH")

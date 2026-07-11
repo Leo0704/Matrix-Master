@@ -26,6 +26,7 @@ from uuid import UUID, uuid4
 import pytest
 from matrix.agent._services import (
     AgentServices,
+    get_services,
     reset_services,
     set_services,
 )
@@ -1170,6 +1171,10 @@ class TestStateMachine:
         set_services(
             make_services(llm=llm, writer=writer, publisher=publisher, scheduler=scheduler)
         )
+        # 活跃窗测试把窗口设成全天，避免受 datetime.now(UTC) 影响（容器时区+8h）
+        get_services().system_metadata = {
+            "persona_config": {"active_window": {"start": 0, "end": 24}}
+        }
         sm = build_state_machine()
         result = await sm.ainvoke(
             {

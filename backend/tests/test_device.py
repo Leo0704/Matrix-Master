@@ -173,15 +173,6 @@ def _default_execute(store: dict, stmt: Any) -> FakeResult:
     return FakeResult(rows=rows)
 
 
-def _coerce_uuid(s: str):
-    """字符串 → UUID；非 UUID 字符串原样返回。"""
-    try:
-        import uuid as _uuid
-        return _uuid.UUID(s)
-    except (ValueError, AttributeError):
-        return s
-
-
 def _extract_tag_filter(stmt: Any) -> Optional[Any]:
     """从 SQLAlchemy ``select(...).where(and_(...))`` 中提取 ``Device.tags.contains([tag])`` 的值。"""
     wc = getattr(stmt, "whereclause", None)

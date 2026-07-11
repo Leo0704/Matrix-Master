@@ -408,24 +408,6 @@ async def test_pair_device_bad_code(
 # ---------------------------------------------------------------------------
 
 
-def _mk_account(**kwargs: Any) -> Account:
-    base = dict(
-        id=uuid.uuid4(),
-        handle=kwargs.pop("handle", "xhs_user_1"),
-        persona_id=uuid.uuid4(),
-        device_id=uuid.uuid4(),
-        status="active",
-        last_active=datetime.now(timezone.utc),
-        risk_score=0.1,
-        auto_suspend_until=None,
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
-        deleted_at=None,
-    )
-    base.update(kwargs)
-    return Account(**base)
-
-
 def _mk_persona(**kwargs: Any) -> Persona:
     base = dict(
         id=uuid.uuid4(),
@@ -496,28 +478,6 @@ async def test_create_persona(client: AsyncClient) -> None:
 # ---------------------------------------------------------------------------
 # /notes
 # ---------------------------------------------------------------------------
-
-
-def _mk_note(**kwargs: Any) -> Note:
-    base = dict(
-        id=uuid.uuid4(),
-        account_id=kwargs.pop("account_id", uuid.uuid4()),
-        title="hello",
-        content="world",
-        images=[],
-        tags=[],
-        status="draft",
-        platform_note_id=None,
-        platform_url=None,
-        request_id=None,
-        scheduled_at=None,
-        published_at=None,
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
-        deleted_at=None,
-    )
-    base.update(kwargs)
-    return Note(**base)
 
 
 @pytest.mark.asyncio
