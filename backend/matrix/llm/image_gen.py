@@ -256,8 +256,8 @@ class MiniMaxImageGenClient(ImageGenClient):
         **kwargs: Any,
     ) -> None:
         settings = get_settings()
-        self._api_key = api_key or settings.MiniMax_api_key or ""
-        self._base_url = (base_url or settings.MiniMax_base_url or self.DEFAULT_BASE_URL).rstrip("/")
+        self._api_key = api_key or settings.minimax_api_key or ""
+        self._base_url = (base_url or settings.minimax_base_url or self.DEFAULT_BASE_URL).rstrip("/")
         self._model = model
 
     async def generate(
