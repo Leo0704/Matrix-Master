@@ -132,31 +132,27 @@ export function Settings() {
         <TabsContent value="llm" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">文本大模型</CardTitle>
+              <CardTitle className="text-base">文本大模型 API Key</CardTitle>
               <CardDescription>
-                写笔记 / 主题识别 / 检查草稿用的语言模型。哪家的 key 填了，就能用哪家。
+                写笔记 / 主题识别用的语言模型。当前用 MiniMax（设置 1 个 provider 就够）。
                 API key 存在 app_config 表（生产建议改用系统 keyring）。
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <SettingField settingKey="llm.api_key_anthropic" label="Anthropic（Claude）" type="password" description="sk-ant-…" />
-              <SettingField settingKey="llm.api_key_openai" label="OpenAI（GPT）" type="password" description="sk-…" />
-              <SettingField settingKey="openai_api_key" label="OpenAI（兼容 key，给智谱/硅基流动等通用）" type="password" description="sk-…" />
-              <SettingField settingKey="dashscope_api_key" label="阿里通义千问（DASHSCOPE_API_KEY）" type="password" description="sk-…" />
-              <SettingField settingKey="deepseek_api_key" label="DeepSeek（DEEPSEEK_API_KEY）" type="password" description="sk-…" />
-              <SettingField settingKey="zhipuai_api_key" label="智谱 GLM（ZHIPUAI_API_KEY）" type="password" description="sk-…" />
-              <SettingField settingKey="doubao_api_key" label="豆包（火山方舟 DOUBAO_API_KEY）" type="password" description="sk-…" />
-              <SettingField settingKey="minimax_api_key" label="MiniMax（MINIMAX_API_KEY，本系统当前默认）" type="password" description="sk-…" />
+              <SettingField settingKey="minimax_api_key" label="MiniMax" type="password" description="sk-…（MINIMAX_API_KEY）" />
             </CardContent>
           </Card>
           <Card>
             <CardHeader>
               <CardTitle className="text-base">路由默认</CardTitle>
-              <CardDescription>指定新任务用哪个 provider + 模型。留空走 provider 默认模型。</CardDescription>
+              <CardDescription>
+                切 provider 时改 MATRIX_LLM_PROVIDER；模型空走 provider 默认。
+                未填的 provider 路由不到。
+              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <SettingField settingKey="matrix_llm_provider" label="默认 provider（anthropic / openai / deepseek / tongyi / glm / doubao / minimax）" description="MATRIX_LLM_PROVIDER" />
-              <SettingField settingKey="matrix_llm_model" label="默认模型名（空走 provider 默认）" description="MATRIX_LLM_MODEL" />
+              <SettingField settingKey="matrix_llm_provider" label="默认 provider" description="MATRIX_LLM_PROVIDER（minimax / anthropic / openai / tongyi / glm / deepseek / doubao）" />
+              <SettingField settingKey="matrix_llm_model" label="默认模型名" description="MATRIX_LLM_MODEL（空走 provider 默认）" />
             </CardContent>
           </Card>
         </TabsContent>
@@ -164,22 +160,16 @@ export function Settings() {
         <TabsContent value="image" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">图像大模型</CardTitle>
+              <CardTitle className="text-base">图像大模型 API Key</CardTitle>
               <CardDescription>
-                写小红书笔记时自动配图用的模型。哪家的 key 填了，就能用哪家。
+                写小红书笔记时自动配图。当前用 MiniMax。
+                切 provider 时改下面 MATRIX_IMAGE_PROVIDER + 加对应 key。
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <SettingField settingKey="openai_api_key" label="通用（OpenAI / 兼容的 OpenAI key）" type="password" description="sk-…" />
-              <SettingField settingKey="dashscope_api_key" label="通义 Wanxiang（DASHSCOPE_API_KEY）" type="password" description="sk-…" />
-              <SettingField settingKey="zhipuai_api_key" label="智谱 CogView（ZHIPUAI_API_KEY）" type="password" description="sk-…" />
-              <SettingField settingKey="doubao_api_key" label="豆包 Seedream（DOUBAO_API_KEY）" type="password" description="sk-…" />
-              <SettingField settingKey="minimax_api_key" label="MiniMax 文生图（MINIMAX_API_KEY）" type="password" description="sk-…" />
-              <SettingField settingKey="dashscope_base_url" label="通义 base_url（空走默认）" description="DASHSCOPE_BASE_URL" />
-              <SettingField settingKey="zhipuai_base_url" label="智谱 base_url（空走默认）" description="ZHIPUAI_BASE_URL" />
-              <SettingField settingKey="doubao_base_url" label="豆包 base_url（空走默认）" description="DOUBAO_BASE_URL" />
-              <SettingField settingKey="minimax_base_url" label="MiniMax base_url（默认 https://api.minimaxi.com）" description="MINIMAX_BASE_URL" />
-              <SettingField settingKey="matrix_image_provider" label="默认图像 provider（in_memory / tongyi_wanxiang / zhipu_cogview / doubao_seedream / MiniMax_image_gen）" description="MATRIX_IMAGE_PROVIDER" />
+              <SettingField settingKey="minimax_api_key" label="MiniMax 文生图" type="password" description="sk-…（MINIMAX_API_KEY）" />
+              <SettingField settingKey="minimax_base_url" label="MiniMax base_url" description="MINIMAX_BASE_URL（默认 https://api.minimaxi.com）" />
+              <SettingField settingKey="matrix_image_provider" label="默认图像 provider" description="MATRIX_IMAGE_PROVIDER（MiniMax_image_gen / in_memory / tongyi_wanxiang / zhipu_cogview / doubao_seedream）" />
             </CardContent>
           </Card>
         </TabsContent>
@@ -189,14 +179,13 @@ export function Settings() {
             <CardHeader>
               <CardTitle className="text-base">嵌入大模型</CardTitle>
               <CardDescription>
-                把知识库文档转成向量用的模型。哪家的 key + base_url 填了，就能用哪家。
+                把知识库文档转成向量。当前用硅基流动（OpenAI 兼容协议）。
+                切官方 OpenAI 就只填 key + 把 EMBEDDING_BASE_URL 清空。
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <SettingField settingKey="openai_api_key" label="OpenAI（text-embedding-3-small/large）" type="password" description="sk-…" />
-              <SettingField settingKey="embedding_base_url" label="自定义 base_url（空走 OpenAI 官方）" description="EMBEDDING_BASE_URL — 填硅基流动就写 https://api.siliconflow.cn/v1" />
-              <SettingField settingKey="minimax_api_key" label="MiniMax（如果你的 embedding 也走 MiniMax）" type="password" description="sk-…" />
-              <SettingField settingKey="minimax_base_url" label="MiniMax base_url（embedding 端点）" description="MINIMAX_BASE_URL" />
+              <SettingField settingKey="openai_api_key" label="API Key（OpenAI 兼容 key）" type="password" description="sk-…（OPENAI_API_KEY）" />
+              <SettingField settingKey="embedding_base_url" label="自定义 base_url" description="EMBEDDING_BASE_URL（硅基流动填 https://api.siliconflow.cn/v1，留空走 OpenAI 官方）" />
             </CardContent>
           </Card>
         </TabsContent>
