@@ -42,7 +42,11 @@ DRAFT_USER = (
     "人设指南: {persona_style}\n"
     "人设语气: {persona_tone}\n"
     "违禁词: {forbidden_words}\n"
-    "品牌定位参考: {brand}\n"
+    "品牌定位参考: {brand}\n\n"
+    "## 学到的经验(来自历史发布的 AI 复盘提炼，优先遵循)\n"
+    "{strategy_cards_section}\n\n"
+    "## 最近同类发布效果(辅助参考)\n"
+    "{history_section}\n\n"
     "输出 JSON：{{\"title\": str, \"content\": str, \"tags\": [str, ...]}}"
 )
 

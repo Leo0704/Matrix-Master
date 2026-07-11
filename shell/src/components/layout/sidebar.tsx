@@ -27,7 +27,6 @@ const nav = [
   { to: '/data', label: '数据', icon: BarChart3 },
   { to: '/kb', label: '知识库', icon: BookOpen },
   { to: '/alerts', label: '告警', icon: Bell },
-  { to: '/settings', label: '设置', icon: Settings },
 ];
 
 export function Sidebar() {

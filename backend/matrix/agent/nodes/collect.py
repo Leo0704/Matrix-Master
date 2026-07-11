@@ -43,11 +43,11 @@ async def collect_node(state: AgentState) -> dict[str, Any]:
             "last_error": {"code": "COLLECT_FAILED", "message": str(exc)},
         }
 
-    # 保留只有合法 keys
+    # 保留只有合法 keys，且 APK 没采到的字段（None）直接丢弃，不写进 metrics。
     clean_metrics = {
         k: int(v)
         for k, v in metrics.items()
-        if k in {"views", "likes", "collects", "comments", "follows_gained"}
+        if k in {"views", "likes", "collects", "comments", "follows_gained"} and v is not None
     }
 
     return {

@@ -28,6 +28,9 @@ async def draft_node(state: AgentState) -> dict[str, Any]:
     persona_chunks = []
     rule_chunks = []
     brand_chunks = []
+    # 2. 取历史复盘经验卡（analyze 节点提炼写入），优先于 raw history
+    strategy_card_chunks = []
+    history_chunks = []
     try:
         persona_chunks = await services.kb_retriever.retrieve(
             RetrieveQuery(query=topic_title, doc_types=("persona",), top_k=2)
@@ -38,9 +41,17 @@ async def draft_node(state: AgentState) -> dict[str, Any]:
         brand_chunks = await services.kb_retriever.retrieve(
             RetrieveQuery(query=topic_title, doc_types=("brand",), top_k=1)
         )
+        # 自我进化闭环：先取提炼好的 strategy_card，再辅以 history 原文
+        strategy_card_chunks = await services.kb_retriever.retrieve(
+            RetrieveQuery(query=topic_title, doc_types=("strategy_card",), top_k=5)
+        )
+        history_chunks = await services.kb_retriever.retrieve(
+            RetrieveQuery(query=topic_title, doc_types=("history",), top_k=3)
+        )
     except Exception:
         logger.exception("draft.kb_retrieve failed")
         rule_chunks, persona_chunks, brand_chunks = [], [], []
+        strategy_card_chunks, history_chunks = [], []
 
     persona_name = ""
     persona_tone = ""
@@ -70,6 +81,8 @@ async def draft_node(state: AgentState) -> dict[str, Any]:
         persona_tone=persona_tone or "(neutral)",
         forbidden_words=", ".join(forbidden_words) or "(none)",
         brand=join_chunks(brand_chunks),
+        strategy_cards_section=_format_strategy_cards(strategy_card_chunks),
+        history_section=_format_history_chunks(history_chunks),
     )
     # 主题摘要（brief）作为最高优先级上下文放 prompt 顶部
     brief_section = format_brief(state.get("brief") if isinstance(state.get("brief"), dict) else None)
@@ -121,3 +134,49 @@ def _field(text: str, key: str) -> str:
         if line.lower().startswith(needle):
             return line.split(":", 1)[1].strip()
     return ""
+
+
+def _format_strategy_cards(chunks: list) -> str:
+    """把 strategy_card chunks 拼成 prompt 可读的经验清单。
+
+    chunk.text 是 analyze 节点写入的 JSON（见 ``_format_strategy_card``）。
+    取 ``lessons`` 字段作为本次写稿的"教训清单"；解析失败时 fallback 到原文前 200 字。
+    """
+    import json
+
+    if not chunks:
+        return "(none)"
+    lines: list[str] = []
+    for c in chunks:
+        text = getattr(c, "text", "") or ""
+        lessons: list[str] = []
+        try:
+            payload = json.loads(text)
+            if isinstance(payload, dict):
+                ls = payload.get("lessons") or []
+                if isinstance(ls, list):
+                    lessons = [str(x) for x in ls if x]
+        except Exception:
+            # fallback：原文前 200 字
+            lessons = [text[:200].strip()] if text.strip() else []
+        if not lessons:
+            continue
+        lines.append("- " + " | ".join(lessons))
+    return "\n".join(lines) if lines else "(none)"
+
+
+def _format_history_chunks(chunks: list) -> str:
+    """把 history chunks 拼成简短摘要（标题 + 关键数据），不抢策略卡的版面。"""
+    if not chunks:
+        return "(none)"
+    lines: list[str] = []
+    for c in chunks:
+        text = (getattr(c, "text", "") or "").strip()
+        if not text:
+            continue
+        # history 的 content 第一行是 "# 标题"，取它作为可读摘要的前缀
+        head = text.split("\n", 1)[0].lstrip("# ").strip()
+        # 取 metrics 行（如 "views=0, likes=12, ..."），作为效果佐证
+        snippet = text[:200]
+        lines.append(f"- {head} | {snippet[:120]}")
+    return "\n".join(lines) if lines else "(none)"

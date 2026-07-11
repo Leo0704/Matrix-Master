@@ -43,9 +43,7 @@ export function Topbar() {
           </Link>
         </Button>
         <Button variant="ghost" size="icon" asChild aria-label="设置">
-          <Link to="/settings">
-            <User className="h-5 w-5" />
-          </Link>
+          
         </Button>
       </div>
     </header>

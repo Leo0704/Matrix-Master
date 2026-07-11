@@ -129,9 +129,14 @@ class ApkHttpClient(DevicePublisher, DeviceCollector, DeviceInteractor):
         )
         resp.raise_for_status()
         data = resp.json()
+        # APK 可能对未采集字段返回 null（见 NoteMetric.views），不假装成 0；
+        # 直接丢弃 None 键，下游 collect_node 会跳过，ANALYZE 节点就能识别"未采集"。
         return {
-            k: int(data.get(k, 0))
-            for k in ("views", "likes", "collects", "comments", "follows_gained")
+            k: int(v)
+            for k, v in (
+                (k, data.get(k)) for k in ("views", "likes", "collects", "comments", "follows_gained")
+            )
+            if v is not None
         }
 
     async def interact(

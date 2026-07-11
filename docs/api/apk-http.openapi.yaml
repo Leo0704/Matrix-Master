@@ -427,6 +427,8 @@ components:
           type: string
         views:
           type: integer
+          nullable: true
+          description: 个人主页不可见时为 null（不假装是 0）
         likes:
           type: integer
         collects:

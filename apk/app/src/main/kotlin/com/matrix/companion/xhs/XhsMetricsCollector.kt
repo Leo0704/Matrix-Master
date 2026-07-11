@@ -19,7 +19,8 @@ class XhsMetricsCollector(private val driver: AccessibilityDriver) {
     @Serializable
     data class NoteMetric(
         val note_id: String? = null,
-        val views: Int = 0,
+        // views 个人主页不可见，需进入笔记详情页抓取；采集不到时为 null（不假装是 0 误导下游）
+        val views: Int? = null,
         val likes: Int = 0,
         val collects: Int = 0,
         val comments: Int = 0,
@@ -49,7 +50,8 @@ class XhsMetricsCollector(private val driver: AccessibilityDriver) {
             listOf(
                 NoteMetric(
                     note_id = null,
-                    views = 0,
+                    // 个人主页读不到单条笔记的阅读量；等接入笔记详情页采集后再填
+                    views = null,
                     likes = likes,
                     collects = collects,
                     comments = comments,

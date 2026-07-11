@@ -497,9 +497,12 @@ class TestPrompts:
             persona_tone="pt",
             forbidden_words="",
             brand="br",
-            product_facts="",
+            strategy_cards_section="scs",
+            history_section="hs",
         )
         assert "tt" in out and "tr" in out
+        assert "scs" in out and "hs" in out
+        assert "学到的经验" in out
         assert DRAFT_SYSTEM.format(persona_name="pn").startswith("你是")
 
     def test_review_prompt_format(self):
@@ -748,6 +751,34 @@ class TestNodes:
         assert result["note_metrics"]["views"] == 50
 
     @pytest.mark.asyncio
+    async def test_collect_skips_none_views(self):
+        """APK 端 views=null（个人主页采集不到）时，clean_metrics 不应含 views 键。
+
+        不假装是 0，避免下游 ANALYZE 误判"浏览量真的是 0"。
+        """
+
+        async def fake_collect(**kwargs):
+            return {
+                "views": None,
+                "likes": 5,
+                "collects": 1,
+                "comments": 0,
+                "follows_gained": 0,
+            }
+
+        services = make_services()
+        services.device_collector = SimpleNamespace(collect=fake_collect)
+        set_services(services)
+        result = await collect_node(
+            {
+                "publish_result": {"platform_note_id": "p1"},
+                "slot": {"device_id": str(uuid4()), "account_id": str(uuid4())},
+            }
+        )
+        assert "views" not in result["note_metrics"]
+        assert result["note_metrics"]["likes"] == 5
+
+    @pytest.mark.asyncio
     async def test_analyze_writes_history(self):
         llm = FakeLLM(
             mapping={
@@ -765,9 +796,177 @@ class TestNodes:
             }
         )
         assert result["last_error"] is None
+        assert len(writer.calls) == 2
+        assert writer.calls[0]["doc_type"] == "history"
+        assert writer.calls[1]["doc_type"] == "strategy_card"
+        assert "爆款" in writer.calls[0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_analyze_writes_strategy_card(self):
+        """自我进化闭环：analyze 节点除写 history 外，还要写 strategy_card。
+
+        strategy_card 的 content 是 JSON，含 lessons 列表，便于 draft 节点下次召回。
+        """
+        llm = FakeLLM(
+            mapping={
+                "你是运营复盘员": json.dumps(
+                    {
+                        "review_text": "标题吸引人但内容偏短",
+                        "strategy_updates": ["用数字开头", "结尾加 CTA", "正文控制在 200 字内"],
+                    }
+                )
+            }
+        )
+        writer = FakeKBWriter()
+        set_services(make_services(llm=llm, writer=writer))
+        result = await analyze_node(
+            {
+                "draft": {"title": "夏日穿搭", "content": "短正文", "tags": ["穿搭"]},
+                "note_metrics": {"views": 0, "likes": 12, "collects": 2, "comments": 0, "follows_gained": 0},
+            }
+        )
+        assert result["last_error"] is None
+        # history + strategy_card 两份文档
+        assert len(writer.calls) == 2
+        assert writer.calls[0]["doc_type"] == "history"
+        card_call = writer.calls[1]
+        assert card_call["doc_type"] == "strategy_card"
+        # content 是 JSON，含所有 lessons
+        card_payload = json.loads(card_call["content"])
+        assert "用数字开头" in card_payload["lessons"]
+        assert "结尾加 CTA" in card_payload["lessons"]
+        assert card_payload["applies_to_tags"] == ["穿搭"]
+        # metadata 含 confidence=low
+        assert card_call["metadata"]["confidence"] == "low"
+
+    @pytest.mark.asyncio
+    async def test_analyze_skips_strategy_card_when_no_updates(self):
+        """LLM 没出 strategy_updates 时，不写 strategy_card（避免空文档污染 KB）。"""
+        llm = FakeLLM(
+            mapping={
+                "你是运营复盘员": json.dumps({"review_text": "平平无奇", "strategy_updates": []})
+            }
+        )
+        writer = FakeKBWriter()
+        set_services(make_services(llm=llm, writer=writer))
+        await analyze_node(
+            {
+                "draft": {"title": "t", "content": "c", "tags": []},
+                "note_metrics": {"views": 0, "likes": 0, "collects": 0, "comments": 0, "follows_gained": 0},
+            }
+        )
+        # 只写 history，不写 strategy_card
         assert len(writer.calls) == 1
         assert writer.calls[0]["doc_type"] == "history"
-        assert "爆款" in writer.calls[0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_draft_retrieves_strategy_cards(self):
+        """draft 节点要从 KB 取 strategy_card（自我进化闭环）。"""
+        llm = FakeLLM(
+            mapping={
+                "你是小红书爆款文案写手": json.dumps(
+                    {"title": "夏日穿搭 5 招", "content": "...", "tags": ["穿搭"]}
+                )
+            }
+        )
+        kb = FakeKBRetriever()
+        set_services(make_services(llm=llm, kb=kb))
+        await draft_node({"selected_topic": {"title": "夏日穿搭", "rationale": "hot"}})
+        # 必须有 strategy_card 类型的检索调用
+        card_calls = [c for c in kb.calls if c.doc_types and "strategy_card" in c.doc_types]
+        assert len(card_calls) == 1
+        assert card_calls[0].top_k == 5
+
+    @pytest.mark.asyncio
+    async def test_draft_includes_strategy_cards_in_prompt(self, monkeypatch):
+        """有 strategy_card 时，draft prompt 必须包含经验卡的 lessons。"""
+        from matrix.agent.nodes import draft as draft_module
+
+        card_text = json.dumps(
+            {
+                "lessons": ["用数字开头", "结尾加 CTA"],
+                "evidence_metrics": {"likes": 50},
+                "applies_to_tags": ["美妆"],
+            },
+            ensure_ascii=False,
+        )
+        kb = FakeKBRetriever(
+            mapping={
+                ("strategy_card", "美妆选题"): [
+                    RetrievedChunk(
+                        chunk_id=uuid4(),
+                        doc_id=uuid4(),
+                        doc_type="strategy_card",
+                        text=card_text,
+                        score=0.9,
+                        metadata={},
+                    )
+                ]
+            }
+        )
+        captured: dict[str, str] = {}
+        original_llm_complete = draft_module.llm_complete
+
+        async def spy(system, user, **kwargs):
+            captured["user"] = user
+            return await original_llm_complete(system, user, **kwargs)
+
+        monkeypatch.setattr(draft_module, "llm_complete", spy)
+
+        llm = FakeLLM(
+            mapping={
+                "你是小红书爆款文案写手": json.dumps(
+                    {"title": "t", "content": "c", "tags": []}
+                )
+            }
+        )
+        set_services(make_services(llm=llm, kb=kb))
+        await draft_node({"selected_topic": {"title": "美妆选题", "rationale": "hot"}})
+        assert "用数字开头" in captured["user"]
+        assert "结尾加 CTA" in captured["user"]
+
+    @pytest.mark.asyncio
+    async def test_draft_graceful_without_strategy_cards(self, monkeypatch):
+        """没有 strategy_card 时，draft prompt 优雅降级为 (none)，不报错。"""
+        from matrix.agent.nodes import draft as draft_module
+
+        captured: dict[str, str] = {}
+        original_llm_complete = draft_module.llm_complete
+
+        async def spy(system, user, **kwargs):
+            captured["user"] = user
+            return await original_llm_complete(system, user, **kwargs)
+
+        monkeypatch.setattr(draft_module, "llm_complete", spy)
+
+        llm = FakeLLM(
+            mapping={
+                "你是小红书爆款文案写手": json.dumps(
+                    {"title": "t", "content": "c", "tags": []}
+                )
+            }
+        )
+        # 默认 FakeKBRetriever 返回非 JSON fake chunk，_format_strategy_cards 解析失败时 fallback
+        kb = FakeKBRetriever(
+            mapping={
+                ("strategy_card", "新品"): [
+                    RetrievedChunk(
+                        chunk_id=uuid4(),
+                        doc_id=uuid4(),
+                        doc_type="strategy_card",
+                        text="(no strategy cards)",  # 模拟空命中
+                        score=0.1,
+                        metadata={},
+                    )
+                ]
+            }
+        )
+        set_services(make_services(llm=llm, kb=kb))
+        result = await draft_node({"selected_topic": {"title": "新品", "rationale": "r"}})
+        assert result["last_error"] is None
+        assert result["draft"]["title"] == "t"
+        # prompt 里仍然包含占位符（哪怕值为 (none)），说明模板渲染没崩
+        assert "学到的经验" in captured["user"]
 
     @pytest.mark.asyncio
     async def test_alert_emits_notification(self):

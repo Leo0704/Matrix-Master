@@ -1,6 +1,8 @@
-"""ANALYZE 节点：复盘 + 写历史到 KB。"""
+"""ANALYZE 节点：复盘 + 写历史到 KB + 提炼经验卡。"""
 
 from __future__ import annotations
+
+import json
 
 from matrix.monitoring.logging import get_logger
 from typing import Any
@@ -16,7 +18,8 @@ logger = get_logger(__name__)
 
 async def analyze_node(state: AgentState) -> dict[str, Any]:
     """调 LLM 出复盘文本 + strategy_updates；通过 ``kb_writer.upsert_document``
-    把这次笔记作为一条 ``type=history`` 文档写入 KB。
+    把这次笔记作为一条 ``type=history`` 文档写入 KB，并把 strategy_updates
+    提炼成一条 ``type=strategy_card`` 文档（draft 节点下次写稿时优先召回）。
     """
     services = get_services()
     draft = state.get("draft") or {}
@@ -92,6 +95,30 @@ async def analyze_node(state: AgentState) -> dict[str, Any]:
         logger.exception("analyze.kb_writer.upsert_document failed")
         # 写库失败不阻塞 state machine 回到 IDLE；上层会重试或告警
 
+    # 提炼 strategy_card：把本次 strategy_updates 装成可被 draft 节点下次召回的
+    # 结构化经验卡。一条 run 一张卡，content 是 JSON（lesson + 证据 + 适用主题）。
+    if strategy_updates:
+        try:
+            card_content = _format_strategy_card(
+                lessons=strategy_updates,
+                metrics=metrics,
+                tags=draft.get("tags") or [],
+            )
+            await services.kb_writer.upsert_document(
+                doc_type="strategy_card",
+                ref_id=None,
+                title=strategy_updates[0][:256],
+                content=card_content,
+                metadata={
+                    "lessons": strategy_updates,
+                    "metrics": metrics,
+                    "tags": draft.get("tags") or [],
+                    "confidence": "low",  # 单 run 样本，置信度固定 low；累积后人工/统计再升档
+                },
+            )
+        except Exception:
+            logger.exception("analyze.kb_writer.upsert_document strategy_card failed")
+
     return {
         "last_error": None,
     }
@@ -119,3 +146,26 @@ def _format_history_content(
     if strategy_updates:
         parts += ["\n## strategy_updates", "\n".join(f"- {x}" for x in strategy_updates)]
     return "\n".join(parts)
+
+
+def _format_strategy_card(
+    *,
+    lessons: list[str],
+    metrics: dict[str, int],
+    tags: list[str],
+) -> str:
+    """把 strategy_updates 装成结构化经验卡（JSON 字符串，便于检索命中 + 渲染）。
+
+    schema:
+      {
+        "lessons": [str, ...],
+        "evidence_metrics": {"views": int, "likes": int, ...},
+        "applies_to_tags": [str, ...],
+      }
+    """
+    payload = {
+        "lessons": lessons,
+        "evidence_metrics": {k: int(metrics.get(k, 0)) for k in ("views", "likes", "collects", "comments", "follows_gained")},
+        "applies_to_tags": tags,
+    }
+    return json.dumps(payload, ensure_ascii=False)

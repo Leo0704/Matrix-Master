@@ -1103,3 +1103,80 @@ class TestDeviceAPI:
         assert result.nickname == "dev1"
         assert result.status == "active"
         assert result.tailnet_ip == "100.64.0.5"
+
+
+# ---------------------------------------------------------------------------
+# ApkHttpClient.collect: views=null 不假装成 0
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestApkHttpClientCollect:
+    async def test_skips_null_views(self) -> None:
+        """APK 端 NoteMetric.views=null 时，HTTP client 应丢弃该键（不变成 0）。
+
+        避免下游 collect_node / ANALYZE 误以为"浏览量真的是 0"。
+        """
+        from matrix.device.adapters import ApkEndpoint, ApkHttpClient
+
+        async with respx.mock(base_url="http://apk.local:8080") as mock:
+            mock.post("/xhs/collect_metrics").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "views": None,
+                        "likes": 10,
+                        "collects": 2,
+                        "comments": 1,
+                        "follows_gained": 0,
+                    },
+                )
+            )
+            async with ApkHttpClient(
+                resolver=AsyncMock(
+                    return_value=ApkEndpoint(base_url="http://apk.local:8080")
+                ),
+            ) as client:
+                result = await client.collect(
+                    device_id=uuid.uuid4(),
+                    account_id=uuid.uuid4(),
+                    platform_note_id="p1",
+                )
+            assert "views" not in result
+            assert result["likes"] == 10
+            assert result["collects"] == 2
+
+    async def test_returns_int_values_when_all_present(self) -> None:
+        """正常路径：APK 返回全字段时，dict 包含全部 5 个键且为 int。"""
+        from matrix.device.adapters import ApkEndpoint, ApkHttpClient
+
+        async with respx.mock(base_url="http://apk.local:8080") as mock:
+            mock.post("/xhs/collect_metrics").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "views": 100,
+                        "likes": 5,
+                        "collects": 1,
+                        "comments": 0,
+                        "follows_gained": 0,
+                    },
+                )
+            )
+            async with ApkHttpClient(
+                resolver=AsyncMock(
+                    return_value=ApkEndpoint(base_url="http://apk.local:8080")
+                ),
+            ) as client:
+                result = await client.collect(
+                    device_id=uuid.uuid4(),
+                    account_id=uuid.uuid4(),
+                    platform_note_id="p1",
+                )
+            assert result == {
+                "views": 100,
+                "likes": 5,
+                "collects": 1,
+                "comments": 0,
+                "follows_gained": 0,
+            }
