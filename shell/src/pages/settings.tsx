@@ -132,27 +132,26 @@ export function Settings() {
         <TabsContent value="llm" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">文本大模型 API Key</CardTitle>
+              <CardTitle className="text-base">文本大模型 密钥</CardTitle>
               <CardDescription>
-                写笔记 / 主题识别用的语言模型。当前用 MiniMax（设置 1 个 provider 就够）。
-                API key 存在 app_config 表（生产建议改用系统 keyring）。
+                写笔记 + 主题识别用的语言。当前用的是 MiniMax（设 1 个就够了）。
+                密钥存在系统设置表里。
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <SettingField settingKey="minimax_api_key" label="MiniMax" type="password" description="sk-…（MINIMAX_API_KEY）" />
+              <SettingField settingKey="minimax_api_key" label="MiniMax" type="password" description="sk-…（环境变量名 MINIMAX_API_KEY）" />
             </CardContent>
           </Card>
           <Card>
             <CardHeader>
               <CardTitle className="text-base">路由默认</CardTitle>
               <CardDescription>
-                切 provider 时改 MATRIX_LLM_PROVIDER；模型空走 provider 默认。
-                未填的 provider 路由不到。
+                想换供应商就改下面那个选择。模型名留空就行——会走供应商默认。
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <SettingField settingKey="matrix_llm_provider" label="默认 provider" description="MATRIX_LLM_PROVIDER（minimax / anthropic / openai / tongyi / glm / deepseek / doubao）" />
-              <SettingField settingKey="matrix_llm_model" label="默认模型名" description="MATRIX_LLM_MODEL（空走 provider 默认）" />
+              <SettingField settingKey="matrix_llm_provider" label="默认供应商" description="MATRIX_LLM_PROVIDER（minimax / anthropic / openai / tongyi / glm / deepseek / doubao）" />
+              <SettingField settingKey="matrix_llm_model" label="默认模型名" description="MATRIX_LLM_MODEL（留空走供应商默认）" />
             </CardContent>
           </Card>
         </TabsContent>
@@ -160,16 +159,16 @@ export function Settings() {
         <TabsContent value="image" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">图像大模型 API Key</CardTitle>
+              <CardTitle className="text-base">图像大模型 密钥</CardTitle>
               <CardDescription>
                 写小红书笔记时自动配图。当前用 MiniMax。
-                切 provider 时改下面 MATRIX_IMAGE_PROVIDER + 加对应 key。
+                想换供应商就改下面那个选择 + 加对应密钥。
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <SettingField settingKey="minimax_api_key" label="MiniMax 文生图" type="password" description="sk-…（MINIMAX_API_KEY）" />
-              <SettingField settingKey="minimax_base_url" label="MiniMax base_url" description="MINIMAX_BASE_URL（默认 https://api.minimaxi.com）" />
-              <SettingField settingKey="matrix_image_provider" label="默认图像 provider" description="MATRIX_IMAGE_PROVIDER（MiniMax_image_gen / in_memory / tongyi_wanxiang / zhipu_cogview / doubao_seedream）" />
+              <SettingField settingKey="minimax_api_key" label="MiniMax 文生图" type="password" description="sk-…（环境变量名 MINIMAX_API_KEY）" />
+              <SettingField settingKey="minimax_base_url" label="MiniMax 服务器地址" description="MINIMAX_BASE_URL（默认 https://api.minimaxi.com）" />
+              <SettingField settingKey="matrix_image_provider" label="默认图像供应商" description="MATRIX_IMAGE_PROVIDER（MiniMax_image_gen / in_memory / tongyi_wanxiang / zhipu_cogview / doubao_seedream）" />
             </CardContent>
           </Card>
         </TabsContent>
@@ -177,15 +176,15 @@ export function Settings() {
         <TabsContent value="embedding" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">嵌入大模型</CardTitle>
+              <CardTitle className="text-base">嵌入大模型（向量）</CardTitle>
               <CardDescription>
-                把知识库文档转成向量。当前用硅基流动（OpenAI 兼容协议）。
-                切官方 OpenAI 就只填 key + 把 EMBEDDING_BASE_URL 清空。
+                把知识库文档转成向量。当前用硅基流动。
+                想换 OpenAI 官方：把下面"服务器地址"那行清空，只留密钥。
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <SettingField settingKey="openai_api_key" label="API Key（OpenAI 兼容 key）" type="password" description="sk-…（OPENAI_API_KEY）" />
-              <SettingField settingKey="embedding_base_url" label="自定义 base_url" description="EMBEDDING_BASE_URL（硅基流动填 https://api.siliconflow.cn/v1，留空走 OpenAI 官方）" />
+              <SettingField settingKey="openai_api_key" label="密钥（OpenAI 兼容格式）" type="password" description="sk-…（环境变量名 OPENAI_API_KEY）" />
+              <SettingField settingKey="embedding_base_url" label="自定义服务器地址" description="EMBEDDING_BASE_URL（硅基流动填 https://api.siliconflow.cn/v1；留空走 OpenAI 官方）" />
             </CardContent>
           </Card>
         </TabsContent>
