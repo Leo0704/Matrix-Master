@@ -11,6 +11,7 @@ import { AlertsFeed } from '@/components/dashboard/alerts-feed';
 import { ChatInput } from '@/components/chat/chat-input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { formatState } from '@/types/api';
 
 export function Dashboard() {
   const metrics = useMetricsSummary();
