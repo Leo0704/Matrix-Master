@@ -14,29 +14,6 @@ from ._util import format_brief, join_chunks, parse_json_response
 logger = get_logger(__name__)
 
 
-# 阈值默认值（settings 里读不到时 fallback）
-DEFAULT_DUP_THRESHOLD: float = 0.85
-DEFAULT_HUMAN_THRESHOLD: float = 0.60
-
-
-async def _load_review_thresholds() -> tuple[float, float]:
-    """从 app_config 读 dup_threshold / human_threshold；缺失或读失败时 fallback 默认值。"""
-    try:
-        services = get_services()
-        if services.config is None:
-            return DEFAULT_DUP_THRESHOLD, DEFAULT_HUMAN_THRESHOLD
-        dup = float(
-            await services.config.get("review.dup_threshold", DEFAULT_DUP_THRESHOLD)
-        )
-        human = float(
-            await services.config.get("review.human_threshold", DEFAULT_HUMAN_THRESHOLD)
-        )
-        return dup, human
-    except Exception:
-        logger.exception("review.load_thresholds failed; using defaults")
-        return DEFAULT_DUP_THRESHOLD, DEFAULT_HUMAN_THRESHOLD
-
-
 async def review_node(state: AgentState) -> dict[str, Any]:
     """打分 + 通过/失败。结果回写 ``state["review"]``。"""
     services = get_services()
@@ -71,16 +48,11 @@ async def review_node(state: AgentState) -> dict[str, Any]:
     except Exception:
         logger.exception("review.kb_retrieve failed")
 
-    # 2. 阈值从 settings 读；缺失 fallback 默认值
-    dup_threshold, human_threshold = await _load_review_thresholds()
-
     user = prompts.REVIEW_USER.format(
         title=title,
         content=content,
         forbidden_words=", ".join(forbidden_words) or "(none)",
         similar_history=join_chunks(similar_chunks),
-        dup_threshold=dup_threshold,
-        human_threshold=human_threshold,
     )
     # 主题摘要注入：REVIEW 做一致性检查时要知道这条稿子围绕什么主题
     brief_section = format_brief(state.get("brief") if isinstance(state.get("brief"), dict) else None)

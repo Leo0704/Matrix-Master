@@ -508,11 +508,9 @@ class TestPrompts:
             content="ctt",
             forbidden_words="",
             similar_history="none",
-            dup_threshold=0.5,
-            human_threshold=0.5,
         )
         assert "ttl" in out
-        assert "{dup_threshold}" in REVIEW_SYSTEM or "相似度<" in REVIEW_SYSTEM
+        assert "违禁词" in REVIEW_SYSTEM
 
     def test_analyze_prompt_format(self):
         out = ANALYZE_USER.format(

@@ -153,27 +153,11 @@ export function Settings() {
         <TabsContent value="review" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">AI 检查时判据</CardTitle>
+              <CardTitle className="text-base">自动检查规则</CardTitle>
               <CardDescription>
-                阈值控制草稿的自动通过标准；空值时节点用硬编码默认值（0.85 / 0.60）
+                AI 写的每篇笔记会自动检查两件事：违禁词、跟规则库不冲突。检查不通过会进死信队列等你处理。
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <SettingField
-                settingKey="review.dup_threshold"
-                label="重复度阈值（0-1）"
-                type="number"
-                defaultValue="0.85"
-                description="与历史爆款相似度低于此值才通过；越小越严格"
-              />
-              <SettingField
-                settingKey="review.human_threshold"
-                label="拟人化阈值（0-1）"
-                type="number"
-                defaultValue="0.60"
-                description="拟人化评分高于此值才通过；越大越严格"
-              />
-            </CardContent>
           </Card>
         </TabsContent>
 
