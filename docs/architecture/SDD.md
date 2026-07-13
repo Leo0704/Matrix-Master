@@ -14,7 +14,7 @@
 ## 1. 范围与非范围
 
 ### 范围
-- 主控（macOS / Windows 桌面应用，Tauri shell + Python 后端）
+- 主控（macOS / Windows / Linux 开发机，Web frontend（React + vite，浏览器访问）+ Python 后端）
 - 手机端 companion APK（Android，Kotlin）
 - 知识库（PostgreSQL + pgvector）
 - 自主运营 Agent（LangGraph 状态机）
@@ -33,7 +33,7 @@
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
-│ 主控桌面应用（Tauri shell + Python 后端，本地运行）               │
+│ 主控 Web frontend（React + vite，浏览器访问）+ Python 后端        │
 │                                                                 │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
 │  │ 知识库子系统  │  │ Agent 子系统 │  │ 任务调度子系统        │  │
@@ -89,38 +89,37 @@
 
 | 进程 | 语言 | 职责 |
 |---|---|---|
-| **Tauri shell** | Rust + Web（前端） | UI 渲染 / 用户交互 / 系统托盘 / 通知 |
+| **Web frontend** | React + vite（浏览器访问 `http://localhost:1420`） | UI 渲染 / 用户交互 |
 | **Python 后端** | Python 3.11+ | 业务逻辑（LangGraph / LLM / RAG / DB / 调度） |
 
 #### 3.1.2 进程通信
 
-- Tauri shell 通过本地 HTTP（`localhost:8666`）调用 Python 后端 REST。
-- Python 后端启动时自动拉起（或 Tauri 检测未启动则启动）。
+- Web frontend 通过本地 HTTP（`localhost:8666`）调用 Python 后端 REST（同源 / CORS）。
 - 双方通过 heartbeat（10s）确认对方在线；任一方失联，UI 展示离线状态。
 
 #### 3.1.3 启动顺序
 
 ```
-Tauri shell 启动
-  → 检测 Python 后端是否运行
-    → 否：spawn Python 子进程，等待 ready
-    → 是：直连
-  → 读取本地配置（~/.matrix/config.yaml）
+用户打开浏览器访问 http://localhost:1420
+  → 用户提前（或手动）起 Python 后端（docker compose up -d backend）
+  → Web frontend 调 /api/v1/health 探活
+    → 不通：UI 展示离线状态
+    → 通：进入主页
+后端启动时（独立于浏览器）：
+  → 读取本地配置（.env / ~/.matrix/config.yaml）
   → 初始化 DB 连接池
   → 启动 LangGraph Agent runtime
   → 启动任务调度器
   → 启动 OTel exporter
   → 启动 Tailscale 客户端（如未启动）
-  → 展示 UI
 ```
 
 #### 3.1.4 目录结构
 
 ```
 matrix-master/
-├── shell/                    # Tauri shell
-│   ├── src/                  # Rust 代码
-│   └── ui/                   # Web 前端
+├── shell/                    # Web frontend（React + vite）
+│   └── src/                  # React 源代码
 ├── backend/                  # Python 后端
 │   ├── matrix/
 │   │   ├── agent/            # LangGraph 状态机
@@ -128,7 +127,7 @@ matrix-master/
 │   │   ├── scheduler/        # 任务调度
 │   │   ├── device/           # 设备-账号管理
 │   │   ├── monitoring/       # 监控 / OTel
-│   │   ├── api/              # 内部 REST API（Tauri 调用）
+│   │   ├── api/              # 内部 REST API（Web frontend 调用）
 │   │   ├── db/               # 数据库连接 / 迁移
 │   │   └── llm/              # LLM 客户端封装
 │   ├── migrations/           # Alembic 迁移
@@ -416,7 +415,7 @@ APK 心跳中携带 XHS 登录状态
 #### 3.6.1 指标采集
 
 - 进程内：通过 `prometheus_client` 暴露 `/metrics`（Python 后端）。
-- 系统级：Tauri shell 采集自身指标 + 转发到 Python。
+- 系统级：Web frontend 在浏览器内暴露，浏览器指标通过 Performance API 取（如需上报走 `/api/v1/logs`）。
 - 设备端：APK 定期上报到主控 → 主控记录 + 转 Exporter。
 
 #### 3.6.2 关键指标
@@ -607,7 +606,7 @@ APK 指数退避重连 Tailscale（1s/3s/9s/30s）
 
 ## 6. 接口契约
 
-### 6.1 主控内部 API（Tauri ↔ Python）
+### 6.1 主控内部 API（Web frontend ↔ Python）
 
 详见 [api/master-rest.openapi.yaml](../api/master-rest.openapi.yaml)。
 
@@ -670,7 +669,7 @@ APK 指数退避重连 Tailscale（1s/3s/9s/30s）
 | 心跳 QPS | 100 / 30 = 3.3/s |
 | LLM 调用 | ~500 calls/天（假设 100 设备 × 5 发布） |
 | DB 连接 | ~50（pool size） |
-| 内存 | Python 后端 ~500MB / Tauri shell ~300MB |
+| 内存 | Python 后端 ~500MB / Web frontend 在浏览器内（不计服务端资源） |
 | 存储 | 100GB/年（notes + metrics） |
 
 详见 [planning/capacity-plan.md](../planning/capacity-plan.md)。

@@ -16,9 +16,8 @@ htmlcov/
 dist/
 build/
 
-# Node / Tauri
+# Node
 node_modules/
-target/
 *.node
 
 # IDE
@@ -63,7 +62,7 @@ Thumbs.db
 # CodeGraph（本地索引，不入库）
 .codegraph/
 
-# Tauri / 前端构建产物
+# 前端构建产物
 shell/dist/
 # tsc / vite / vitest 编译产出（tsc -b + vite build 自动生成）
 /shell/tsconfig*.tsbuildinfo

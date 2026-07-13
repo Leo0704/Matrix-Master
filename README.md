@@ -30,7 +30,7 @@
 │       ├── db/                 数据库连接 / 迁移
 │       └── llm/                LLM 客户端封装
 │
-├── shell/                      Tauri shell（待建）
+├── shell/                      Web frontend（React + vite）
 │
 ├── apk/                        Companion APK（待建）
 │
@@ -55,8 +55,6 @@
 ### 前置
 
 - Docker + Docker Compose（基础设施 + 后端 + 前端 vite dev server）
-- Rust toolchain（仅 host 跑 Tauri Rust 进程 + WebView 用）
-- [Tauri CLI v2](https://tauri.app/start/prerequisites/)（`cargo install tauri-cli --version "^2.0" --locked`）
 - Git
 
 ### 安装与启动
@@ -74,16 +72,8 @@ docker compose up -d backend frontend
 # 3. 应用数据库迁移（容器内跑）
 docker compose run --rm test alembic upgrade head
 
-# 4. 在 host 上启动 Tauri 桌面应用（Rust 进程 + WebView）
-cd shell
-npm install         # 装 @tauri-apps/cli（在 devDependencies）
-npx tauri dev       # Tauri CLI 启动 Rust 进程 + 创建 WebView 加载 localhost:1420
+# 4. 浏览器访问 http://localhost:1420 即可使用 Web frontend
 ```
-
-> **为什么 Tauri Rust 进程必须在 host 跑？**
-> Tauri 用系统 WebView（macOS WKWebView / Windows WebView2），需要 Cocoa/Win32 API，docker 容器无法承载 GUI。
-> Rust 进程创建 WebView 窗口，**加载 host 上 localhost:1420** → 经 docker port mapping 转到 frontend 容器内的 vite。
-> Rust 进程**调用 host 上 localhost:8666** → 经 port mapping 转到 backend 容器内的 uvicorn。
 
 ### 验证
 

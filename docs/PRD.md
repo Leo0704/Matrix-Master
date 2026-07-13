@@ -300,8 +300,8 @@ ALERT       上报 + 隔离 + 重调度 / 人工兜底 → IDLE
 
 | 层 | 选型 |
 |---|---|
-| 主控形态 | Tauri shell（Rust + Web 前端）+ Python 后端子进程 |
-| 桌面框架 | Tauri |
+| 主控形态 | Web frontend（React + vite）+ Python 后端（uvicorn） |
+| 前端框架 | React + vite（浏览器访问 http://localhost:1420） |
 | Agent 编排 | LangGraph |
 | LLM | 商业 API（Anthropic / OpenAI） |
 | 知识库 | PostgreSQL + pgvector |
@@ -313,7 +313,7 @@ ALERT       上报 + 隔离 + 重调度 / 人工兜底 → IDLE
 | 开发工具 | adb USB |
 | 任务调度 | asyncio + 持久化队列 |
 | 监控 | OpenTelemetry + Jaeger / Tempo |
-| 桌面打包 | Tauri-bundler + PyInstaller / Briefcase |
+| 前端打包 | vite build（纯静态资源；浏览器访问或被任意静态服务器托管） |
 
 详细选型理由见 [docs/architecture/SDD.md §2.1](./docs/architecture/SDD.md)。
 

@@ -72,9 +72,9 @@ class MonitoringMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         start = time.perf_counter()
         # 提取 trace_id 作为日志关联 key。
-        # 优先 ``X-Request-ID`` header（Tauri shell 注入），其次用 OTel 当前 span。
-        # Rust 端的 reqwest 调用（wait_ready / probe_health / restart）发此 header，
-        # 让 Rust→Python 调用链能串联同一个 trace_id。
+        # 优先 ``X-Request-ID`` header（Web frontend / CLI 工具注入），其次用 OTel 当前 span。
+        # 客户端在调用前生成 32 位 hex（如 ``crypto.randomUUID()`` 转 32 hex）发此 header，
+        # 让同一次用户动作的日志能串联同一个 trace_id。
         trace_id_hex = _normalize_trace_id(request.headers.get("x-request-id"))
         if not trace_id_hex:
             span = otel_trace.get_current_span()

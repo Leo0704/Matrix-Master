@@ -392,8 +392,8 @@ class TestMiddleware:
     def test_middleware_prefers_x_request_id_header(self, tmp_path):
         """X-Request-ID header（32 hex）优先于 OTel context，作为 trace_id。
 
-        Tauri shell 在 wait_ready/probe_health 等 reqwest 调用前发此 header，
-        让 Rust→Python 一次调用的日志能串联同一个 trace_id。
+        客户端 / 前端可在调用前发此 header，
+        让一次调用的日志能串联同一个 trace_id。
         """
         import asyncio
 

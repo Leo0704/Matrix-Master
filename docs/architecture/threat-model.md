@@ -13,7 +13,7 @@
 ## 1. 范围
 
 ### 1.1 在范围内
-- 主控桌面应用（Tauri shell + Python 后端）
+- 主控 Web frontend（React + vite）+ Python 后端
 - 手机端 companion APK
 - Tailscale mesh 控制通道
 - 知识库与业务数据（PostgreSQL）

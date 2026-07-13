@@ -3,10 +3,10 @@ info:
   title: 主控内部 REST API
   version: 0.1.0
   description: |
-    主控 Python 后端暴露的内部 REST API，由 Tauri shell 调用。
+    主控 Python 后端暴露的内部 REST API，由 Web frontend（浏览器）调用。
 
     注意：此 API 不对外暴露，仅本地监听 `localhost:8666`。
-    鉴权：Tauri 通过 Unix socket 或共享 secret 鉴权；外部不可达。
+    鉴权：浏览器通过 `MATRIX_API_SECRET`（Bearer Token）鉴权；外部不可达。
   contact:
     name: AI-Native 矩阵主控
 servers:

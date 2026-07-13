@@ -26,18 +26,7 @@
 | [uv](https://docs.astral.sh/uv/) | docker 镜像 | 包管理（在镜像内，host 不需要装） |
 | Alembic | docker 镜像（test service） | 数据库迁移 |
 
-### 1.3 Tauri Shell（仅 host）
-
-Tauri 的 Rust 进程 + WebView 必须在 host 跑（macOS WKWebView 依赖 Cocoa；Windows WebView2 依赖系统组件；docker 容器无法承载 GUI）。
-
-| 工具 | 版本 | 备注 |
-|---|---|---|
-| Rust | 1.75+ | rustup 管理 |
-| Tauri CLI v2 | latest | `cargo install tauri-cli --version "^2.0" --locked` |
-| WebView2 | latest | Windows 专用 |
-| @tauri-apps/cli | latest | host 上 `npm install` 拉取（在 shell/devDependencies） |
-
-### 1.4 APK 开发
+### 1.3 APK 开发
 
 | 工具 | 版本 | 备注 |
 |---|---|---|
@@ -174,23 +163,17 @@ curl http://localhost:8666/api/v1/health
 }
 ```
 
-## 6. 启动前端 vite + Tauri Shell
+## 6. 启动前端 vite dev server
 
 ```bash
-# 6.1 起前端 vite dev server（docker 内，端口 1420）
+# 起前端 vite dev server（docker 内，端口 1420）
 docker compose up -d frontend
-
-# 6.2 在 host 上启动 Tauri（Rust 进程 + WebView，必须 host 跑）
-cd shell
-npm install
-npx tauri dev
 ```
 
 首次启动会：
-1. Tauri 编译 Rust 进程（首次较慢，增量编译后秒级）
-2. 创建 WebView 窗口（macOS WKWebView / Windows WebView2）
-3. WebView 加载 http://localhost:1420（Tauri `devUrl`） → 经 docker port mapping → frontend 容器内 vite
-4. WebView 通过 http://localhost:8666 调用后端 → 经 port mapping → backend 容器内 uvicorn
+1. docker 容器内启动 vite dev server
+2. 通过 http://localhost:1420 可在浏览器访问 React 页面（开发者工具 dev mode）
+3. 浏览器通过 http://localhost:8666 调用后端 → 经 port mapping → backend 容器内 uvicorn
 
 ## 7. 启动 APK（开发模式）
 
@@ -251,8 +234,6 @@ docker compose exec backend python -m matrix.cli test_publish_e2e
 推荐插件：
 - Python
 - Pylance
-- Rust Analyzer
-- Tauri
 - Even Better TOML
 - SQLTools（PostgreSQL）
 
@@ -262,7 +243,6 @@ docker compose exec backend python -m matrix.cli test_publish_e2e
 {
   "python.defaultInterpreterPath": null,
   "python.testing.pytestEnabled": false,
-  "rust-analyzer.cargo.features": "all",
   "[python]": {
     "editor.formatOnSave": true,
     "editor.defaultFormatter": "ms-python.black-formatter"

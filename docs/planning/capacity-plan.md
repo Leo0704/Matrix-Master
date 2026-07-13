@@ -131,7 +131,7 @@
 
 | 进程 | 内存 |
 |---|---|
-| Tauri shell | 300MB |
+| Web frontend（浏览器内 React） | ~150MB（浏览器配额，单独计） |
 | Python 后端 | 500MB |
 | PostgreSQL | 1GB（含 shared_buffers） |
 | Prometheus | 500MB |

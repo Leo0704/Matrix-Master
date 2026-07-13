@@ -19,11 +19,11 @@
                     │ Tailscale mesh
                     │
 ┌───────────────────┴────────────────────────┐
-│ 主控（macOS / Windows 桌面）                 │
-│  - Tauri shell                              │
-│  - Python 后端                              │
-│  - PostgreSQL（本地）                       │
-│  - Tailscale 客户端                          │
+│ 主控（macOS / Windows / Linux，开发机）       │
+│  - Web frontend（浏览器访问 http://localhost:1420） │
+│  - Python 后端                               │
+│  - PostgreSQL（本地）                        │
+│  - Tailscale 客户端                         │
 └─────────────────────────────────────────────┘
                     ↑
                     │ Tailscale mesh + 蜂窝数据

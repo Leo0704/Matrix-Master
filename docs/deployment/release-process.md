@@ -20,7 +20,7 @@
 | 组件 | 频率 | 窗口 |
 |---|---|---|
 | Python 后端 | 双周 | 周二 / 周四 14:00-16:00 |
-| Tauri shell | 跟随 Python 后端 | 同时 |
+| Web frontend（React + vite） | 跟随 Python 后端 | 同时 |
 | APK | 月度（XHS 改 UI 时紧急） | 月初 |
 | Headscale / DERP | 按需 | 任意 |
 | 知识库 schema | 跟随 Python 后端 | 同时 |
@@ -51,7 +51,7 @@
 
 ## 4. 发布流程
 
-### 4.1 Python 后端 + Tauri shell
+### 4.1 Python 后端 + Web frontend
 
 ```
 1. 创建 release branch
@@ -59,14 +59,13 @@
 
 2. 更新版本号
    - backend/matrix/__init__.py
-   - shell/src-tauri/Cargo.toml
    - shell/package.json
 
 3. 更新 CHANGELOG.md
 
 4. 跑完整测试
    pytest backend/tests/
-   ./build.sh  # 构建 wheel + 桌面包
+   ./build.sh  # 构建 wheel
 
 5. Tag
    git tag -a v0.4.0 -m "release v0.4.0"
@@ -75,7 +74,7 @@
 6. CI 自动：
    - 跑测试
    - 构建 wheel
-   - 打包 Tauri（macOS + Windows）
+   - 构建 Web frontend（vite build）
    - 上传 GitHub Release
 
 7. 灰度发布
@@ -152,10 +151,10 @@
 ```bash
 # Python 后端
 pip install matrix==<previous_version>
-systemctl restart matrix  # 或重启 Tauri
+systemctl restart matrix  # 或重启后端
 
-# Tauri shell
-# 装旧版本 .app / .exe
+# Web frontend
+# 切回旧版本 vite build 输出（`git checkout <tag> -- shell/dist/`）
 
 # APK
 # 主控推旧版本 APK，用户确认安装

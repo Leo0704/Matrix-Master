@@ -1,4 +1,4 @@
-"""FastAPI 应用入口 — 主控内部 REST API（Tauri shell 调用）。
+"""FastAPI 应用入口 — 主控内部 REST API（Web frontend 调用）。
 
 仅本地监听（默认 ``127.0.0.1:8666``），不直接对外暴露。
 
@@ -73,8 +73,9 @@ def create_app(
     Args:
         database_url: 覆盖 ``DATABASE_URL``。测试时可传 ``sqlite+aiosqlite:///:memory:``。
         enable_monitoring_middleware: 是否装 monitoring middleware（测试可关）。
-        cors_origins: 允许的跨域 origin。Tauri 桌面应用一般是 ``tauri://localhost`` /
-            ``http://localhost:1420``，未传时使用一套安全的本地默认值。
+        cors_origins: 允许的跨域 origin。Web frontend 开发时一般是 ``http://localhost:1420``
+            （vite dev server），生产同源访问 ``http://localhost:8666``。
+            未传时使用一套安全的本地默认值。
     """
 
     @asynccontextmanager
@@ -295,15 +296,14 @@ def create_app(
     app = FastAPI(
         title="Matrix Master API",
         version=__version__,
-        description="主控内部 REST API（Tauri shell 调用）",
+        description="主控内部 REST API（Web frontend 调用）",
         lifespan=lifespan,
     )
     app.state.db_engine = None
     app.state.start_time = time.monotonic()
 
-    # ---- CORS（Tauri 桌面应用来源） ----
+    # ---- CORS（Web frontend 来源，浏览器开发时访问 vite dev server） ----
     origins = cors_origins or [
-        "tauri://localhost",
         "http://localhost:1420",
         "http://localhost:8666",
         "http://127.0.0.1:8666",

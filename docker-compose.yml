@@ -2,8 +2,6 @@
 # - 常驻服务：PostgreSQL + Headscale + 自建 DERP（+ monitoring 监控栈可选）
 # - 应用服务：backend (uvicorn) + frontend (vite dev server)，前后端都跑在 docker 里
 # - 测试：test service 在 docker 内跑 pytest
-# - 桌面 GUI（Tauri Rust 进程 + WebView）：必须在 host 跑，详见 README §"快速开始"
-#   因为 macOS WKWebView 依赖 Cocoa / Windows WebView2 依赖系统组件，docker 容器无法承载
 
 services:
   # PostgreSQL + pgvector
@@ -142,8 +140,7 @@ services:
       - --port
       - "8666"
 
-  # 前端 vite dev server（Tauri 的开发页面 server）
-  # Tauri Rust 进程在 host 上跑，WebView 加载 http://localhost:1420
+  # 前端 vite dev server（浏览器访问的开发页面 server）
   # 用法：docker compose up -d frontend
   frontend:
     image: node:20-slim
@@ -166,9 +163,9 @@ services:
           npm install
         fi
         # vite.config.ts 写死 host=localhost，docker 容器里需改成 0.0.0.0
-        # 才能通过 host 的 port mapping 被 Tauri WebView 访问到
+        # 才能通过 host 的 port mapping 被浏览器访问到
         npm run dev -- --host 0.0.0.0
-    # Tauri 在 host 上跑，访问 docker 内的后端（host 上 localhost:8666 经 port mapping → 容器内 8666）
+    # 浏览器访问 host 上 localhost:8666 → 经 port mapping → 容器内 backend 8666
 
 volumes:
   postgres_data:

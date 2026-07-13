@@ -10,7 +10,7 @@
 
 矩阵主控的所有运行日志采用**统一的 JSON 行格式**，便于：
 
-- 跨端聚合（Python 后端 + Rust shell + Android APK 写同一份或可被同一查询消费）
+- 跨端聚合（Python 后端 + Web frontend（浏览器 devtools）+ Android APK 写同一份或可被同一查询消费）
 - 字段级查询（dashboard 按 `service / trace_id / event / run_id` 过滤）
 - 调用链串联（一个用户动作从入口到出口完整可追）
 
@@ -22,7 +22,7 @@
 |---|---|---|---|
 | `ts` | string | ✓ | ISO8601 UTC 毫秒精度，如 `"2026-07-09T08:23:45.123Z"` |
 | `level` | string | ✓ | `debug` / `info` / `warn` / `error` |
-| `service` | string | ✓ | 端标识：`matrix-backend` / `matrix-shell` / `matrix-apk` |
+| `service` | string | ✓ | 端标识：`matrix-backend` / `matrix-apk`（Web frontend 日志通过浏览器 devtools 或后端 §3.1 转发） |
 | `version` | string | ✓ | 端版本号（如 `"0.6.1"`） |
 | `event` | string | ✓ | 点分事件名（见 §4） |
 | `attrs` | object | ✓ | 业务字段（见 §5） |
@@ -54,15 +54,7 @@
 - **文件**：`~/.matrix/logs/{YYYY-MM-DD}.jsonl`，单文件 100MB 滚动，保留 7 天
 - **上下文**：`bind_context(trace_id=..., run_id=..., device_id=...)` 在请求入口注入
 
-### 3.2 Rust shell（`matrix-shell`）
-
-- **日志库**：`tracing` 0.1 + `tracing-subscriber`（env-filter + json）
-- **入口**：`tracing::info!` / `#[tracing::instrument]`
-- **格式**：JSON（生产） / pretty（dev）
-- **输出**：stderr；与 Python 日志分文件但字段对齐
-- **跨进程**：reqwest client 注入 `X-Request-ID` header，透传到 master
-
-### 3.3 Android APK（`matrix-apk`）
+### 3.2 Android APK（`matrix-apk`）
 
 - **日志库**：Timber 5.0.1 + 自定义 `Tree`
 - **入口**：`Timber.i(...)` / `Timber.e(..., throwable)`

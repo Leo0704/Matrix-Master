@@ -1,4 +1,4 @@
-"""Matrix Master 内部 REST API（Tauri shell 调用）。
+"""Matrix Master 内部 REST API（Web frontend 调用）。
 
 公开入口：
 - ``app`` — 默认构造的 FastAPI 实例（用于 ``uvicorn matrix.api.app:app``）

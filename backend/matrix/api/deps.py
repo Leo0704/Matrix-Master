@@ -3,7 +3,7 @@
 设计原则：
 - ``get_db`` 直接复用 ``matrix.db.session.get_session``（它已是 async context manager），
   拿不到就抛 500 而不是 200。session 生命周期由依赖函数管。
-- ``get_current_user`` 是 stub：Tauri 本地调用通过共享 secret 鉴权，目前放行所有本地请求；
+- ``get_current_user`` 是 stub：本地/前端调用通过共享 secret 鉴权，目前放行所有本地请求；
   后续可以加上 token 校验。
 """
 from __future__ import annotations
@@ -59,7 +59,7 @@ async def get_db() -> AsyncIterator[AsyncSession]:
 async def get_current_user(request: Request) -> CurrentUser:
     """运营者鉴权（stub）。
 
-    Tauri shell 通过 Unix socket / localhost + 共享 secret 鉴权；本端只做存在性校验：
+    Web frontend / 本机调用通过 localhost + 共享 secret 鉴权；本端只做存在性校验：
     - ``Authorization`` header 非空 + 匹配 ``MATRIX_API_SECRET`` 环境变量（若设置），否则放行
     - 生产部署应在反向代理层做 IP / socket 隔离
     """
