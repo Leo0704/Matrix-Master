@@ -61,7 +61,7 @@ class TestWatchdogConfig:
     def test_defaults(self):
         cfg = WatchdogConfig()
         assert cfg.poll_interval_sec == 30.0
-        assert cfg.stuck_threshold_sec == 600
+        assert cfg.stuck_threshold_sec == 1800
         # 生产默认 dry_run=False：作为 worker 失败重试耗尽后的兜底标 timeout
         assert cfg.dry_run is False
 

@@ -29,6 +29,7 @@ from matrix.agent.orchestrator import (
     _should_continue,
     advance_goal,
 )
+from matrix.scheduler.round_slot_allocator import STYLE_ROTATION
 
 
 def _make_goal(
@@ -135,6 +136,7 @@ class TestAdvanceGoal:
         assert result is None
 
     async def test_preparing_creates_runs(self):
+        """无 round_allocator 时走降级路径：notes_per_round 份占位 brief + 1 条 goal_round。"""
         g = _make_goal(phase=PHASE_PREPARING, current_round=1)
         session = MagicMock()
         session.add = MagicMock()
@@ -144,16 +146,92 @@ class TestAdvanceGoal:
         exec_result = MagicMock()
         exec_result.scalars.return_value.all.return_value = []
         session.execute = AsyncMock(return_value=exec_result)
-        # 强制 _prepare_round 走「notes_per_round 份占位 brief」分支，避免被全局 _SERVICES / KB mock 干扰
-        target_briefs = [dict(g.target or {}) for _ in range(NOTES_PER_ROUND)]
-        with patch("matrix.agent.orchestrator._decompose_goal", AsyncMock(return_value=target_briefs)), \
-             patch("matrix.agent.orchestrator._fallback_briefs_from_kb", AsyncMock(return_value=target_briefs)):
+        # 无 round_allocator 注入 → 走 _count_target_for_round 降级路径
+        from matrix.agent import _services as _svc
+        prev = _svc._SERVICES
+        _svc._SERVICES = None
+        try:
             result = await advance_goal(session, g)
+        finally:
+            _svc._SERVICES = prev
 
         assert result.phase_after == PHASE_EXECUTING
         # 验证 session.add 被调用了 NOTES_PER_ROUND 次（run）+ 1（goal_round）
         assert session.add.call_count == NOTES_PER_ROUND + 1
         assert g.phase == PHASE_EXECUTING
+
+    async def test_preparing_uses_round_allocator_when_available(self):
+        """注入 round_allocator 时，每台 active device = 1 个 run，payload 带 preassigned_slot。"""
+        from types import SimpleNamespace as NS
+        from uuid import uuid4
+
+        from matrix.agent._services import AgentServices
+        from matrix.agent.protocols import ChosenSlot
+
+        g = _make_goal(phase=PHASE_PREPARING, current_round=1)
+        session = MagicMock()
+        session.add = MagicMock()
+        session.flush = AsyncMock()
+        session.commit = AsyncMock()
+        exec_result = MagicMock()
+        exec_result.scalars.return_value.all.return_value = []
+        session.execute = AsyncMock(return_value=exec_result)
+
+        # 注入 3 个预分配 slot（不同 device，间隔 15min）
+        base = datetime.now(timezone.utc)
+        slots = [
+            ChosenSlot(
+                device_id=uuid4(),
+                account_id=uuid4(),
+                reason="round_allocator.match",
+                scheduled_at=base + timedelta(minutes=15 * i),
+                style_hint=STYLE_ROTATION[i],
+            )
+            for i in range(3)
+        ]
+        round_alloc = NS(
+            count_active_devices=AsyncMock(return_value=3),
+            allocate=AsyncMock(return_value=slots),
+            is_slot_valid=AsyncMock(return_value=True),
+        )
+        services = AgentServices(
+            llm=MagicMock(),
+            kb_retriever=MagicMock(),
+            kb_writer=MagicMock(),
+            device_publisher=MagicMock(),
+            device_collector=MagicMock(),
+            notifier=MagicMock(),
+            round_allocator=round_alloc,
+        )
+
+        from matrix.agent import _services as _svc
+        prev = _svc._SERVICES
+        _svc._SERVICES = services
+        try:
+            result = await advance_goal(session, g)
+        finally:
+            _svc._SERVICES = prev
+
+        assert result.phase_after == PHASE_EXECUTING
+        # 3 个 run + 1 个 goal_round
+        assert session.add.call_count == 3 + 1
+        # 至少有一次 session.add 收到带 preassigned_slot 的 AgentRun
+        runs_with_slot = [
+            call_args.args[0]
+            for call_args in session.add.call_args_list
+            if len(call_args.args) >= 1
+            and hasattr(call_args.args[0], "payload")
+            and isinstance(call_args.args[0].payload, dict)
+            and "preassigned_slot" in call_args.args[0].payload
+        ]
+        assert len(runs_with_slot) == 3
+        # 验证 style_hint 来自 STYLE_ROTATION
+        hints = [
+            r.payload["brief"].get("style_hint") for r in runs_with_slot
+        ]
+        assert hints == list(STYLE_ROTATION[:3])
+        round_alloc.count_active_devices.assert_awaited_once()
+        round_alloc.allocate.assert_awaited_once()
 
     async def test_executing_waits_when_runs_pending(self):
         g = _make_goal(phase=PHASE_EXECUTING, current_round=1)
@@ -254,3 +332,63 @@ class TestAdvanceGoal:
         assert result.phase_after == PHASE_DONE
         assert g.phase == PHASE_DONE
         assert g.status == "achieved"
+
+
+# ---------------------------------------------------------------------------
+# v0.7+ 第 2 期：round_number 真列 + _check_runs_done 行为
+# ---------------------------------------------------------------------------
+
+
+class TestCheckRunsDoneRoundColumn:
+    """P0-2 回归：_check_runs_done 走 AgentRun.round_number 真列。
+
+    mock session：模拟 count(query) 返 N。验证查询条件包含 ``round_number ==``，
+    不再 cast payload JSONB。
+    """
+
+    async def test_pending_to_preparing_uses_round_number_column_filter(self):
+        """_check_runs_done 的 SQL 应该按真列 round_number 过滤，不读 JSONB。"""
+        from matrix.agent.orchestrator import _check_runs_done
+
+        g = _make_goal(phase=PHASE_EXECUTING)
+        session = MagicMock()
+        result = MagicMock()
+        result.scalar.return_value = 0
+        session.execute = AsyncMock(return_value=result)
+
+        await _check_runs_done(session, g.id, round_number=2)
+
+        # 抓一次实际构造的 stmt
+        stmt = session.execute.call_args[0][0]
+        sql_text = str(stmt.compile())
+        assert "agent_runs.round_number" in sql_text, (
+            f"_check_runs_done SQL 应该引用 round_number 真列，实际：{sql_text}"
+        )
+        # 不应该再用 payload 的 JSONB cast
+        assert "payload" not in sql_text.lower().replace("payload_round", ""), (
+            f"_check_runs_done 仍引用 JSONB payload：{sql_text}"
+        )
+
+
+class TestCheckRunsDoneBehaviors:
+    """P0-2 行为测试：用 mock count() 模拟"本轮是否还有跑中的 run"。"""
+
+    async def test_returns_true_when_count_is_zero(self):
+        from matrix.agent.orchestrator import _check_runs_done
+
+        session = MagicMock()
+        result = MagicMock()
+        result.scalar.return_value = 0
+        session.execute = AsyncMock(return_value=result)
+        ok = await _check_runs_done(session, uuid.uuid4(), round_number=1)
+        assert ok is True
+
+    async def test_returns_false_when_count_is_positive(self):
+        from matrix.agent.orchestrator import _check_runs_done
+
+        session = MagicMock()
+        result = MagicMock()
+        result.scalar.return_value = 2
+        session.execute = AsyncMock(return_value=result)
+        ok = await _check_runs_done(session, uuid.uuid4(), round_number=1)
+        assert ok is False
