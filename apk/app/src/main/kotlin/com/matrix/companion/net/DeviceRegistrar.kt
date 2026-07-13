@@ -55,6 +55,9 @@ class DeviceRegistrar(private val context: Context) {
         val tailscale_ip: String,
         val model: String,
         val os_version: String,
+        // P2-3：APK 自报版本号，让主控在配对时回填到 devices.apk_version；
+        // 老 API 缺这字段时 Pydantic 给 None 跳过，主控不会崩
+        val apk_version: String = "",
     )
 
     @Serializable
@@ -84,10 +87,11 @@ class DeviceRegistrar(private val context: Context) {
             val ip = TailscaleClient.refresh() ?: throw IllegalStateException("no tailnet IP")
             val model = android.os.Build.MODEL ?: "unknown"
             val os = android.os.Build.VERSION.RELEASE ?: "unknown"
+            val apkVer = com.matrix.companion.BuildConfig.VERSION_NAME
 
             val resp: PairResponse = http.post("$MASTER_DEFAULT/api/v1/devices/pair") {
                 contentType(ContentType.Application.Json)
-                setBody(PairRequest(deviceId, pairCode, ip, model, os))
+                setBody(PairRequest(deviceId, pairCode, ip, model, os, apkVer))
             }.body()
 
             val secret = resp.data?.hmac_secret
