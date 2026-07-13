@@ -46,6 +46,12 @@ from matrix.agent.orchestrator_runner import (
     set_orchestrator_worker,
 )
 from matrix.agent.runner import AgentRunWorker, set_worker
+from matrix.agent.goal_stuck_watchdog import (  # noqa: E402  P2-2
+    GoalStuckScanner,
+    GoalStuckWatchdog,
+    GoalStuckWatchdogConfig,
+)
+from matrix.api._agent_factory import _LazyConfigReader  # noqa: E402  P2-2
 from matrix.api.schemas import ErrorDetail, ErrorResponse
 from matrix.db import create_engine
 from matrix.llm.embeddings import EmbeddingClient
@@ -168,6 +174,45 @@ def create_app(
             except Exception:  # pragma: no cover
                 logger.warning("agent_watchdog setup failed", exc_info=True)
 
+            # v0.7 P2-2：goal_stuck_watchdog 兜底卡在 PENDING 的 goal
+            # （仅当协调员静默死/没启动时需要这条救援路径）
+            try:
+                import os
+
+                _g_default_interval = float(
+                    os.environ.get("MATRIX_GOAL_STUCK_WATCHDOG_INTERVAL_SEC", "60")
+                )
+                _g_default_threshold = int(
+                    os.environ.get("MATRIX_GOAL_STUCK_WATCHDOG_THRESHOLD_SEC", "120")
+                )
+                _g_dry_run_raw = os.environ.get(
+                    "MATRIX_GOAL_STUCK_WATCHDOG_DRY_RUN", "0"
+                )
+                _g_dry_run = _g_dry_run_raw.strip().lower() in {"1", "true", "yes", "on"}
+
+                g_scanner = GoalStuckScanner(app.state.db_session_factory)
+                g_watchdog = GoalStuckWatchdog(
+                    g_scanner,
+                    config=GoalStuckWatchdogConfig(
+                        poll_interval_sec=_g_default_interval,
+                        stuck_threshold_sec=_g_default_threshold,
+                        dry_run=_g_dry_run,
+                    ),
+                )
+                try:
+                    await g_watchdog.configure_from_config_reader(
+                        _LazyConfigReader(app.state.db_session_factory)
+                    )
+                except Exception:  # pragma: no cover
+                    logger.warning(
+                        "goal_stuck_watchdog configure_from_config_reader failed",
+                        exc_info=True,
+                    )
+                g_watchdog.start()
+                app.state.goal_stuck_watchdog = g_watchdog
+            except Exception:  # pragma: no cover
+                logger.warning("goal_stuck_watchdog setup failed", exc_info=True)
+
             # v0.7 Phase 4：AlertScanner 后台定期跑 monitoring/alerts 全部 check
             # 必须 services 装配好之后启动（依赖 notifier / config_reader）
             try:
@@ -260,6 +305,13 @@ def create_app(
             except Exception:  # pragma: no cover
                 logger.warning("agent watchdog stop failed", exc_info=True)
                 logger.exception("agent worker stop failed")
+        # v0.7 P2-2: 停 goal_stuck_watchdog
+        g_watchdog = getattr(app.state, "goal_stuck_watchdog", None)
+        if g_watchdog is not None:
+            try:
+                await g_watchdog.stop()
+            except Exception:  # pragma: no cover
+                logger.warning("goal_stuck_watchdog stop failed", exc_info=True)
         # v0.7 P0-1: 停调度器
         # Scheduler.stop() 是同步方法（只 set 事件），不要 await
         scheduler = getattr(app.state, "scheduler", None)
