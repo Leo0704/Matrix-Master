@@ -10,7 +10,6 @@ import {
 } from '@/hooks/use-notes';
 import { useAccounts } from '@/hooks/use-accounts';
 import { NoteCard } from '@/components/notes/note-card';
-import { ContentCalendar } from '@/components/notes/content-calendar';
 import { LoadingBlock } from '@/components/common/loading-spinner';
 import { ErrorState } from '@/components/common/error-state';
 import { EmptyState } from '@/components/common/empty-state';
@@ -200,15 +199,6 @@ export function Notes() {
           </DialogContent>
         </Dialog>
       </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">内容日历（近 14 天）</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <ContentCalendar notes={items} />
-        </CardContent>
-      </Card>
 
       <Tabs value={status} onValueChange={(v) => setStatus(v as NoteStatus | 'all')}>
         <TabsList>
