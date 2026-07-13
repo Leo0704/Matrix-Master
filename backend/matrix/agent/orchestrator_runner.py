@@ -86,6 +86,12 @@ class GoalOrchestratorWorker:
             self._in_flight.discard(goal_id)
 
     async def loop(self) -> None:
+        """worker 主循环。
+
+        P2-2 修改：内层 try/except 包 ``_scan_once`` 后保留；单 tick 异常不会让 worker 死。
+        session-level 真崩溃（这里一般不会发生，因为 Exception 已经吃掉）由 Python
+        默认让它死——这种死法正是 ``start()`` 新加的 respawn 语义要救的场景。
+        """
         logger.info("goal_orchestrator.started", poll_interval=self._poll_interval)
         while not self._stop_event.is_set():
             try:
@@ -100,12 +106,31 @@ class GoalOrchestratorWorker:
                 pass
         logger.info("goal_orchestrator.stopped")
 
-    def start(self) -> None:
-        if self.is_running:
+    def start(self) -> "asyncio.Task | None":
+        """镜像 AgentRunWatchdog.start() (watcher.py:233-240) 的 respawn 语义。
+
+        之前版本只防重复启动：task done 之后没人能再拉起，silent death 永远翻不了身。
+        现在：task 为 None 或 done → 允许重新 start；并把死掉 task 的异常记录 WARN。
+        真要重启直接调 ``start()`` 即可，不需要 destroy/recreate worker 实例。
+        """
+        if self._task is not None and not self._task.done():
             logger.warning("goal_orchestrator already running")
-            return
+            return None
+        if self._task is not None and self._task.done():
+            try:
+                self._task.result()
+            except (asyncio.CancelledError, Exception):
+                logger.warning(
+                    "goal_orchestrator.task_died_will_respawn",
+                    exc_info=True,
+                )
         self._stop_event.clear()
         self._task = asyncio.create_task(self.loop(), name="goal-orchestrator")
+        return self._task
+
+    def is_alive(self) -> bool:
+        """对外的 liveness probe（方便健康检查 / watchdog 复用）。"""
+        return self._task is not None and not self._task.done()
 
     async def stop(self) -> None:
         self._stop_event.set()

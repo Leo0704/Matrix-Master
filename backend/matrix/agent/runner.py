@@ -115,13 +115,28 @@ class AgentRunWorker:
                 pass
         logger.info("agent_run_worker.stopped")
 
-    def start(self) -> None:
-        """在后台起 worker 协程（fire-and-forget）。"""
-        if self.is_running:
+    def start(self) -> "asyncio.Task | None":
+        """镜像 AgentRunWatchdog.start() (watcher.py:233-240) 的 respawn 语义。
+
+        silent death 允许重新拉起（task done → 允许再 start）；记录死过 task 的异常。
+        """
+        if self._task is not None and not self._task.done():
             logger.warning("agent_run_worker already running")
-            return
+            return None
+        if self._task is not None and self._task.done():
+            try:
+                self._task.result()
+            except (asyncio.CancelledError, Exception):
+                logger.warning(
+                    "agent_run_worker.task_died_will_respawn",
+                    exc_info=True,
+                )
         self._stop_event.clear()
         self._task = asyncio.create_task(self.loop(), name="agent-run-worker")
+        return self._task
+
+    def is_alive(self) -> bool:
+        return self._task is not None and not self._task.done()
 
     async def stop(self) -> None:
         """停 worker 并等待其结束。"""
