@@ -338,6 +338,13 @@ class Note(Base):
     account_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey('accounts.id'), nullable=True
     )
+    # v0.7+ 第 2 期：让 DRAFT/PUBLISH 直查 notes.run_id 取代时间窗回退
+    goal_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('goals.id', ondelete='SET NULL'), nullable=True
+    )
+    run_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('agent_runs.id', ondelete='SET NULL'), nullable=True
+    )
     title: Mapped[str] = mapped_column(String(256), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     images: Mapped[list[str]] = mapped_column(
@@ -669,6 +676,10 @@ class AgentRun(Base):
     payload: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=sa_text("'{}'::jsonb")
     )
+    # v0.7+ 第 2 期：round_number 提升到一等列（替代 payload->>'round_number' JSONB 查询）；
+    # 由 orchestrator._prepare_round 写入，_check_runs_done / _gather_round_kpi 索引命中
+    # （idx_agent_runs_goal_round_status 复合索引由迁移 011 建，ORM 不再声明 index=True）。
+    round_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default=sa_text("'running'")
     )
