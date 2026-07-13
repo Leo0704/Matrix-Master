@@ -53,10 +53,11 @@ class Device(Base):
         server_default=sa_text("uuid_generate_v4()"),
     )
     nickname: Mapped[str] = mapped_column(String(64), nullable=False)
-    model: Mapped[str] = mapped_column(String(64), nullable=False)
-    android_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    # P2-3：3 个手填字段改 nullable；APK 配对时回填真实值。NULL 是"还没上线"的合法中间态。
+    model: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    android_version: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     adb_serial: Mapped[Optional[str]] = mapped_column(String(64), unique=True)
-    apk_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    apk_version: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     tailnet_ip: Mapped[Optional[Any]] = mapped_column(INET)
     tags: Mapped[list[str]] = mapped_column(
         ARRAY(Text), nullable=False, server_default=sa_text("'{}'")
