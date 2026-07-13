@@ -70,6 +70,7 @@ async def revise_node(state: AgentState) -> dict[str, Any]:
         raw = await llm_complete(
             "你是小红书爆款文案写手，按要求严格改写，保持人设一致。",
             user_prompt,
+            call_type="revise",
         )
         parsed = parse_json_response(raw)
         if parsed.get("title"):

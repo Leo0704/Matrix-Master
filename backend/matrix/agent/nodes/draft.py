@@ -93,6 +93,7 @@ async def draft_node(state: AgentState) -> dict[str, Any]:
         raw = await llm_complete(
             prompts.DRAFT_SYSTEM.format(persona_name=persona_name or "default"),
             user,
+            call_type="draft",
         )
     except Exception as exc:
         logger.exception("draft.llm failed")
@@ -125,6 +126,9 @@ async def draft_node(state: AgentState) -> dict[str, Any]:
                 {
                     "id": draft["note_id"],
                     "account_id": None,
+                    # v0.7+ 第 2 期：透传 goal_id/run_id，让 _gather_round_kpi 走直查
+                    "goal_id": state.get("goal_id"),
+                    "run_id": state.get("run_id"),
                     "title": draft["title"],
                     "content": draft["content"],
                     "images": draft["images"],

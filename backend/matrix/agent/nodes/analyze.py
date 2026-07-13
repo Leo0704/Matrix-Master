@@ -57,7 +57,7 @@ async def analyze_node(state: AgentState) -> dict[str, Any]:
         user = f"## 主题摘要（来自 chat 对话）\n{brief_section}\n\n" + user
 
     try:
-        raw = await llm_complete(prompts.ANALYZE_SYSTEM, user)
+        raw = await llm_complete(prompts.ANALYZE_SYSTEM, user, call_type="analyze")
         parsed = parse_json_response(raw)
         review_text = str(parsed.get("review_text") or "").strip()
         strategy_updates = parsed.get("strategy_updates") or []

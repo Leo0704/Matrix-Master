@@ -18,6 +18,7 @@ from typing import Any
 
 from matrix.llm import LLMClient
 from matrix.llm.errors import LLMError
+from matrix.scheduler.token_bucket import RateLimitTimeout
 
 from .protocols import (
     ConfigReader,
@@ -65,8 +66,13 @@ class AgentServices:
     rate_limiter: Any | None = None
     # 调度选（设备/账号）— 由 RunManager 注入；默认 None 调度节点会返回占位 slot
     scheduler: Any | None = None
+    # v0.7+ round-level allocator：goal/round 扇出时由 orchestrator 调；
+    # None 时 _prepare_round 走降级路径（按 N 份占位 brief 生成 run，跳过设备预分配）
+    round_allocator: Any | None = None
     # v0.7 Phase 3：生图客户端（ImageGenClient）。None 则 IMAGE_GEN 走 fallback=no_image
     image_generator: Any | None = None
+    # v0.7+ 第 2 期：LLM 全局并发 + 每模型限速；None 则跳过限速（dev/test）
+    llm_rate_limiter: Any | None = None
 
 
 _SERVICES: AgentServices | None = None
@@ -112,40 +118,53 @@ async def llm_complete(
     run_id: str | None = None,
     account_id: str | None = None,
 ) -> str:
-    """调用 LLM，失败按指数退避 1s/3s/9s，最多 retries 次。返回生成文本。"""
+    """调用 LLM，失败按指数退避 1s/3s/9s，最多 retries 次。返回生成文本。
+
+    v0.7+ 第 2 期：可选接入 ``llm_rate_limiter``（全局并发 + 每模型令牌桶）。
+    抢不到令牌直接抛 :class:`RateLimitTimeout`，不进入退避重试（限速超时和 LLM 失败语义不同）。
+    整个逻辑调用（含重试退避）始终持着同一把 slot，到终态（成功/抛 LLMError/超限速）才释放。
+    """
     svc = services or get_services()
+    rate = getattr(svc, "llm_rate_limiter", None)
+    model = svc.model
     last_exc: BaseException | None = None
     total = max(1, retries)
-    for attempt in range(1, total + 1):
-        try:
-            result = await svc.llm.complete(
-                user,
-                model=svc.model,
-                max_tokens=svc.max_tokens,
-                temperature=svc.temperature,
-                system=system,
-                call_type=call_type,
-                run_id=run_id,
-                account_id=account_id,
-            )
-            return result.text
-        except LLMError as exc:  # 可重试错误
-            last_exc = exc
-            if attempt >= total:
-                break
-            delay = _DEFAULT_BACKOFF[min(attempt - 1, len(_DEFAULT_BACKOFF) - 1)]
-            delay *= 1.0 + random.uniform(-0.1, 0.1)
-            delay = max(0.0, delay)
-            logger.warning(
-                "agent.llm.retry",
-                attempt=attempt,
-                total=total,
-                delay=delay,
-                err=exc,
-            )
-            await asyncio.sleep(delay)
-    assert last_exc is not None
-    raise last_exc
+    if rate is not None:
+        await rate.acquire(model)  # RateLimitTimeout 会传出去
+    try:
+        for attempt in range(1, total + 1):
+            try:
+                result = await svc.llm.complete(
+                    user,
+                    model=model,
+                    max_tokens=svc.max_tokens,
+                    temperature=svc.temperature,
+                    system=system,
+                    call_type=call_type,
+                    run_id=run_id,
+                    account_id=account_id,
+                )
+                return result.text
+            except LLMError as exc:  # 可重试错误
+                last_exc = exc
+                if attempt >= total:
+                    break
+                delay = _DEFAULT_BACKOFF[min(attempt - 1, len(_DEFAULT_BACKOFF) - 1)]
+                delay *= 1.0 + random.uniform(-0.1, 0.1)
+                delay = max(0.0, delay)
+                logger.warning(
+                    "agent.llm.retry",
+                    attempt=attempt,
+                    total=total,
+                    delay=delay,
+                    err=exc,
+                )
+                await asyncio.sleep(delay)
+        assert last_exc is not None
+        raise last_exc
+    finally:
+        if rate is not None:
+            rate.release(model)
 
 
 __all__ = [

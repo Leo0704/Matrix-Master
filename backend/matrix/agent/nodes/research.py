@@ -78,6 +78,7 @@ async def research_node(state: AgentState) -> dict[str, Any]:
         raw = await llm_complete(
             prompts.RESEARCH_SYSTEM.format(k=k),
             user,
+            call_type="research",
         )
     except Exception as exc:
         logger.exception("research.llm failed")

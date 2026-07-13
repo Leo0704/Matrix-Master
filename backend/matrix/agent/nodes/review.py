@@ -65,7 +65,7 @@ async def review_node(state: AgentState) -> dict[str, Any]:
     passed = False
     reason = ""
     try:
-        raw = await llm_complete(prompts.REVIEW_SYSTEM, user)
+        raw = await llm_complete(prompts.REVIEW_SYSTEM, user, call_type="review")
         parsed = parse_json_response(raw)
         forbidden_hits = [
             h for h in (parsed.get("forbidden_hits") or []) if h

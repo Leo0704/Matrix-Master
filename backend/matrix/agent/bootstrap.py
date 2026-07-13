@@ -39,6 +39,8 @@ def build_agent_services(
     rate_limiter: Any | None = None,
     config: Any | None = None,
     model: str = "sonnet",
+    round_allocator: Any | None = None,
+    llm_rate_limiter: Any | None = None,
 ) -> AgentServices:
     """组装 AgentServices。``device_adapter`` 必传（生产路径 = ``ApkHttpClient``）。
 
@@ -47,6 +49,12 @@ def build_agent_services(
 
     v0.7 Phase 5：``note_writer`` 默认 None → DRAFT 节点不落库；
     生产路径会传一个 ``_db_note_writer`` 把草稿写进 ``notes`` 表（status='draft'）。
+
+    v0.7+ round-level：``round_allocator`` 默认 None → orchestrator 走降级路径；
+    生产路径会传 ``DefaultRoundSlotAllocator(session_factory)`` 注入。
+
+    v0.7+ 第 2 期：``llm_rate_limiter`` 默认 None → 跳过 LLM 限速（dev/test）；
+    生产路径传 ``LLMRateLimiter(semaphore=...)``（在 ``_agent_factory.build_runtime_services``）。
 
     测试场景下用 ``tests._fake_adapters.MockDeviceAdapter`` 注入。
     """
@@ -72,11 +80,13 @@ def build_agent_services(
         config=config,
         model=model,
         scheduler=scheduler,
+        round_allocator=round_allocator,
         task_writer=task_writer,
         note_writer=note_writer,
         checkpoint_writer=checkpoint_writer,
         interaction_writer=interaction_writer,
         rate_limiter=rate_limiter,
+        llm_rate_limiter=llm_rate_limiter,
     )
 
 
@@ -109,6 +119,10 @@ async def db_note_writer(record: dict[str, Any]) -> Any:
         c: stmt.excluded[c]
         for c in (
             "account_id",
+            # v0.7+ 第 2 期：goal_id/run_id 加入 upsert 白名单，让
+            # DRAFT→PUBLISH 多次写时 goal/run 关联保持一致
+            "goal_id",
+            "run_id",
             "title",
             "content",
             "images",

@@ -58,7 +58,7 @@ async def _gen_comment_text(
             persona_tone=persona_tone or "(无)",
         )
         raw = await llm_complete(
-            INTERACT_SYSTEM, user_prompt, services=services, call_type="generation"
+            INTERACT_SYSTEM, user_prompt, services=services, call_type="interact"
         )
         parsed = parse_json_response(raw)
         content = str(parsed.get("content", "")).strip()

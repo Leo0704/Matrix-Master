@@ -58,22 +58,35 @@ async def _load_goal_snapshot(session: AsyncSession, goal_id: uuid.UUID) -> Goal
             "current_state": run.current_state,
             "status": run.status,
         }
-        # 关联 note：note 表没有 goal_id 字段，但 payload.brief → notes 没直接关系。
-        # 简化：按 run.started_at 时间窗口前后 1h 内查 created 的 note（最多 1 条）。
-        # 实际生产应该有 notes.goal_id 或 notes.source_run_id 字段；这里降级用时间窗。
-        from datetime import timedelta
+        # 关联 note：v0.7+ 第 2 期 notes 已加 goal_id/run_id，优先直查；
+        # 找不到再回退 1h 时间窗（留给老数据，附 WARNING）。
+        note = None
+        if run.id is not None:
+            note = (
+                await session.execute(
+                    select(Note).where(Note.run_id == run.id)
+                )
+            ).scalars().first()
 
-        window = timedelta(hours=1)
-        note_stmt = (
-            select(Note)
-            .where(
-                Note.created_at >= run.started_at - window,
-                Note.created_at <= (run.ended_at or run.started_at) + window,
+        if note is None:
+            from datetime import timedelta
+
+            logger.warning(
+                "summarize.note_resolve_fallback_window",
+                run_id=str(run.id),
+                reason="no notes.run_id match",
             )
-            .order_by(Note.created_at.desc())
-            .limit(1)
-        )
-        note = (await session.execute(note_stmt)).scalars().first()
+            window = timedelta(hours=1)
+            note_stmt = (
+                select(Note)
+                .where(
+                    Note.created_at >= run.started_at - window,
+                    Note.created_at <= (run.ended_at or run.started_at) + window,
+                )
+                .order_by(Note.created_at.desc())
+                .limit(1)
+            )
+            note = (await session.execute(note_stmt)).scalars().first()
         if note is None:
             items.append(item)
             continue
@@ -131,7 +144,7 @@ async def _ask_llm_for_learnings(snapshot: GoalSnapshot) -> dict[str, list[str]]
     }
     user = json.dumps(user_payload, ensure_ascii=False)
     try:
-        raw = await llm_complete(_SUMMARIZE_SYSTEM, user)
+        raw = await llm_complete(_SUMMARIZE_SYSTEM, user, call_type="summarize")
     except Exception:
         logger.exception("summarize.llm_failed", goal_id=str(snapshot.goal_id))
         return {"viral_patterns": [], "failure_lessons": []}
