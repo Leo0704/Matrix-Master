@@ -13,8 +13,9 @@ DeviceStatus = Literal["pending", "active", "offline", "tailscale_degraded", "di
 class Device(BaseModel):
     id: uuid.UUID
     nickname: str
-    model: str
-    android_version: str
+    # P2-3：4 个身份字段全部 Optional —— APK 上线前回填之前都可能是 None
+    model: Optional[str] = None
+    android_version: Optional[str] = None
     apk_version: Optional[str] = None
     tailnet_ip: Optional[str] = None
     tags: list[str] = Field(default_factory=list)
@@ -26,12 +27,19 @@ class Device(BaseModel):
 
 
 class DeviceRegisterRequest(BaseModel):
+    """P2-3：注册时只需昵称 + adb_serial，其余身份信息由 APK 配对后回填。"""
+
     nickname: str
-    model: str
-    android_version: str
-    apk_version: str
-    tailnet_ip: str
     adb_serial: Optional[str] = None
+
+
+class DevicePairIdentity(BaseModel):
+    """APK 配对时上报的设备身份，4 字段全 Optional —— 老 APK 不报也能配对。"""
+
+    model: Optional[str] = None
+    android_version: Optional[str] = None
+    apk_version: Optional[str] = None
+    tailnet_ip: Optional[str] = None
 
 
 class DeviceUpdate(BaseModel):
@@ -49,7 +57,10 @@ class DeviceUnbindResponse(BaseModel):
 
 
 class DevicePairRequest(BaseModel):
+    """消费配对码并下发 HMAC 密钥。可选 ``identity`` 块用于 APK 主动回传真实身份。"""
+
     pair_code: str = Field(..., description="6 位数字配对码")
+    identity: Optional[DevicePairIdentity] = None
 
 
 class DevicePairResponse(BaseModel):

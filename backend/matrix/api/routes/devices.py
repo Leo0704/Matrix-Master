@@ -84,6 +84,28 @@ def _consume_pair_code(device_id: uuid.UUID, pair_code: str) -> bool:
     return True
 
 
+def _apply_pair_identity(
+    d: DeviceORM, identity: "DevicePairIdentity"
+) -> dict[str, str]:
+    """把 APK 配对时上报的 4 字段写回 Device 行。
+
+    只写非空字段（含空字符串视为占位跳过，避免 APK 端串空值过来把已经填好的字段清掉）。
+    返回实际写入的字段名 → 值的 dict，供调用方记日志。
+    """
+    candidates: dict[str, str | None] = {
+        "model": identity.model,
+        "android_version": identity.android_version,
+        "apk_version": identity.apk_version,
+        "tailnet_ip": identity.tailnet_ip,
+    }
+    written: dict[str, str] = {}
+    for column, value in candidates.items():
+        if isinstance(value, str) and value != "":
+            setattr(d, column, value)
+            written[column] = value
+    return written
+
+
 @router.get("", response_model=DeviceListResponse)
 async def list_devices(
     status_filter: Optional[str] = Query(None, alias="status"),
@@ -128,12 +150,11 @@ async def register_device(
     body: DeviceRegisterRequest,
     session: AsyncSession = Depends(get_db),
 ) -> Device:
+    # P2-3：register 时只需 nickname（adb_serial 也可选）。其他 4 字段 APK 配对时回填。
+    # 注意：以前的版本允许请求里只带 nickname，Pydantic 会给缺失的 Optional 字段喂 None；
+    # 此处显式过滤非空字符串，避免空字符串被当占位入库后被 pair 覆盖逻辑误识别。
     d = DeviceORM(
         nickname=body.nickname,
-        model=body.model,
-        android_version=body.android_version,
-        apk_version=body.apk_version,
-        tailnet_ip=body.tailnet_ip,
         adb_serial=body.adb_serial,
         tags=[],
         status="pending",
@@ -177,7 +198,12 @@ async def pair_device(
     body: DevicePairRequest,
     session: AsyncSession = Depends(get_db),
 ) -> DevicePairResponse:
-    """消费主控签发的一次性配对码并下发新的 HMAC 密钥。"""
+    """消费主控签发的一次性配对码并下发新的 HMAC 密钥。
+
+    P2-3：可选接收 ``body.identity`` 块（model / android_version / apk_version / tailnet_ip），
+    APK 上线时把它们写回 Device 行——替代了原本让用户在 register 时手填的字段。
+    老 APK 只发 pair_code 也照样能配对，4 字段都缺也无副作用。
+    """
     d = await session.get(DeviceORM, device_id)
     if d is None or d.deleted_at is not None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
@@ -206,6 +232,17 @@ async def pair_device(
         secret_row.value = secret_value
     if d.status == "pending":
         d.status = "active"
+
+    # P2-3：写回 APK 自报的 4 字段（仅当 body.identity 非 None）
+    if body.identity is not None:
+        written = _apply_pair_identity(d, body.identity)
+        if written:
+            logger.info(
+                "pair_identity.applied",
+                device_id=str(device_id),
+                fields=sorted(written.keys()),
+            )
+
     await session.flush()
     return DevicePairResponse(
         key_id=issued.key_id,
