@@ -8,8 +8,9 @@ Phase 状态机（5 阶段 + DONE）：
                                               │
                                               └─── 收工 ──── 写 status=achieved, phase=DONE
 
-每轮"运营"流程：
-  PREPARING   拆任务：调 LLM 出 N 个 brief，每个 brief = 1 个 run（调 goals 创建 run）
+每轮"运营"流程（v0.7+ round-level fan-out）：
+  PREPARING   拉所有 active device；每台 = 1 个 run（绑定 device+account+scheduled_at+style_hint）
+              主题与 goal 一致；风格按 ``STYLE_ROTATION`` 轮换；时间 15 分钟错开
   EXECUTING   等所有 run 跑完（status 都不是 running）
   MONITORING  拉这一轮所有 note 的 metrics，存到 goal_rounds.kpi_summary
   SUMMARIZING 调 summarize_goal_to_kb 写 KB；把 LLM 提炼存到 goals.learning_summary
@@ -19,12 +20,14 @@ Phase 状态机（5 阶段 + DONE）：
               - deadline 到了 → DONE
               - 否则回 PREPARING 开始下一轮
 
+降级路径：当 ``round_allocator`` 未注入或 active device 数 = 0 时，跑 N 份占位 brief
+（每份 run 的 payload 不带 preassigned_slot，回退到旧 ``choose_slot`` 随机路径）。
+
 注：第 1 期 MVP 不动 LangGraph（task 级状态机），复用现有 goal → run 链路。
 """
 
 from __future__ import annotations
 
-import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -42,8 +45,9 @@ from matrix.db.models import (
     NoteMetric,
 )
 from matrix.monitoring.logging import get_logger
+from matrix.scheduler.round_slot_allocator import TimeOutOfWindowError
 
-from ._services import llm_complete
+from ._services import get_services
 
 logger = get_logger(__name__)
 
@@ -67,8 +71,12 @@ PHASE_ORDER = (
     PHASE_DONE,
 )
 
-# 每轮目标 notes 数（每篇 1 个 run）；先固定 3，可后续参数化
+# 兼容旧测试 / 表单字段：goal.notes_per_round 缺省值
 NOTES_PER_ROUND = 3
+# 软上限：单轮最多扇出多少设备（防止 LLM 成本爆炸；DB 字段不强制）
+DEFAULT_MAX_ROUND_FANOUT = 20
+# 时间错开：每台设备间隔分钟数
+DEFAULT_STAGGER_MINUTES = 15
 
 # 续跑阈值：本轮累计 likes 达到此数即收工；否则跑完 max_rounds
 DEFAULT_KPI_LIKES_TARGET = 500
@@ -99,176 +107,142 @@ async def _set_phase(session: AsyncSession, goal: Goal, new_phase: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# PREPARING：拆任务 → 写 N 条 AgentRun（不调 LangGraph，由 runner 拉起）
+# PREPARING：拉 active device → 调 round_allocator → 写 N 条 AgentRun
 # ---------------------------------------------------------------------------
 
 
-def _decompose_system_prompt(n: int) -> str:
-    return (
-        "你是内容运营的拆任务助手。给一个 goal 主题 + 受众 + 历史经验（可选），"
-        f"拆出 {n} 个**不同角度**的子任务（每个对应一篇笔记）。\n"
-        "**严格返回 JSON 数组**，每项结构：\n"
-        '{"theme": "本篇笔记的具体角度", "audience": "目标人群（可与原 goal 略有不同）",\n'
-        ' "product_category": "品类（可空）", "angle_reason": "为什么这个角度"}\n'
-        "要求：\n"
-        f"- {n} 个角度尽量**不重叠**（如不同使用场景/不同痛点/不同人群细分）\n"
-        "- 参考历史经验里的爆款模式，避开失败教训\n"
-        "- 看不到数据/没历史就靠 goal 主题合理拆"
-    )
-
-
-async def _decompose_goal(
-    session: AsyncSession, goal: Goal, learnings_text: str
-) -> list[dict]:
-    """调 LLM 把 goal 拆成 N 个不同 brief。失败时降级：从 KB 抽角度；再降级：N 份原 brief。"""
-    target = dict(goal.target or {})
+def _count_target_for_round(goal: Goal) -> int:
+    """降级路径用：从 goal.notes_per_round 取数，缺省 NOTES_PER_ROUND，capped。"""
     n = getattr(goal, "notes_per_round", NOTES_PER_ROUND) or NOTES_PER_ROUND
-    user = json.dumps(
-        {
-            "goal_theme": target.get("theme", ""),
-            "goal_audience": target.get("audience"),
-            "goal_product_category": target.get("product_category"),
-            "learnings": learnings_text,
-        },
-        ensure_ascii=False,
-    )
-    try:
-        raw = await llm_complete(_decompose_system_prompt(n), user)
-    except Exception:
-        logger.exception("orchestrator.decompose.llm_failed", goal_id=str(goal.id))
-        return []
-    # 解析 JSON（兼容 ```json``` 包裹 + 单 dict 包成 list）
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.strip("`")
-        if raw.startswith("json"):
-            raw = raw[4:]
-        raw = raw.strip()
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        logger.warning("orchestrator.decompose.json_parse_fail", raw_preview=raw[:200])
-        return []
-    if isinstance(data, dict):
-        data = [data]
-    if not isinstance(data, list):
-        return []
-    # 规范化
-    out: list[dict] = []
-    for item in data[:n]:
-        if not isinstance(item, dict):
-            continue
-        out.append({
-            "theme": str(item.get("theme", ""))[:200],
-            "audience": str(item.get("audience", target.get("audience", "")))[:100] or None,
-            "product_category": str(item.get("product_category", target.get("product_category", "")))[:100] or None,
-            "angle_reason": str(item.get("angle_reason", ""))[:200],
-        })
-    return out
+    return min(max(int(n), 0), DEFAULT_MAX_ROUND_FANOUT)
 
 
-async def _fallback_briefs_from_kb(
-    session: AsyncSession, goal: Goal, n: int
-) -> list[dict]:
-    """LLM 拆任务失败时的智能降级：从 KB 已发布的 strategy_card 抽 n 个不同角度。
+async def _allocate_round_slots(
+    session: AsyncSession,
+    goal: Goal,
+) -> tuple[list, int]:
+    """调 round_allocator.allocate 拿 N 个 (device, account, time, style_hint)。
 
-    比"N 份原 brief 复制"强一些：每条 brief 用 KB 里的真实爆款/避坑角度作主题。
+    返回 ``(slots, n_requested)``：
+    - slots: 可能为 ``[]``（无候选 / 失败 / 超出活跃窗 / 未注入 services）
+    - n_requested: 传给 allocate 的 n（= min(active_devices, cap)）
+
+    失败时静默降级，由 caller 决定走占位 brief 路径。
     """
-    from matrix.agent.learning_prompt import fetch_relevant_learnings
+    try:
+        services = get_services()
+    except RuntimeError:
+        # 没注入 services（早期/测试场景）→ 走降级
+        return [], 0
+    if services.round_allocator is None:
+        return [], 0
+    try:
+        active = await services.round_allocator.count_active_devices()
+    except Exception:
+        logger.exception(
+            "orchestrator.count_active_devices failed", goal_id=str(goal.id)
+        )
+        return [], 0
+    n = min(active, DEFAULT_MAX_ROUND_FANOUT)
+    if n <= 0:
+        return [], 0
+    try:
+        persona_cfg = services.system_metadata.get("persona_config")
+        slots = await services.round_allocator.allocate(
+            brief=dict(goal.target or {}),
+            n=n,
+            stagger_minutes=DEFAULT_STAGGER_MINUTES,
+            persona_config=persona_cfg,
+        )
+        return slots, n
+    except TimeOutOfWindowError as exc:
+        logger.warning(
+            "orchestrator.round_out_of_window",
+            goal_id=str(goal.id),
+            n=n,
+            error=str(exc),
+        )
+        return [], n
+    except Exception:
+        logger.exception(
+            "orchestrator.allocate failed", goal_id=str(goal.id)
+        )
+        return [], n
 
-    theme = str((dict(goal.target or {})).get("theme", ""))
-    audience = (dict(goal.target or {})).get("audience")
-    learnings = await fetch_relevant_learnings(session, theme, audience, limit=n)
-    # learnings 是 "## 历史经验...\n- [爆款] xxx：snippet\n..." 文本
-    # 抽 bullet 行作为 angle
-    angles: list[str] = []
-    for line in learnings.splitlines():
-        line = line.strip()
-        if line.startswith("- "):
-            angle = line[2:].strip()
-            # 取冒号前作为简短 angle
-            if "：" in angle:
-                angle = angle.split("：", 1)[1].strip() if len(angle.split("：", 1)) > 1 else angle
-            elif ":" in angle:
-                angle = angle.split(":", 1)[1].strip() if len(angle.split(":", 1)) > 1 else angle
-            # 截断到 80 字
-            angles.append(angle[:80])
-    # 兜底：抽不到就用原 brief
-    target = dict(goal.target or {})
-    if not angles:
-        return [target] * n
-    # n 个不同 angle，每个 angle + 原 brief 合并
-    out: list[dict] = []
-    for i in range(n):
-        if i < len(angles):
-            merged = dict(target)
-            merged["theme"] = angles[i]
-            merged["angle_reason"] = f"参考 KB 历史：{angles[i]}"
-            out.append(merged)
-        else:
-            out.append(target)
-    return out
+
+def _build_run_payload(
+    goal: Goal,
+    target: dict,
+    round_number: int,
+    slot,
+) -> dict[str, Any]:
+    """构造 AgentRun.payload；slot 为 None 时不带 preassigned_slot（旧随机路径）。"""
+    brief = dict(target)
+    if slot is not None:
+        brief["style_hint"] = slot.style_hint
+    payload: dict[str, Any] = {
+        "brief": brief,
+        "entry": "RESEARCH",
+        "goal_text": (brief.get("theme") or target.get("theme", ""))[:200],
+        "goal_type": goal.type,
+        "round_number": round_number,
+    }
+    if slot is not None:
+        payload["preassigned_slot"] = {
+            "device_id": str(slot.device_id),
+            "account_id": str(slot.account_id),
+            "scheduled_at": slot.scheduled_at.isoformat() if slot.scheduled_at else None,
+            "style_hint": slot.style_hint,
+            "reason": slot.reason,
+        }
+    return payload
 
 
 async def _prepare_round(
     session: AsyncSession, goal: Goal, round_number: int
 ) -> int:
-    """在 goal 上开 1 轮：LLM 拆 N 个不同 brief，每条 run 一个 brief。
+    """在 goal 上开 1 轮。
 
-    拆任务失败时降级：跑 N 次原 brief（不阻挡流程）。
+    v0.7+ 主路径：调 ``round_allocator.allocate`` 拿 N 个 slot，每台 1 个 run
+    （同主题 + 风格轮换 + 时间错开 + 预分配 device/account）。
+
+    降级：未注入 round_allocator / 0 active device / 活跃窗外 → 跑 N 份占位 brief
+    （不带 preassigned_slot，回退 SCHEDULE 节点 ``choose_slot`` 随机路径）。
     """
     target = dict(goal.target or {})
 
-    # 拉历史经验（第 3 期 learning_prompt）
-    learnings_text = ""
-    try:
-        from matrix.agent.learning_prompt import fetch_relevant_learnings
-        learnings_text = await fetch_relevant_learnings(
-            session,
-            theme=str(target.get("theme", "")),
-            audience=target.get("audience"),
-        )
-    except Exception:
-        logger.exception("orchestrator.learnings_fetch_failed", goal_id=str(goal.id))
-
-    # 调 LLM 拆任务
-    n = getattr(goal, "notes_per_round", NOTES_PER_ROUND) or NOTES_PER_ROUND
-    briefs = await _decompose_goal(session, goal, learnings_text)
-    if not briefs:
-        # 降级 1：从 KB 抽 n 个不同角度
-        briefs = await _fallback_briefs_from_kb(session, goal, n)
-    if not briefs:
-        # 降级 2：n 份原 brief
-        briefs = [target] * n
+    # 主路径：拉 N 个 slot
+    slots, _n = await _allocate_round_slots(session, goal)
 
     created = 0
-    for brief in briefs[:n]:
-        # 合并原 target 字段（保留 goal_type 等）但用新拆的 theme/audience
-        merged = dict(target)
-        if brief.get("theme"):
-            merged["theme"] = brief["theme"]
-        if brief.get("audience"):
-            merged["audience"] = brief["audience"]
-        if brief.get("product_category"):
-            merged["product_category"] = brief["product_category"]
-        if brief.get("angle_reason"):
-            merged["angle_reason"] = brief["angle_reason"]
-        merged["round_number"] = round_number
-        payload = {
-            "brief": merged,
-            "entry": "RESEARCH",
-            "goal_text": (merged.get("theme") or target.get("theme", ""))[:200],
-            "goal_type": goal.type,
-            "round_number": round_number,
-        }
-        run = AgentRun(
-            goal_id=goal.id,
-            current_state="IDLE",
-            payload=payload,
-            status="running",
-        )
-        session.add(run)
-        created += 1
+    if slots:
+        # 每台设备 1 个 run，同主题 + style_hint 轮换 + 时间错开
+        for slot in slots:
+            payload = _build_run_payload(goal, target, round_number, slot)
+            run = AgentRun(
+                goal_id=goal.id,
+                current_state="IDLE",
+                payload=payload,
+                round_number=round_number,
+                status="running",
+            )
+            session.add(run)
+            created += 1
+    else:
+        # 降级路径：N 份占位 brief（旧随机 choose_slot 路径）
+        n = _count_target_for_round(goal)
+        for _ in range(n):
+            payload = _build_run_payload(goal, target, round_number, slot=None)
+            run = AgentRun(
+                goal_id=goal.id,
+                current_state="IDLE",
+                payload=payload,
+                round_number=round_number,
+                status="running",
+            )
+            session.add(run)
+            created += 1
+
     # 写 1 条 goal_rounds 记录
     round_row = GoalRound(
         goal_id=goal.id,
@@ -285,10 +259,18 @@ async def _prepare_round(
 # ---------------------------------------------------------------------------
 
 
-async def _check_runs_done(session: AsyncSession, goal_id: uuid.UUID) -> bool:
-    """所有本轮 run 都不在 running → 可以进 MONITORING。"""
+async def _check_runs_done(
+    session: AsyncSession, goal_id: uuid.UUID, round_number: int
+) -> bool:
+    """本轮所有 run 都不在 running → 可以进 MONITORING。
+
+    只看当前轮次；旧轮残留的 running 不会卡住新轮。
+    v0.7+ 第 2 期：round_number 已提升到一等列（迁移 011），
+    走 idx_agent_runs_goal_round_status 复合索引命中。
+    """
     stmt = select(func.count(AgentRun.id)).where(
         AgentRun.goal_id == goal_id,
+        AgentRun.round_number == round_number,
         AgentRun.status == "running",
     )
     pending = (await session.execute(stmt)).scalar() or 0
@@ -305,11 +287,15 @@ async def _gather_round_kpi(
 ) -> dict[str, Any]:
     """拉这一轮所有 note 的最新 metrics，汇总后写到 goal_rounds.kpi_summary。
 
-    简化：直接查全部 agent_runs 的 goal_id，按时间窗关联最近 notes。
-    实际生产应该用 notes.goal_id 字段（待加）。
+    看当前轮次（v0.7+ 第 2 期 round_number 已是一等列）；note 解析三层 fallback：
+      1) notes.run_id == run.id（首选，DRAFT/PUBLISH 会写）
+      2) run.payload['note_id']（早期没接 run_id 时的过渡）
+      3) 时间窗回退（5 min，附 WARNING，留给老数据）
     """
-    # 拉所有 run
-    runs_stmt = select(AgentRun).where(AgentRun.goal_id == goal_id)
+    runs_stmt = select(AgentRun).where(
+        AgentRun.goal_id == goal_id,
+        AgentRun.round_number == round_number,
+    )
     runs = (await session.execute(runs_stmt)).scalars().all()
 
     total_views = 0
@@ -320,20 +306,53 @@ async def _gather_round_kpi(
     per_note: list[dict[str, Any]] = []
 
     for run in runs:
-        # 关联 note：MVP 简化用时间窗
-        from datetime import timedelta
+        note = None
 
-        window = timedelta(hours=2)
-        note_stmt = (
-            select(Note)
-            .where(
-                Note.created_at >= run.started_at - window,
-                Note.created_at <= (run.ended_at or run.started_at) + window,
+        # 1) 首选：notes.run_id 直查（新写入路径）
+        if run.id is not None:
+            note = (
+                await session.execute(
+                    select(Note).where(Note.run_id == run.id)
+                )
+            ).scalars().first()
+
+        # 2) 过渡：run.payload['note_id']（DRAFT 节点生成的 uuid，比时间窗更准）
+        if note is None:
+            note_id_val = None
+            if isinstance(run.payload, dict):
+                note_id_val = run.payload.get("note_id")
+            if note_id_val:
+                try:
+                    from uuid import UUID as _UUID
+
+                    note = (
+                        await session.execute(
+                            select(Note).where(Note.id == _UUID(str(note_id_val)))
+                        )
+                    ).scalars().first()
+                except (ValueError, TypeError):
+                    note = None
+
+        # 3) 最后回退：窄时间窗（5 min，仅老数据；附 WARNING 便于后续清理）
+        if note is None:
+            from datetime import timedelta
+
+            logger.warning(
+                "orchestrator.note_resolve_fallback_window",
+                run_id=str(run.id),
+                reason="no notes.run_id or payload.note_id match",
             )
-            .order_by(Note.created_at.desc())
-            .limit(1)
-        )
-        note = (await session.execute(note_stmt)).scalars().first()
+            window = timedelta(minutes=5)
+            note_stmt = (
+                select(Note)
+                .where(
+                    Note.created_at >= run.started_at - window,
+                    Note.created_at <= (run.ended_at or run.started_at) + window,
+                )
+                .order_by(Note.created_at.desc())
+                .limit(1)
+            )
+            note = (await session.execute(note_stmt)).scalars().first()
         if note is None:
             continue
         notes_count += 1
@@ -384,6 +403,23 @@ async def _write_round_kpi(
     row.total_likes = kpi.get("total_likes", 0)
     row.ended_at = _utcnow()
     await session.flush()
+
+
+async def _load_round_kpi(
+    session: AsyncSession, goal_id: uuid.UUID, round_number: int
+) -> dict[str, Any]:
+    """从 ``goal_rounds.kpi_summary`` 读本轮 KPI（SUMMARIZING/DECIDING 用，避免重算）。
+
+    MONITORING 阶段负责写入；SUMMARIZING/DECIDING 直接读。读不到时返回空 dict
+    （等同"本轮没数据"）。
+    """
+    stmt = select(GoalRound).where(
+        GoalRound.goal_id == goal_id, GoalRound.round_number == round_number
+    )
+    row = (await session.execute(stmt)).scalars().first()
+    if row is None or row.kpi_summary is None:
+        return {}
+    return dict(row.kpi_summary)
 
 
 # ---------------------------------------------------------------------------
@@ -515,7 +551,7 @@ async def advance_goal(
         )
 
     if goal.phase == PHASE_PREPARING:
-        # 拆任务：创建 NOTES_PER_ROUND 条 run + 1 条 goal_rounds
+        # 拆任务：拉 N 个 slot → 写 N 条 run + 1 条 goal_rounds
         created = await _prepare_round(session, goal, goal.current_round)
         await _set_phase(session, goal, PHASE_EXECUTING)
         action = f"prepared {created} runs"
@@ -530,8 +566,8 @@ async def advance_goal(
         )
 
     if goal.phase == PHASE_EXECUTING:
-        # 等所有 run 跑完
-        done = await _check_runs_done(session, goal.id)
+        # 等所有本轮 run 跑完
+        done = await _check_runs_done(session, goal.id, goal.current_round)
         if not done:
             # 还不能进 MONITORING，留在 EXECUTING
             return OrchestratorResult(
@@ -567,8 +603,8 @@ async def advance_goal(
         )
 
     if goal.phase == PHASE_SUMMARIZING:
-        # 拿上一步写的 kpi
-        kpi = await _gather_round_kpi(session, goal.id, goal.current_round)
+        # 直接从 goal_rounds.kpi_summary 读，不再重算
+        kpi = await _load_round_kpi(session, goal.id, goal.current_round)
         await _summarize_round(session, goal, goal.current_round, kpi)
         await _set_phase(session, goal, PHASE_DECIDING)
         await session.commit()
@@ -582,7 +618,8 @@ async def advance_goal(
         )
 
     if goal.phase == PHASE_DECIDING:
-        kpi = await _gather_round_kpi(session, goal.id, goal.current_round)
+        # 直接从 goal_rounds.kpi_summary 读
+        kpi = await _load_round_kpi(session, goal.id, goal.current_round)
         cont, reason = _should_continue(goal, kpi)
         if cont:
             goal.current_round += 1
@@ -632,6 +669,8 @@ __all__ = [
     "PHASE_DONE",
     "PHASE_ORDER",
     "NOTES_PER_ROUND",
+    "DEFAULT_MAX_ROUND_FANOUT",
+    "DEFAULT_STAGGER_MINUTES",
     "DEFAULT_KPI_LIKES_TARGET",
     "advance_goal",
 ]

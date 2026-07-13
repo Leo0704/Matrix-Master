@@ -1,7 +1,8 @@
 """目标 CRUD 端点。
 
-创建目标会触发 Agent run：插入 AgentRun 行（status=running, current_state=IDLE），
-由 matrix.agent 集成层（调度器或独立 worker）拉起 LangGraph 状态机。
+创建目标后由 ``GoalOrchestratorWorker`` 推进 phase=PENDING → PREPARING → ... → DONE；
+具体的 AgentRun（每篇笔记一条）由 orchestrator 的 ``_prepare_round`` 创建，
+不再由本路由塞"启动种子"。
 """
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ from matrix.api.schemas import (
     GoalRoundListResponse,
     GoalUpdate,
 )
-from matrix.db.models import AgentRun, Goal as GoalORM, GoalRound as GoalRoundORM
+from matrix.db.models import Goal as GoalORM, GoalRound as GoalRoundORM
 from matrix.monitoring.logging import get_logger
 from matrix.monitoring.tracing import trace_agent_run
 
@@ -177,29 +178,21 @@ async def create_goal(
     session.add(g)
     await session.flush()
 
-    # 触发 Agent run：插入初始 row，让 matrix.agent 集成层接管
-    # payload 含 brief（结构化主题）+ entry 起点，让 RunManager.start_run 注入 state["brief"]
-    run = AgentRun(
-        goal_id=g.id,
-        current_state="IDLE",
-        payload={
-            "brief": target_dict,
-            "entry": "RESEARCH",
-        },
-        status="running",
-    )
-    session.add(run)
-    await session.flush()
+    # v0.7+ 第 2 期：去掉"启动种子 AgentRun"。
+    # 旧的：create_goal 自己塞 1 条 IDLE AgentRun + 让 AgentRunWorker 拉起 RESEARCH → DRAFT...
+    # 新的：goal 进入 phase=PENDING，由 GoalOrchestratorWorker 推进
+    #       PENDING→PREPARING（_prepare_round）一次性建 N 条带 round_number 和 preassigned_slot 的 run。
+    # 这样首轮跑出恰好 N 条（不再是 1+N），且全部带 round_number，orchestrator 按轮次查询能命中索引。
 
     logger.info(
-        "goal.created.agent_run.scheduled",
+        "goal.created",
         goal_id=str(g.id),
-        run_id=str(run.id),
         type=g.type,
+        notes_per_round=g.notes_per_round,
     )
     # 包裹一个 trace span（不阻塞主流程，失败仅记录）
     try:
-        with trace_agent_run(str(run.id), goal=f"{g.type}:{g.id}"):
+        with trace_agent_run(str(g.id), goal=f"{g.type}:{g.id}"):
             pass
     except Exception:  # pragma: no cover - tracing 失败不影响业务
         logger.exception("trace_agent_run failed")
