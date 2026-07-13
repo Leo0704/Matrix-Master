@@ -39,6 +39,47 @@ class _FakeSlotPicker:
         )
 
 
+class _FakeRoundAllocator:
+    """测试用：goal/round 扇出场景的 allocator；预置 N 个 slot。"""
+
+    def __init__(self, slots: list[ChosenSlot] | None = None) -> None:
+        self._slots = slots or []
+        self.allocate_calls: list[dict] = []
+        self.count_calls = 0
+
+    async def count_active_devices(self) -> int:
+        self.count_calls += 1
+        return len(self._slots)
+
+    async def allocate(
+        self,
+        *,
+        brief: dict,
+        n: int,
+        base_time: datetime | None = None,
+        stagger_minutes: int = 15,
+        persona_config: dict | None = None,
+    ) -> list[ChosenSlot]:
+        self.allocate_calls.append(
+            {
+                "brief": brief,
+                "n": n,
+                "base_time": base_time,
+                "stagger_minutes": stagger_minutes,
+                "persona_config": persona_config,
+            }
+        )
+        return self._slots[:n]
+
+    async def is_slot_valid(
+        self, *, device_id, account_id, now: datetime | None = None
+    ) -> bool:
+        return any(
+            s.device_id == device_id and s.account_id == account_id
+            for s in self._slots
+        )
+
+
 async def test_closed_loop_runs_end_to_end():
     # LLM 按阶段返回正确 JSON 形状（REVIEW 必须 passed:true 才能过守卫）
     llm = FakeLLM(

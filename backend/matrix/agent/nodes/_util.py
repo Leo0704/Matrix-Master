@@ -72,6 +72,7 @@ def format_brief(brief: dict[str, Any] | None) -> str:
     audience = brief.get("audience")
     product_category = brief.get("product_category")
     goal_type = brief.get("goal_type")
+    style_hint = brief.get("style_hint")
     if theme:
         lines.append(f"主题：{theme}")
     if audience:
@@ -80,4 +81,6 @@ def format_brief(brief: dict[str, Any] | None) -> str:
         lines.append(f"商品/内容类目：{product_category}")
     if goal_type:
         lines.append(f"动作类型：{goal_type}")
+    if style_hint:
+        lines.append(f"写作风格：{style_hint}")
     return "\n".join(lines)

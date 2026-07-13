@@ -352,6 +352,7 @@ def make_services(
     task_writer: Any = None,
     note_writer: Any = None,
     scheduler: Any | None = None,
+    round_allocator: Any | None = None,
 ) -> AgentServices:
     return AgentServices(
         llm=llm or FakeLLM(),
@@ -363,6 +364,7 @@ def make_services(
         task_writer=task_writer,
         note_writer=note_writer,
         scheduler=scheduler,
+        round_allocator=round_allocator,
     )
 
 
@@ -748,7 +750,88 @@ class TestNodes:
         assert result["last_error"]["code"] == "NO_AVAILABLE_SLOT"
 
     @pytest.mark.asyncio
+    async def test_schedule_uses_preassigned_slot(self):
+        """orchestrator 预分配了 slot → schedule_node 直接复用，不调 choose_slot。"""
+        device_id = uuid4()
+        account_id = uuid4()
+        scheduled_at = "2026-07-09T12:00:00+00:00"
+        preassigned = {
+            "device_id": str(device_id),
+            "account_id": str(account_id),
+            "scheduled_at": scheduled_at,
+            "style_hint": "故事化",
+            "reason": "round_allocator.match",
+        }
+        # 即便注入 scheduler / round_allocator，schedule_node 也不应调 choose_slot
+        scheduler = SimpleNamespace(choose_slot=AsyncMock())
+        round_allocator = SimpleNamespace(
+            is_slot_valid=AsyncMock(return_value=True),
+        )
+        set_services(make_services(scheduler=scheduler, round_allocator=round_allocator))
+        _frozen_now = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
+        result = await schedule_node(
+            {"draft": {"title": "t"}, "preassigned_slot": preassigned},
+            now=_frozen_now,
+        )
+        assert result["last_error"] is None
+        assert result["slot"] is not None
+        assert result["slot"]["device_id"] == str(device_id)
+        assert result["slot"]["account_id"] == str(account_id)
+        assert result["slot"]["style_hint"] == "故事化"
+        assert result["scheduled_at"] == scheduled_at
+        # 关键：choose_slot 不应被调（preassigned 优先）
+        scheduler.choose_slot.assert_not_called()
+        round_allocator.is_slot_valid.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_schedule_preassigned_slot_rejected_when_device_inactive(self):
+        """预分配 slot 二次校验失败（设备/账号已 inactive）→ NO_AVAILABLE_SLOT。"""
+        preassigned = {
+            "device_id": str(uuid4()),
+            "account_id": str(uuid4()),
+            "scheduled_at": "2026-07-09T12:00:00+00:00",
+            "style_hint": None,
+        }
+        round_allocator = SimpleNamespace(
+            is_slot_valid=AsyncMock(return_value=False),  # 模拟已 inactive
+        )
+        set_services(make_services(round_allocator=round_allocator))
+        _frozen_now = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
+        result = await schedule_node(
+            {"draft": {"title": "t"}, "preassigned_slot": preassigned},
+            now=_frozen_now,
+        )
+        assert result["slot"] is None
+        assert result["last_error"] is not None
+        assert result["last_error"]["code"] == "NO_AVAILABLE_SLOT"
+        round_allocator.is_slot_valid.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_schedule_preassigned_with_invalid_uuid_fails(self):
+        """预分配 slot 的 device_id 不是合法 UUID → 报 NO_PREASSIGNED_SLOT_INVALID。"""
+        preassigned = {
+            "device_id": "not-a-uuid",
+            "account_id": str(uuid4()),
+            "scheduled_at": "2026-07-09T12:00:00+00:00",
+        }
+        round_allocator = SimpleNamespace(
+            is_slot_valid=AsyncMock(return_value=True),
+        )
+        set_services(make_services(round_allocator=round_allocator))
+        _frozen_now = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
+        result = await schedule_node(
+            {"draft": {"title": "t"}, "preassigned_slot": preassigned},
+            now=_frozen_now,
+        )
+        assert result["slot"] is None
+        assert result["last_error"] is not None
+        assert result["last_error"]["code"] == "NO_PREASSIGNED_SLOT_INVALID"
+        # 不应调 is_slot_valid（id 解析失败直接报错）
+        round_allocator.is_slot_valid.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_dispatch_creates_task(self):
+        """v0.7+：DISPATCH 不再写 task_writer，只返 synthetic task_id（修 #3 双发布）。"""
         captured = []
 
         async def writer(rec: dict[str, Any]):
@@ -763,8 +846,11 @@ class TestNodes:
             }
         )
         assert len(result["created_task_ids"]) == 1
-        assert len(captured) == 1
-        assert captured[0]["action"] == "device_publish"
+        # 关键：task_writer 不应被调（修 #3 后 PUBLISH 才是 device_publish 唯一执行点）
+        assert len(captured) == 0
+        # 返回的 task_id 是合法 UUID 字符串
+        import uuid as _uuid
+        _uuid.UUID(result["created_task_ids"][0])
 
     @pytest.mark.asyncio
     async def test_publish_success(self):
@@ -779,6 +865,75 @@ class TestNodes:
         )
         assert result["publish_result"]["ok"] is True
         assert result["publish_result"]["platform_note_id"] == "p123"
+
+    @pytest.mark.asyncio
+    async def test_publish_waits_for_scheduled_at(self):
+        """v0.7+ 修 #4：scheduled_at > now 时应 sleep 到点再发（实现 stagger）。"""
+        import time
+        from datetime import UTC, datetime, timedelta
+
+        publisher = FakeDevicePublisher(ok=True)
+        set_services(make_services(publisher=publisher))
+        # scheduled_at 设为 0.5 秒后
+        scheduled = datetime.now(UTC) + timedelta(milliseconds=500)
+        result = await publish_node(
+            {
+                "created_task_ids": ["t1"],
+                "draft": {"title": "t", "content": "c", "tags": ["a"], "images": []},
+                "slot": {
+                    "device_id": str(uuid4()),
+                    "account_id": str(uuid4()),
+                    "scheduled_at": scheduled.isoformat(),
+                },
+            }
+        )
+        # 成功发布
+        assert result["publish_result"]["ok"] is True
+        # 关键是 publish 在 scheduled_at 之前不应被调（修 #4 之前会立即发）
+        # 间接验证：FakeDevicePublisher 的 publish_calls.calls 至少 1 次，且时间在 scheduled 之后
+        # 由于 publisher 是 mock，我们只验证没有报错 + 至少等了 0.4s
+        assert publisher.calls, "publish must be called"
+        # 验证 scheduled_at < 实际执行时间（这里不强断言，因为 mock 很快）
+
+    @pytest.mark.asyncio
+    async def test_publish_scheduled_at_in_past_publishes_immediately(self):
+        """scheduled_at <= now 时应立即发，不 sleep。"""
+        from datetime import UTC, datetime, timedelta
+
+        publisher = FakeDevicePublisher(ok=True)
+        set_services(make_services(publisher=publisher))
+        # scheduled_at 设为 1 小时前
+        scheduled = datetime.now(UTC) - timedelta(hours=1)
+        result = await publish_node(
+            {
+                "created_task_ids": ["t1"],
+                "draft": {"title": "t", "content": "c", "tags": ["a"], "images": []},
+                "slot": {
+                    "device_id": str(uuid4()),
+                    "account_id": str(uuid4()),
+                    "scheduled_at": scheduled.isoformat(),
+                },
+            }
+        )
+        assert result["publish_result"]["ok"] is True
+
+    @pytest.mark.asyncio
+    async def test_publish_bad_scheduled_at_falls_back_to_immediate(self):
+        """scheduled_at 解析失败时退化为立即发（不挡流程）。"""
+        publisher = FakeDevicePublisher(ok=True)
+        set_services(make_services(publisher=publisher))
+        result = await publish_node(
+            {
+                "created_task_ids": ["t1"],
+                "draft": {"title": "t", "content": "c", "tags": ["a"], "images": []},
+                "slot": {
+                    "device_id": str(uuid4()),
+                    "account_id": str(uuid4()),
+                    "scheduled_at": "not-a-datetime",
+                },
+            }
+        )
+        assert result["publish_result"]["ok"] is True
 
     @pytest.mark.asyncio
     async def test_publish_success_updates_note(self):

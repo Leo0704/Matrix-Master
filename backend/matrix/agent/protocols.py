@@ -179,6 +179,8 @@ class DeviceSlot:
     device_id: UUID
     account_id: UUID
     reason: str = ""
+    # 写作风格提示（v0.7+：goal/round 扇出时按设备下标轮换；单 run 随机路径为 None）
+    style_hint: str | None = None
 
 
 @dataclass(frozen=True)

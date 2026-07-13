@@ -119,6 +119,11 @@ class RunManager:
         brief = payload.get("brief")
         if isinstance(brief, dict) and brief:
             state["brief"] = brief
+        # v0.7+ preassigned_slot：orchestrator._prepare_round 在 round 扇出时写入；
+        # schedule_node 看到它就跳过 choose_slot 随机路径
+        preassigned = payload.get("preassigned_slot")
+        if isinstance(preassigned, dict) and preassigned:
+            state["preassigned_slot"] = preassigned
         # v0.6 互动计划：发后流量互推（list[{note_id, kind, content_template?}])
         interact_plan = payload.get("interact_plan")
         if isinstance(interact_plan, list) and interact_plan:
@@ -243,6 +248,11 @@ class RunManager:
             run_brief = run.payload.get("brief")
             if isinstance(run_brief, dict) and run_brief:
                 new_state["brief"] = run_brief
+        # resume 时补 preassigned_slot（SCHEDULE 失败 resume 也要按预分配走）
+        if not new_state.get("preassigned_slot") and isinstance(run.payload, dict):
+            run_pa = run.payload.get("preassigned_slot")
+            if isinstance(run_pa, dict) and run_pa:
+                new_state["preassigned_slot"] = run_pa
         if alert_ack:
             new_state["_alert_ack"] = True
         result = await self.sm.ainvoke(new_state)

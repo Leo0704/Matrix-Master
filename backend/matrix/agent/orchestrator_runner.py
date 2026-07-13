@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from matrix.agent.orchestrator import advance_goal
 from matrix.db.models import Goal
+from matrix.db.session import get_session
 
 logger = get_logger(__name__)
 
@@ -63,7 +64,9 @@ class GoalOrchestratorWorker:
 
     async def _advance_one(self, goal_id: uuid.UUID) -> None:
         try:
-            async with self._session_factory() as session:
+            # 用 get_session() 上下文管理器：干净退出自动 commit，异常回滚。
+            # 避免 advance_goal 内部某个分支忘记 commit 导致 phase 永远卡住。
+            async with get_session() as session:
                 g = await session.get(Goal, goal_id)
                 if g is None or g.deleted_at is not None or g.phase == "DONE":
                     return

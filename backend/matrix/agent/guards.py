@@ -237,8 +237,11 @@ def collect_no_metrics_to_alert(state: AgentState, cfg: GuardConfig) -> bool:
 # ANALYZE 是一个收尾节点，本身转到 IDLE，不需要 guard。
 # 但仍提供一个可测的 hook：
 def analyze_complete(state: AgentState) -> bool:
-    """ANALYZE 完成后是否回到 IDLE（目前恒为 True）。"""
-    return state.get("last_error") is None or True  # 即使有错误也回 IDLE 让人工处理
+    """ANALYZE 完成后是否回到 IDLE。
+
+    策略：恒为 True（即使 ANALYZE 报错也回 IDLE，由人工/监控处理）。
+    """
+    return True
 
 
 # ---------------------------------------------------------------------------

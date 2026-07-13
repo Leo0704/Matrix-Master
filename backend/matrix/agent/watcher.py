@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from matrix.monitoring.logging import get_logger
@@ -40,7 +40,10 @@ class WatchdogConfig:
     """watchdog 阈值集合（产线可在 app_config 调）。"""
 
     poll_interval_sec: float = 30.0
-    stuck_threshold_sec: int = 600  # 10 min
+    # 30 min：v0.7+ round-level stagger 最长可能让 run 阻塞 N×15min 等排期
+    # （N 设备 15min 错开，最坏 N-1 次等待 → 4 台 = 60 min；5 台 = 60 min）。
+    # 留 30 min 余量给 PUBLISH 实际执行时间。
+    stuck_threshold_sec: int = 1800
     dry_run: bool = False  # 默认开启真实标 timeout，作为 worker 失败重试耗尽后的兜底
 
 
@@ -80,8 +83,7 @@ class AgentRunScanner:
 
         from matrix.db.models import AgentRun
 
-        cutoff = now.timestamp() - threshold_sec
-        cutoff_dt = datetime.fromtimestamp(cutoff, tz=timezone.utc)
+        cutoff_dt = now - timedelta(seconds=threshold_sec)
         try:
             async with self._session_factory() as session:
                 stmt = (

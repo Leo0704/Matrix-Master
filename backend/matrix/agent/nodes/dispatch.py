@@ -1,10 +1,15 @@
-"""DISPATCH 节点：基于 schedule 选中设备/账号创建 task。"""
+"""DISPATCH 节点：把 schedule 选中的 (device, account, time) 落到 agent state。
 
+v0.7+ 行为变更（修 #3 双发布）：
+- 不再写 task_writer / tasks 表 — 之前这会让 Scheduler 也执行一次 device_publish，
+  跟 PUBLISH 节点直接调 device_publisher.publish() 打架，导致同一条笔记发 2 次。
+- 现在 PUBLISH 节点是 device_publish 的唯一执行点（拿到 preassigned slot 后直接发）；
+  DISPATCH 只负责校验 slot + 生成 synthetic task_id（用于日志关联/notes 表写入追踪）。
+- Scheduler 之后只处理 interact/collect 等其他 action，不碰 device_publish。
+"""
 from __future__ import annotations
 
 from matrix.monitoring.logging import get_logger
-import uuid as uuidlib
-from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -15,11 +20,10 @@ logger = get_logger(__name__)
 
 
 async def dispatch_node(state: AgentState) -> dict[str, Any]:
-    """写 1 个 publish task + 若干 interact task 候选（默认仅 1 个 publish）。
+    """校验 slot + 返 synthetic task_id（不再调 task_writer）。
 
-    真实持久化由 ``services.task_writer`` 完成；测试可注入 mock writer。
+    真实持久化由 PUBLISH 节点直接把发布结果写回 notes 表；DISPATCH 不再写 tasks 表。
     """
-    services = get_services()
     draft = state.get("draft") or {}
     slot = state.get("slot") or {}
     scheduled_at = state.get("scheduled_at")
@@ -30,44 +34,29 @@ async def dispatch_node(state: AgentState) -> dict[str, Any]:
             "last_error": {"code": "NO_SLOT", "message": "schedule did not pick device/account"},
         }
 
-    device_id = _as_uuid(slot["device_id"])
-    account_id = _as_uuid(slot["account_id"])
-    note_id = _as_uuid(draft.get("note_id") or uuid4())
+    # 校验 slot 的 UUID 合法性（防 SCHEDULE 节点传脏数据下来）
+    try:
+        _as_uuid(slot["device_id"])
+        _as_uuid(slot["account_id"])
+    except (ValueError, TypeError) as exc:
+        return {
+            "created_task_ids": [],
+            "last_error": {"code": "NO_SLOT", "message": f"invalid slot id: {exc}"},
+        }
 
-    publish_payload = {
-        "note_id": str(note_id),
-        "title": draft.get("title", ""),
-        "content": draft.get("content", ""),
-        "images": list(draft.get("images") or []),
-        "tags": list(draft.get("tags") or []),
-    }
-
-    task_records: list[dict[str, Any]] = [
-        {
-            "id": uuid4(),
-            "action": "device_publish",
-            "payload": publish_payload,
-            "device_id": device_id,
-            "account_id": account_id,
-            "request_id": str(uuidlib.uuid4()),
-            "scheduled_at": scheduled_at or datetime.now(UTC).isoformat(),
-        },
-    ]
-
-    # 持久化（如 writer 注入）
-    if services.task_writer is not None:
-        try:
-            for rec in task_records:
-                await services.task_writer(rec)
-        except Exception as exc:
-            logger.exception("dispatch.task_writer failed")
-            return {
-                "created_task_ids": [],
-                "last_error": {"code": "TASK_WRITE_FAILED", "message": str(exc)},
-            }
+    # synthetic task_id：用于 logs 关联、notes 表追踪。
+    # 真实执行由 PUBLISH 节点直接调 device_publisher.publish() 完成（修 #3）。
+    synthetic_task_id = uuid4()
+    logger.info(
+        "dispatch.handoff",
+        task_id=str(synthetic_task_id),
+        device_id=str(slot.get("device_id")),
+        account_id=str(slot.get("account_id")),
+        scheduled_at=scheduled_at,
+    )
 
     return {
-        "created_task_ids": [str(r["id"]) for r in task_records],
+        "created_task_ids": [str(synthetic_task_id)],
         "last_error": None,
     }
 

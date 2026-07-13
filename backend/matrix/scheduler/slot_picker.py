@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -42,7 +42,7 @@ class DefaultSlotPicker:
         :param persona_config: persona 配置（保留接口，persona 级别策略未来扩展）
         :param now: 当前时间（用于判断 ``auto_suspend_until``）
         """
-        current = now or datetime.utcnow()
+        current = now or datetime.now(timezone.utc)
         async with self._session_factory() as session:
             stmt = (
                 select(Account.id, Device.id)
