@@ -56,8 +56,9 @@ export type DeviceStatus = 'pending' | 'active' | 'offline' | 'tailscale_degrade
 export interface Device {
   id: string;
   nickname: string;
-  model: string;
-  android_version: string;
+  // P2-3：4 字段全 Optional —— APK 上线前回填前都是 null/undefined
+  model?: string;
+  android_version?: string;
   apk_version?: string;
   tailnet_ip?: string;
   tags?: string[];
@@ -69,17 +70,20 @@ export interface Device {
   pair_code?: string;
 }
 
+// P2-3：注册时只填 nickname + 可选 adb_serial；其余 4 字段由 APK 配对时自动回填
 export interface DeviceRegisterRequest {
   nickname: string;
-  model: string;
-  android_version: string;
-  apk_version: string;
-  tailnet_ip: string;
   adb_serial?: string;
 }
 
 export interface DevicePairRequest {
   pair_code: string;
+  identity?: {
+    model?: string;
+    android_version?: string;
+    apk_version?: string;
+    tailnet_ip?: string;
+  };
 }
 
 export interface DevicePairResponse {

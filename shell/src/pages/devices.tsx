@@ -21,7 +21,7 @@ export function Devices() {
     (d) =>
       !filter ||
       d.nickname.toLowerCase().includes(filter.toLowerCase()) ||
-      d.model.toLowerCase().includes(filter.toLowerCase()),
+      (d.model ?? '').toLowerCase().includes(filter.toLowerCase()),
   );
 
   return (

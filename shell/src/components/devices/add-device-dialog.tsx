@@ -20,30 +20,23 @@ export function AddDeviceDialog({ trigger }: { trigger?: React.ReactNode }) {
   const [step, setStep] = useState<'form' | 'pair'>('form');
   const [pairCode, setPairCode] = useState<string>('');
   const [nickname, setNickname] = useState('');
-  const [model, setModel] = useState('');
-  const [android, setAndroid] = useState('');
-  const [apkVer, setApkVer] = useState('0.4.0');
-  const [tailnetIp, setTailnetIp] = useState('');
+  // P2-3：型号 / Android / APK 版本 / Tailnet IP 由 APK 配对时自报上去，
+  // 用户不必再填。手填的数据反而会被 APK 上线后真实值覆盖。
+  const [adbSerial, setAdbSerial] = useState('');
   const register = useRegisterDevice();
 
   function reset() {
     setStep('form');
     setPairCode('');
     setNickname('');
-    setModel('');
-    setAndroid('');
-    setApkVer('0.4.0');
-    setTailnetIp('');
+    setAdbSerial('');
   }
 
   async function handleSubmit() {
     try {
       const device = await register.mutateAsync({
         nickname,
-        model,
-        android_version: android,
-        apk_version: apkVer,
-        tailnet_ip: tailnetIp,
+        adb_serial: adbSerial || undefined,
       });
       if (!device.pair_code) throw new Error('主控没有返回配对码');
       setPairCode(device.pair_code);
@@ -75,7 +68,8 @@ export function AddDeviceDialog({ trigger }: { trigger?: React.ReactNode }) {
             <DialogHeader>
               <DialogTitle>添加新设备</DialogTitle>
               <DialogDescription>
-                填写设备基本信息；提交后主控会生成配对码，手机扫码即可完成绑定。
+                填个昵称，提交后主控生成配对码。手机装 companion APK
+                输入配对码后，型号 / Android 版本 / APK 版本 / Tailnet IP 会自动识别。
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3">
@@ -89,40 +83,20 @@ export function AddDeviceDialog({ trigger }: { trigger?: React.ReactNode }) {
                 />
               </div>
               <div className="space-y-1">
-                <Label htmlFor="model">型号</Label>
+                <Label htmlFor="adbSerial">
+                  ADB 串号
+                  <span className="ml-1 text-xs text-muted-foreground">(可选)</span>
+                </Label>
                 <Input
-                  id="model"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  placeholder="Pixel 7"
+                  id="adbSerial"
+                  value={adbSerial}
+                  onChange={(e) => setAdbSerial(e.target.value)}
+                  placeholder="例如 12ab34cd"
                 />
               </div>
-              <div className="space-y-1">
-                <Label htmlFor="android">Android 版本</Label>
-                <Input
-                  id="android"
-                  value={android}
-                  onChange={(e) => setAndroid(e.target.value)}
-                  placeholder="14"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="tailnetIp">Tailnet IP</Label>
-                <Input
-                  id="tailnetIp"
-                  value={tailnetIp}
-                  onChange={(e) => setTailnetIp(e.target.value)}
-                  placeholder="100.64.0.x"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="apkVer">APK 版本</Label>
-                <Input
-                  id="apkVer"
-                  value={apkVer}
-                  onChange={(e) => setApkVer(e.target.value)}
-                />
-              </div>
+              <p className="text-xs text-muted-foreground">
+                型号、Android 版本、APK 版本、IP 等信息会在设备首次连接后自动识别。
+              </p>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setOpen(false)}>
@@ -130,7 +104,7 @@ export function AddDeviceDialog({ trigger }: { trigger?: React.ReactNode }) {
               </Button>
               <Button
                 onClick={handleSubmit}
-                disabled={!nickname || !model || !android || !tailnetIp || register.isPending}
+                disabled={!nickname.trim() || register.isPending}
               >
                 {register.isPending ? '注册中…' : '注册并生成配对码'}
               </Button>

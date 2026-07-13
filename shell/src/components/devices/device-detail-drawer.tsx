@@ -43,7 +43,7 @@ export function DeviceDetailDrawer({
                 <StatusBadge status={data.status} />
               </div>
               <p className="text-sm text-muted-foreground">
-                {data.model} · Android {data.android_version}
+                {data.model ?? '—'} · Android {data.android_version ?? '—'}
               </p>
               <Card>
                 <CardHeader>

@@ -52,7 +52,7 @@ export function DeviceCard({ device }: { device: Device }) {
                 {device.nickname}
               </Link>
             </CardTitle>
-            <p className="text-xs text-muted-foreground">{device.model} · Android {device.android_version}</p>
+            <p className="text-xs text-muted-foreground">{device.model ?? '—'} · Android {device.android_version ?? '—'}</p>
           </div>
           <StatusBadge status={device.status} />
         </CardHeader>

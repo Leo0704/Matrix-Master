@@ -29,7 +29,7 @@ export function DeviceDetail() {
             <div>
               <h1 className="text-2xl font-bold tracking-tight">{data.nickname}</h1>
               <p className="text-sm text-muted-foreground">
-                {data.model} · Android {data.android_version}
+                {data.model ?? '—'} · Android {data.android_version ?? '—'}
               </p>
             </div>
             <StatusBadge status={data.status} />
