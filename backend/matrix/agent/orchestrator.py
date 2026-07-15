@@ -395,6 +395,23 @@ async def _gather_round_kpi(
                 "comments": metric.comments,
             })
 
+    flat: list[dict[str, Any]] = [
+        {
+            "note_id": row["note_id"],
+            "title": row["title"],
+            "views": row["views"],
+            "likes": row["likes"],
+            "collects": row["collects"],
+            "comments": row["comments"],
+            "follows_gained": 0,  # 旧 NoteMetric 行未必有 follows_gained
+        }
+        for row in per_note
+    ]
+    # Phase 2a #4：三维 KPI（曝光 / 互动 / 转化）。前端按维度直接渲染。
+    from .kpi import compute_dim_kpi
+
+    dimensions = compute_dim_kpi(flat)
+
     return {
         "total_views": total_views,
         "total_likes": total_likes,
@@ -402,6 +419,7 @@ async def _gather_round_kpi(
         "total_comments": total_comments,
         "notes_count": notes_count,
         "per_note": per_note,
+        "dimensions": dimensions,
     }
 
 
