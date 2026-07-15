@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 GoalStatus = Literal["active", "achieved", "failed", "cancelled"]
 
@@ -103,6 +103,22 @@ class GoalCreate(BaseModel):
     target_likes: Optional[int] = Field(default=None, ge=1, le=1_000_000)
     notes_per_round: Optional[int] = Field(default=None, ge=1, le=20)
     max_rounds: Optional[int] = Field(default=None, ge=1, le=20)
+
+    @model_validator(mode="after")
+    def _require_theme(self) -> "GoalCreate":
+        """Phase 4 #8：必须告诉系统"要发什么主题"——空 target / 空 theme
+        创建出来的 goal 完全跑不动，orchestrator 拉 learnings 时拉不到。
+        """
+        target = self.target or {}
+        theme = target.get("theme")
+        if not isinstance(theme, str) or not theme.strip():
+            raise ValueError(
+                "target.theme is required and must be a non-empty string"
+            )
+        # 同时给个 audit 字段长度上限（防 10MB prompt）
+        if len(theme) > 500:
+            raise ValueError("target.theme must be <= 500 characters")
+        return self
 
 
 class GoalUpdate(BaseModel):
