@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import select
@@ -36,6 +36,132 @@ class GoalSnapshot:
     theme: str
     audience: str | None
     runs: list[dict[str, Any]]  # [{run_id, note_id, title, content, tags, status, views, likes, collects, comments}]
+
+
+# ---------------------------------------------------------------------------
+# StrategyCard：强类型爆款模板（Phase 4 #3 结构化提取）
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class StrategyCard:
+    """从单次 goal 复盘提炼出的结构化爆款模板。
+
+    5 个字段都是 list[str]：
+    - title_patterns：标题模板关键词或子串（"数字+痛点" → 标题里要有数字）
+    - hook_phrases：开头钩子短语 / 模板（"救命" / "后悔没早买" / "30天实测"）
+    - structure：内容结构顺序（["开头钩子","痛点场景","解决产品","价格锚","CTA"]）
+    - tone_keywords：调性关键词（["平价","真实","测评","学生党"]）
+    - forbidden_patterns：禁用模式（"绝对化用词" / "未验证数据" / "竞品直名"）
+
+    之前 ``strategy_card.content`` 是 markdown 列表文本，DRAFT 节点只能"软引用"——
+    LLM 拿到就当没看到。现在改成强类型字段，fetch_relevant_learnings 渲染成
+    "硬规则"塞进 DRAFT prompt，LLM 必须遵守。
+    """
+
+    title_patterns: list[str] = field(default_factory=list)
+    hook_phrases: list[str] = field(default_factory=list)
+    structure: list[str] = field(default_factory=list)
+    tone_keywords: list[str] = field(default_factory=list)
+    forbidden_patterns: list[str] = field(default_factory=list)
+
+    def is_empty(self) -> bool:
+        return not any(
+            [self.title_patterns, self.hook_phrases, self.structure,
+             self.tone_keywords, self.forbidden_patterns]
+        )
+
+    def to_dict(self) -> dict[str, list[str]]:
+        return {
+            "title_patterns": list(self.title_patterns),
+            "hook_phrases": list(self.hook_phrases),
+            "structure": list(self.structure),
+            "tone_keywords": list(self.tone_keywords),
+            "forbidden_patterns": list(self.forbidden_patterns),
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "StrategyCard":
+        def _list(key: str) -> list[str]:
+            v = d.get(key) or []
+            if not isinstance(v, list):
+                return []
+            out: list[str] = []
+            for x in v:
+                # 只收 str/int；dict/list 跳过（结构化卡片不要嵌套）
+                if isinstance(x, (str, int, float)):
+                    s = str(x).strip()
+                    if s:
+                        out.append(s)
+            return out[:10]
+
+        return cls(
+            title_patterns=_list("title_patterns"),
+            hook_phrases=_list("hook_phrases"),
+            structure=_list("structure"),
+            tone_keywords=_list("tone_keywords"),
+            forbidden_patterns=_list("forbidden_patterns"),
+        )
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
+
+    @classmethod
+    def parse(cls, raw: str | None) -> "StrategyCard | None":
+        """从 KbDocument.content 反解 StrategyCard。
+
+        旧版 strategy_card 是 markdown 文本（"# 爆款模式..."），解析失败返 None。
+        新版是 JSON，解析失败也返 None（不入下游 prompt）。
+        """
+        if not raw or not raw.strip():
+            return None
+        text = raw.strip()
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(data, dict):
+            return None
+        card = cls.from_dict(data)
+        return None if card.is_empty() else card
+
+    def render_for_prompt(self, theme: str = "") -> str:
+        """把 StrategyCard 渲染成"硬规则"段，插到 DRAFT prompt 里。
+
+        每条都是强指令（"标题必须..."/"开头必须是..."/"内容按此顺序..."），
+        不是软示例。
+        """
+        lines: list[str] = []
+        if theme:
+            lines.append(f"# 复盘提炼规则（来自过往 goal：{theme}）")
+        else:
+            lines.append("# 复盘提炼规则（来自过往 goal 的复盘）")
+        if self.title_patterns:
+            lines.append(
+                "- 【标题硬规则】标题里必须出现以下至少 1 个关键词/模式：\n  "
+                + "、".join(self.title_patterns)
+            )
+        if self.hook_phrases:
+            lines.append(
+                "- 【开头硬规则】正文开头前 30 字必须是以下钩子之一（或同类改写）：\n  "
+                + "、".join(self.hook_phrases)
+            )
+        if self.structure:
+            lines.append(
+                "- 【结构硬规则】正文必须按以下顺序组织段落：\n  "
+                + " → ".join(self.structure)
+            )
+        if self.tone_keywords:
+            lines.append(
+                "- 【调性硬规则】用词风格贴这些关键词：\n  "
+                + "、".join(self.tone_keywords)
+            )
+        if self.forbidden_patterns:
+            lines.append(
+                "- 【禁用硬规则】以下内容绝对不能写：\n  "
+                + "、".join(self.forbidden_patterns)
+            )
+        return "\n".join(lines)
 
 
 async def _load_goal_snapshot(session: AsyncSession, goal_id: uuid.UUID) -> GoalSnapshot | None:
@@ -126,17 +252,34 @@ _SUMMARIZE_SYSTEM = (
     "你是运营复盘助手。给一段 goal 下的所有 run 数据（每条 run 含标题、正文、tags、状态、"
     "views/likes/collects/comments），提炼两类经验，**严格返回 JSON**：\n"
     "{\n"
-    '  "viral_patterns": ["爆款标题模板或封面风格 1", "爆款标题模板或封面风格 2", ...],\n'
-    '  "failure_lessons": ["不该踩的坑 1（禁词/违规/低效）", "不该踩的坑 2", ...]\n'
+    '  "viral_patterns": ["爆款标题模板或封面风格 1", ...],\n'
+    '  "failure_lessons": ["不该踩的坑 1", ...]\n'
+    "}\n"
+    "**Phase 4 #3 结构化提取**：viral_patterns 拆成 5 个强类型字段，"
+    "让 DRAFT 节点当硬规则用：\n"
+    "{\n"
+    '  "structured_viral": {\n'
+    '    "title_patterns": ["数字+痛点", "季节+人群", ...],\n'
+    '    "hook_phrases": ["救命", "后悔没早买", "30天实测", ...],\n'
+    '    "structure": ["开头钩子", "痛点场景", "解决产品", "价格锚", "CTA"],\n'
+    '    "tone_keywords": ["平价", "真实", "测评", "学生党", ...],\n'
+    '    "forbidden_patterns": ["绝对化用词", "未验证数据", "竞品直名", ...]\n'
+    "  },\n"
+    '  "failure_lessons": ["不该踩的坑 1", ...]\n'
     "}\n"
     "每条 1 句话，30 字内。看不到数据就别编。无数据时返回空数组。"
 )
 
 
-async def _ask_llm_for_learnings(snapshot: GoalSnapshot) -> dict[str, list[str]]:
-    """调 LLM 提炼爆款/失败。失败时返回空 dict，不阻塞。"""
+async def _ask_llm_for_learnings(
+    snapshot: GoalSnapshot,
+) -> tuple[StrategyCard, list[str]]:
+    """调 LLM 提炼爆款（结构化 StrategyCard）+ 失败（list[str]）。
+
+    失败时返空 StrategyCard + 空 list，不阻塞。
+    """
     if not snapshot.runs:
-        return {"viral_patterns": [], "failure_lessons": []}
+        return StrategyCard(), []
     user_payload = {
         "goal_theme": snapshot.theme,
         "goal_audience": snapshot.audience,
@@ -147,7 +290,7 @@ async def _ask_llm_for_learnings(snapshot: GoalSnapshot) -> dict[str, list[str]]
         raw = await llm_complete(_SUMMARIZE_SYSTEM, user, call_type="summarize")
     except Exception:
         logger.exception("summarize.llm_failed", goal_id=str(snapshot.goal_id))
-        return {"viral_patterns": [], "failure_lessons": []}
+        return StrategyCard(), []
     # 解析 JSON（容错：去掉 ```json``` 包裹）
     raw = raw.strip()
     if raw.startswith("```"):
@@ -159,11 +302,20 @@ async def _ask_llm_for_learnings(snapshot: GoalSnapshot) -> dict[str, list[str]]
         data = json.loads(raw)
     except json.JSONDecodeError:
         logger.warning("summarize.json_parse_fail", raw_preview=raw[:200])
-        return {"viral_patterns": [], "failure_lessons": []}
-    return {
-        "viral_patterns": [str(x) for x in (data.get("viral_patterns") or [])][:10],
-        "failure_lessons": [str(x) for x in (data.get("failure_lessons") or [])][:10],
-    }
+        return StrategyCard(), []
+    # structured_viral 缺失时回退老 viral_patterns（兼容老 prompt 返回）
+    if isinstance(data.get("structured_viral"), dict):
+        card = StrategyCard.from_dict(data["structured_viral"])
+    else:
+        # 老 prompt 把所有爆款经验塞到 viral_patterns 列表里 → 全部归到 hook_phrases
+        legacy = [
+            str(x) for x in (data.get("viral_patterns") or []) if x
+        ][:10]
+        card = StrategyCard(hook_phrases=legacy) if legacy else StrategyCard()
+    failures = [
+        str(x) for x in (data.get("failure_lessons") or []) if x
+    ][:10]
+    return card, failures
 
 
 async def summarize_goal_to_kb(
@@ -187,22 +339,18 @@ async def summarize_goal_to_kb(
     if snapshot is None:
         return []
 
-    learnings = await _ask_llm_for_learnings(snapshot)
-    if not learnings["viral_patterns"] and not learnings["failure_lessons"]:
+    card, failures = await _ask_llm_for_learnings(snapshot)
+    if card.is_empty() and not failures:
         return []
 
     store = KbStore(session, embedder)
     written: list[KbDocument] = []
 
-    # 1) 爆款模板 → strategy_card
-    if learnings["viral_patterns"]:
-        body = (
-            f"# 爆款模式（goal: {snapshot.theme}）\n\n"
-            + "\n".join(f"- {p}" for p in learnings["viral_patterns"])
-        )
+    # 1) 爆款模板 → strategy_card（Phase 4 #3：存 JSON，不再是 markdown 列表）
+    if not card.is_empty():
         doc = await store.create_document(
             type="strategy_card",
-            content=body,
+            content=card.to_json(),  # 强类型 JSON
             title=f"爆款模板 · {snapshot.theme[:40]}",
             ref_id=goal_id,
             metadata={
@@ -210,6 +358,8 @@ async def summarize_goal_to_kb(
                 "source": "goal_summarize",
                 "audience": snapshot.audience,
                 "run_count": len(snapshot.runs),
+                # 结构化字段也存到 metadata，方便 SQL 检索 / 不解析 JSON
+                "structured_viral": card.to_dict(),
             },
             # Phase 4 #3：自动发布爆款模板（rule 仍走 review）
             is_published=auto_publish,
@@ -217,10 +367,10 @@ async def summarize_goal_to_kb(
         written.append(doc)
 
     # 2) 失败教训 → rule（始终不自动发布 —— 避坑规则副作用大）
-    if learnings["failure_lessons"]:
+    if failures:
         body = (
             f"# 失败教训（goal: {snapshot.theme}）\n\n"
-            + "\n".join(f"- {p}" for p in learnings["failure_lessons"])
+            + "\n".join(f"- {p}" for p in failures)
         )
         doc = await store.create_document(
             type="rule",
@@ -239,11 +389,16 @@ async def summarize_goal_to_kb(
     logger.info(
         "summarize.goal.done",
         goal_id=str(goal_id),
-        viral=len(learnings["viral_patterns"]),
-        failures=len(learnings["failure_lessons"]),
+        viral=sum(
+            len(getattr(card, f)) for f in (
+                "title_patterns", "hook_phrases", "structure",
+                "tone_keywords", "forbidden_patterns",
+            )
+        ),
+        failures=len(failures),
         auto_publish=auto_publish,
     )
     return written
 
 
-__all__ = ["GoalSnapshot", "summarize_goal_to_kb"]
+__all__ = ["GoalSnapshot", "StrategyCard", "summarize_goal_to_kb"]

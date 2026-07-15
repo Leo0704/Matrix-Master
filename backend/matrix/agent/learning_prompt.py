@@ -5,6 +5,10 @@
 
 不做完整向量检索（避免引入额外依赖），先用 SQL LIKE 过滤 + 按更新时间倒序。
 够 MVP，后面接 RAG 检索再升级。
+
+**Phase 4 #3 结构化提取**：strategy_card 现在是 JSON（StrategyCard dataclass），
+fetch_relevant_learnings 检测到 JSON 走 ``StrategyCard.render_for_prompt`` 渲染成
+"硬规则"；老 markdown 文本降级为"软示例"（保留兼容）。
 """
 
 from __future__ import annotations
@@ -70,6 +74,24 @@ def _extract_keywords(theme: str, audience: str | None) -> list[str]:
     return out[:15]
 
 
+def _format_doc(doc: KbDocument) -> str:
+    """单条 KB doc → prompt 片段。strategy_card 优先按结构化"硬规则"渲染。"""
+    if doc.type == "strategy_card":
+        # Phase 4 #3：先尝试按 JSON 解析 → 渲染硬规则
+        from matrix.agent.summarize import StrategyCard
+
+        card = StrategyCard.parse(doc.content)
+        if card is not None:
+            # 主题从 title 提（"爆款模板 · 平价百搭女鞋带货" → "平价百搭女鞋带货"）
+            theme = (doc.title or "").removeprefix("爆款模板 ·").strip()
+            return card.render_for_prompt(theme=theme)
+    # 老 markdown 文本 / rule：软示例
+    label = "爆款" if doc.type == "strategy_card" else "避坑"
+    title = doc.title or label
+    snippet = (doc.content or "")[:200].replace("\n", " ")
+    return f"- [{label}] {title}：{snippet}"
+
+
 async def fetch_relevant_learnings(
     session: AsyncSession,
     theme: str,
@@ -114,11 +136,7 @@ async def fetch_relevant_learnings(
 
     lines = [_PROMPT_HEADER]
     for doc in matched:
-        label = "爆款" if doc.type == "strategy_card" else "避坑"
-        title = doc.title or label
-        # 截断到 200 字避免 prompt 爆
-        snippet = (doc.content or "")[:200].replace("\n", " ")
-        lines.append(f"- [{label}] {title}：{snippet}")
+        lines.append(_format_doc(doc))
     logger.info(
         "learning.fetched", theme=theme[:30], count=len(matched)
     )

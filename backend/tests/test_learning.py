@@ -21,6 +21,7 @@ from matrix.agent.learning_prompt import (
 )
 from matrix.agent.summarize import (
     GoalSnapshot,
+    StrategyCard,
     _ask_llm_for_learnings,
     _load_goal_snapshot,
     summarize_goal_to_kb,
@@ -157,6 +158,59 @@ class TestFetchRelevantLearnings:
         assert "[爆款]" in out
         assert "[避坑]" in out
 
+    async def test_structured_card_rendered_as_hard_rules(self):
+        """Phase 4 #3：strategy_card 是 JSON → 渲染成"硬规则"段（不是软文本）。"""
+        from matrix.agent.summarize import StrategyCard
+
+        card = StrategyCard(
+            title_patterns=["数字+痛点"],
+            hook_phrases=["救命"],
+            structure=["开头钩子", "痛点", "解决"],
+            tone_keywords=["平价"],
+            forbidden_patterns=["绝对化用词"],
+        )
+        # 注意 content 是 JSON（不是 markdown）
+        doc = _make_kb_doc(
+            type_="strategy_card",
+            title="爆款模板 · 夏季女鞋",
+            content=card.to_json(),
+        )
+        session = MagicMock()
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = [doc]
+        session.execute = AsyncMock(return_value=result)
+
+        out = await fetch_relevant_learnings(session, "夏季女鞋")
+        # 不再是软文本"[爆款] 标题..."，而是硬规则段
+        assert "【标题硬规则】" in out
+        assert "【开头硬规则】" in out
+        assert "【结构硬规则】" in out
+        assert "【调性硬规则】" in out
+        assert "【禁用硬规则】" in out
+        assert "数字+痛点" in out
+        assert "绝对化用词" in out
+        # 旧"软文本"标记不再出现
+        assert "[爆款]" not in out
+
+    async def test_old_markdown_content_falls_back_to_soft_text(self):
+        """老 strategy_card 是 markdown 文本 → 降级为"软示例"。"""
+        doc = _make_kb_doc(
+            type_="strategy_card",
+            title="爆款模板 · 夏季女鞋",
+            content="# 爆款模式\n\n- 数字+痛点\n- 季节+人群",
+        )
+        session = MagicMock()
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = [doc]
+        session.execute = AsyncMock(return_value=result)
+
+        out = await fetch_relevant_learnings(session, "夏季女鞋")
+        # 老格式走软文本
+        assert "[爆款]" in out
+        assert "数字+痛点" in out
+        # 没有硬规则段
+        assert "【标题硬规则】" not in out
+
 
 # ---------------------------------------------------------------------------
 # summarize._ask_llm_for_learnings
@@ -171,6 +225,7 @@ class TestAskLlmForLearnings:
             audience=None,
             runs=[{"note_id": "1", "views": 1000, "likes": 100}],
         )
+        # 老 prompt 返回格式（无 structured_viral）→ 退化到 hook_phrases
         llm_response = json.dumps({
             "viral_patterns": ["数字+痛点"],
             "failure_lessons": ["别用违规词"],
@@ -179,9 +234,41 @@ class TestAskLlmForLearnings:
             "matrix.agent.summarize.llm_complete",
             AsyncMock(return_value=llm_response),
         ):
-            result = await _ask_llm_for_learnings(snapshot)
-        assert result["viral_patterns"] == ["数字+痛点"]
-        assert result["failure_lessons"] == ["别用违规词"]
+            card, failures = await _ask_llm_for_learnings(snapshot)
+        # 老 prompt 数据全归 hook_phrases
+        assert card.hook_phrases == ["数字+痛点"]
+        assert card.is_empty() is False
+        assert failures == ["别用违规词"]
+
+    async def test_parses_structured_viral(self):
+        """Phase 4 #3：新 prompt 返回 structured_viral 5 字段。"""
+        snapshot = GoalSnapshot(
+            goal_id=uuid.uuid4(),
+            theme="t",
+            audience=None,
+            runs=[{"note_id": "1"}],
+        )
+        llm_response = json.dumps({
+            "structured_viral": {
+                "title_patterns": ["数字+痛点", "季节+人群"],
+                "hook_phrases": ["救命", "后悔没早买"],
+                "structure": ["开头钩子", "痛点", "解决", "价格", "CTA"],
+                "tone_keywords": ["平价", "真实"],
+                "forbidden_patterns": ["绝对化用词"],
+            },
+            "failure_lessons": ["别用违规词"],
+        })
+        with patch(
+            "matrix.agent.summarize.llm_complete",
+            AsyncMock(return_value=llm_response),
+        ):
+            card, failures = await _ask_llm_for_learnings(snapshot)
+        assert card.title_patterns == ["数字+痛点", "季节+人群"]
+        assert card.hook_phrases == ["救命", "后悔没早买"]
+        assert card.structure == ["开头钩子", "痛点", "解决", "价格", "CTA"]
+        assert card.tone_keywords == ["平价", "真实"]
+        assert card.forbidden_patterns == ["绝对化用词"]
+        assert failures == ["别用违规词"]
 
     async def test_strips_markdown_fences(self):
         snapshot = GoalSnapshot(
@@ -192,8 +279,9 @@ class TestAskLlmForLearnings:
             "matrix.agent.summarize.llm_complete",
             AsyncMock(return_value=wrapped),
         ):
-            result = await _ask_llm_for_learnings(snapshot)
-        assert result["viral_patterns"] == ["x"]
+            card, failures = await _ask_llm_for_learnings(snapshot)
+        assert card.hook_phrases == ["x"]
+        assert failures == []
 
     async def test_invalid_json_returns_empty(self):
         snapshot = GoalSnapshot(
@@ -203,8 +291,9 @@ class TestAskLlmForLearnings:
             "matrix.agent.summarize.llm_complete",
             AsyncMock(return_value="not json at all"),
         ):
-            result = await _ask_llm_for_learnings(snapshot)
-        assert result == {"viral_patterns": [], "failure_lessons": []}
+            card, failures = await _ask_llm_for_learnings(snapshot)
+        assert card.is_empty()
+        assert failures == []
 
     async def test_llm_exception_returns_empty(self):
         snapshot = GoalSnapshot(
@@ -214,15 +303,116 @@ class TestAskLlmForLearnings:
             "matrix.agent.summarize.llm_complete",
             AsyncMock(side_effect=RuntimeError("llm down")),
         ):
-            result = await _ask_llm_for_learnings(snapshot)
-        assert result == {"viral_patterns": [], "failure_lessons": []}
+            card, failures = await _ask_llm_for_learnings(snapshot)
+        assert card.is_empty()
+        assert failures == []
 
     async def test_empty_runs_returns_empty(self):
         snapshot = GoalSnapshot(
             goal_id=uuid.uuid4(), theme="t", audience=None, runs=[]
         )
-        result = await _ask_llm_for_learnings(snapshot)
-        assert result == {"viral_patterns": [], "failure_lessons": []}
+        card, failures = await _ask_llm_for_learnings(snapshot)
+        assert card.is_empty()
+        assert failures == []
+
+
+# ---------------------------------------------------------------------------
+# StrategyCard dataclass（Phase 4 #3 结构化提取）
+# ---------------------------------------------------------------------------
+
+
+class TestStrategyCard:
+    def test_defaults_empty(self):
+        c = StrategyCard()
+        assert c.is_empty()
+        assert c.to_dict() == {
+            "title_patterns": [],
+            "hook_phrases": [],
+            "structure": [],
+            "tone_keywords": [],
+            "forbidden_patterns": [],
+        }
+
+    def test_from_dict_filters_non_list(self):
+        c = StrategyCard.from_dict({
+            "title_patterns": "not a list",  # 应被过滤
+            "hook_phrases": ["a", "", None, 1, 2],  # 1/2 会被 str 化
+            "structure": [{"foo": "bar"}],  # dict 不允许 → 跳过
+        })
+        assert c.title_patterns == []
+        # hook_phrases: 过滤空/None，str 化 1/2
+        assert c.hook_phrases == ["a", "1", "2"]
+        assert c.structure == []
+
+    def test_caps_list_at_10(self):
+        c = StrategyCard.from_dict({
+            "title_patterns": [str(i) for i in range(20)],
+        })
+        assert len(c.title_patterns) == 10
+
+    def test_to_json_and_back(self):
+        c = StrategyCard(
+            title_patterns=["a"],
+            hook_phrases=["b"],
+            structure=["c"],
+            tone_keywords=["d"],
+            forbidden_patterns=["e"],
+        )
+        raw = c.to_json()
+        c2 = StrategyCard.parse(raw)
+        assert c2 is not None
+        assert c2.title_patterns == ["a"]
+        assert c2.hook_phrases == ["b"]
+        assert c2.structure == ["c"]
+        assert c2.tone_keywords == ["d"]
+        assert c2.forbidden_patterns == ["e"]
+
+    def test_parse_markdown_returns_none(self):
+        """老 strategy_card 是 markdown 文本，parse 应返 None（不破坏向后兼容）。"""
+        old_md = "# 爆款模式（goal: 夏季）\n\n- 数字+痛点\n- 季节+人群"
+        assert StrategyCard.parse(old_md) is None
+
+    def test_parse_invalid_json_returns_none(self):
+        assert StrategyCard.parse("not json") is None
+        assert StrategyCard.parse("") is None
+        assert StrategyCard.parse(None) is None
+
+    def test_parse_all_empty_returns_none(self):
+        """JSON 解析 OK 但所有字段都空 → 返 None（不入下游 prompt）。"""
+        assert StrategyCard.parse('{"title_patterns": []}') is None
+        assert StrategyCard.parse('{}') is None
+
+    def test_render_for_prompt_includes_all_sections(self):
+        c = StrategyCard(
+            title_patterns=["数字+痛点", "季节+人群"],
+            hook_phrases=["救命", "后悔没早买"],
+            structure=["开头钩子", "痛点场景", "解决产品", "价格锚", "CTA"],
+            tone_keywords=["平价", "真实"],
+            forbidden_patterns=["绝对化用词", "未验证数据"],
+        )
+        out = c.render_for_prompt(theme="夏季女鞋")
+        assert "夏季女鞋" in out
+        assert "【标题硬规则】" in out
+        assert "数字+痛点" in out
+        assert "季节+人群" in out
+        assert "【开头硬规则】" in out
+        assert "救命" in out
+        assert "【结构硬规则】" in out
+        assert "开头钩子" in out
+        assert "→" in out  # structure 用箭头连接
+        assert "【调性硬规则】" in out
+        assert "平价" in out
+        assert "【禁用硬规则】" in out
+        assert "绝对化用词" in out
+
+    def test_render_for_prompt_skips_empty_sections(self):
+        c = StrategyCard(title_patterns=["x"])
+        out = c.render_for_prompt()
+        assert "【标题硬规则】" in out
+        assert "【开头硬规则】" not in out
+        assert "【结构硬规则】" not in out
+        assert "【调性硬规则】" not in out
+        assert "【禁用硬规则】" not in out
 
 
 # ---------------------------------------------------------------------------
