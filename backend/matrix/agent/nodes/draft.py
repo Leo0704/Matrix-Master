@@ -88,6 +88,10 @@ async def draft_node(state: AgentState) -> dict[str, Any]:
     brief_section = format_brief(state.get("brief") if isinstance(state.get("brief"), dict) else None)
     if brief_section:
         user = f"## 主题摘要（来自 chat 对话）\n{brief_section}\n\n" + user
+    # 历史经验（orchestrator 拆任务时从 KB 拉取），放在 brief 之后、正文 prompt 之前
+    learnings_text = state.get("learnings_text") or ""
+    if learnings_text.strip():
+        user = learnings_text + "\n\n" + user
 
     try:
         raw = await llm_complete(

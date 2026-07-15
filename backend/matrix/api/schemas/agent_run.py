@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel
 
@@ -18,6 +18,7 @@ class AgentRun(BaseModel):
     started_at: datetime
     updated_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
+    last_error_snapshot: Optional[dict[str, Any]] = None
 
 
 class AgentRunListResponse(BaseModel):

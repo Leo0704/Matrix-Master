@@ -130,6 +130,10 @@ class RunManager:
             state["interact_plan"] = interact_plan
         else:
             state["interact_plan"] = []
+        # v0.7 历史经验：orchestrator 拆任务时从 KB 拉取，DRAFT 节点拼 prompt 用
+        learnings_text = payload.get("learnings_text")
+        if isinstance(learnings_text, str) and learnings_text:
+            state["learnings_text"] = learnings_text
 
         try:
             result = await self.sm.ainvoke(state)
@@ -163,7 +167,10 @@ class RunManager:
             status=RunStatus.FAILED.value
             if is_failed
             else RunStatus.SUCCESS.value,
-            payload_merge={"last_state": ended_state},
+            payload_merge={
+                "last_state": ended_state,
+                "last_error_snapshot": result.get("last_error_snapshot"),
+            },
             ended_at=_utcnow(),
         )
         return result
@@ -253,6 +260,11 @@ class RunManager:
             run_pa = run.payload.get("preassigned_slot")
             if isinstance(run_pa, dict) and run_pa:
                 new_state["preassigned_slot"] = run_pa
+        # resume 时补 learnings_text（从 run.payload 回填）
+        if not new_state.get("learnings_text") and isinstance(run.payload, dict):
+            run_lt = run.payload.get("learnings_text")
+            if isinstance(run_lt, str) and run_lt:
+                new_state["learnings_text"] = run_lt
         if alert_ack:
             new_state["_alert_ack"] = True
         result = await self.sm.ainvoke(new_state)
@@ -266,7 +278,10 @@ class RunManager:
             status=RunStatus.FAILED.value
             if is_failed
             else RunStatus.SUCCESS.value,
-            payload_merge={"last_state": ended_state},
+            payload_merge={
+                "last_state": ended_state,
+                "last_error_snapshot": result.get("last_error_snapshot"),
+            },
             ended_at=_utcnow(),
         )
         return result

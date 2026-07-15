@@ -125,6 +125,10 @@ class AgentState(TypedDict, total=False):
     # 优先于 goal_text 使用。注：命名避开前端 UIStore 已占用的 `theme`。
     brief: dict[str, Any] | None
 
+    # 历史经验文本（v0.7）：orchestrator 拆任务时从 KB 拉取 strategy_card + rule，
+    # 注入 run payload，DRAFT 节点直接拼入 prompt，避免重复查 KB。
+    learnings_text: str
+
     # 累计迭代计数
     revise_attempts: int
 

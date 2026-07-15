@@ -19,6 +19,7 @@ router = APIRouter(prefix="/agent/runs", tags=["agent-runs"])
 
 
 def _to_schema(r: AgentRunORM) -> AgentRun:
+    payload = r.payload or {}
     return AgentRun(
         id=r.id,
         goal_id=r.goal_id,
@@ -27,6 +28,7 @@ def _to_schema(r: AgentRunORM) -> AgentRun:
         started_at=r.started_at,
         updated_at=r.updated_at,
         ended_at=r.ended_at,
+        last_error_snapshot=payload.get("last_error_snapshot"),
     )
 
 
