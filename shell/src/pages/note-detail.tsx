@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusBadge } from '@/components/common/status-badge';
 import { ErrorState } from '@/components/common/error-state';
 import { LoadingBlock } from '@/components/common/loading-spinner';
+import { PageHeader } from '@/components/common/page-header';
 import { Button } from '@/components/ui/button';
 import { formatDate } from '@/lib/format';
 
@@ -25,13 +26,11 @@ export function NoteDetail() {
       {error && <ErrorState error={error} onRetry={() => refetch()} />}
       {data && (
         <>
-          <div className="flex items-start justify-between">
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight">{data.title}</h1>
-              <p className="text-sm text-muted-foreground">ID: {data.id}</p>
-            </div>
-            <StatusBadge status={data.status} />
-          </div>
+          <PageHeader
+            title={data.title}
+            description={`ID: ${data.id}`}
+            actions={<StatusBadge status={data.status} />}
+          />
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <Card className="md:col-span-2">

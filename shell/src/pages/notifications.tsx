@@ -10,6 +10,7 @@ import { useNotifications, useMarkRead } from '@/hooks/use-notifications';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { LoadingBlock } from '@/components/common/loading-spinner';
+import { PageHeader } from '@/components/common/page-header';
 import { ErrorState } from '@/components/common/error-state';
 import { EmptyState } from '@/components/common/empty-state';
 import { formatRelative } from '@/lib/format';
@@ -48,36 +49,36 @@ export function Notifications() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">消息</h1>
-          <p className="text-sm text-muted-foreground">运营进度与结果</p>
-        </div>
-        <div className="flex gap-2">
-          <Button
-            variant={tab === 'all' ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => setTab('all')}
-          >
-            全部
-          </Button>
-          <Button
-            variant={tab === 'unread' ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => setTab('unread')}
-          >
-            未读
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => handleMarkRead()}
-            disabled={markMut.isPending}
-          >
-            <CheckCheck className="mr-1 h-4 w-4" /> 全部标为已读
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="消息"
+        description="运营进度与结果"
+        actions={
+          <div className="flex gap-2">
+            <Button
+              variant={tab === 'all' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setTab('all')}
+            >
+              全部
+            </Button>
+            <Button
+              variant={tab === 'unread' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setTab('unread')}
+            >
+              未读
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => handleMarkRead()}
+              disabled={markMut.isPending}
+            >
+              <CheckCheck className="mr-1 h-4 w-4" /> 全部标为已读
+            </Button>
+          </div>
+        }
+      />
 
       {isLoading && <LoadingBlock />}
       {error && <ErrorState error={error} onRetry={() => refetch()} />}

@@ -3,7 +3,7 @@ import { useDevices } from '@/hooks/use-devices';
 import { DeviceCard } from '@/components/devices/device-card';
 import { AddDeviceDialog } from '@/components/devices/add-device-dialog';
 import { DeviceDetailDrawer } from '@/components/devices/device-detail-drawer';
-import { LoadingBlock } from '@/components/common/loading-spinner';
+import { PageHeader } from '@/components/common/page-header';
 import { ErrorState } from '@/components/common/error-state';
 import { EmptyState } from '@/components/common/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -26,19 +26,19 @@ export function Devices() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">设备</h1>
-          <p className="text-sm text-muted-foreground">共 {items.length} 台</p>
-        </div>
-        <AddDeviceDialog
-          trigger={
-            <Button>
-              <Plus className="mr-1 h-4 w-4" /> 添加设备
-            </Button>
-          }
-        />
-      </div>
+      <PageHeader
+        title="设备"
+        description={`共 ${items.length} 台`}
+        actions={
+          <AddDeviceDialog
+            trigger={
+              <Button>
+                <Plus className="mr-1 h-4 w-4" /> 添加设备
+              </Button>
+            }
+          />
+        }
+      />
 
       <div className="flex items-center gap-2">
         <Input
@@ -49,7 +49,6 @@ export function Devices() {
         />
       </div>
 
-      {isLoading && <LoadingBlock />}
       {error && <ErrorState error={error} onRetry={() => refetch()} />}
       {!isLoading && filtered.length === 0 && (
         <EmptyState title="无匹配设备" description="尝试调整搜索条件或添加新设备" />

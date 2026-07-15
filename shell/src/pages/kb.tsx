@@ -17,6 +17,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/common/empty-state';
 import { LoadingBlock } from '@/components/common/loading-spinner';
+import { PageHeader } from '@/components/common/page-header';
 import { ErrorState } from '@/components/common/error-state';
 import {
   Dialog,
@@ -40,20 +41,20 @@ export function KB() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">知识库</h1>
-        <p className="text-sm text-muted-foreground">AI 写笔记的参考材料库，按类型分 4 个 tab</p>
-      </div>
+      <PageHeader
+        title="知识库"
+        description="AI 写笔记的参考材料库，按类型分 4 个 tab"
+      />
 
       {/* 待发布 banner：中控复盘写到 KB 默认未发布，需要人工 review 后才生效 */}
       {unpublished.length > 0 && (
         <Card className="border-orange-300 bg-orange-50/50">
           <CardHeader>
-            <CardTitle className="flex items-center justify-between text-base text-orange-700">
+            <CardTitle className="flex flex-col gap-2 text-base text-orange-700 sm:flex-row sm:items-center sm:justify-between">
               <span>
                 ⏰ 有 {unpublished.length} 篇文档待 review（AI 还看不到）
               </span>
-              <span className="text-xs font-normal text-orange-600">
+              <span className="shrink-0 text-xs font-normal text-orange-600">
                 {Object.entries(countByType)
                   .map(([t, n]) => `${t}: ${n}`)
                   .join(' · ')}

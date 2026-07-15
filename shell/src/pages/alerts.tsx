@@ -3,6 +3,7 @@ import { useAlerts, useScanAlerts, useResolveAlert } from '@/hooks/use-alerts';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { LoadingBlock } from '@/components/common/loading-spinner';
+import { PageHeader } from '@/components/common/page-header';
 import { ErrorState } from '@/components/common/error-state';
 import { EmptyState } from '@/components/common/empty-state';
 import { formatRelative } from '@/lib/format';
@@ -34,15 +35,15 @@ export function Alerts() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">告警</h1>
-          <p className="text-sm text-muted-foreground">处理 / 标记 / 扫描</p>
-        </div>
-        <Button onClick={handleScan} disabled={scanMut.isPending}>
-          <ScanLine className="mr-1 h-4 w-4" /> 立即扫描
-        </Button>
-      </div>
+      <PageHeader
+        title="告警"
+        description="处理 / 标记 / 扫描"
+        actions={
+          <Button onClick={handleScan} disabled={scanMut.isPending}>
+            <ScanLine className="mr-1 h-4 w-4" /> 立即扫描
+          </Button>
+        }
+      />
 
       {isLoading && <LoadingBlock />}
       {error && <ErrorState error={error} onRetry={() => refetch()} />}

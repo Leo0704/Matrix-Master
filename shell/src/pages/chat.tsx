@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { useChat } from '@/hooks/use-chat';
+import { PageHeader } from '@/components/common/page-header';
 import type { ChatHistoryMessage, ThemeTarget } from '@/types/api';
 
 interface ChatMessage {
@@ -107,18 +108,16 @@ export function Chat() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] flex-col space-y-3">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">对话</h1>
-          <p className="text-sm text-muted-foreground">
-            告诉主控你想做什么样的矩阵；多聊几轮，主题确定后会自动建目标 + 启动 Agent。
-          </p>
-        </div>
-        <Button variant="ghost" size="sm" onClick={reset} disabled={messages.length === 0}>
-          <RotateCcw className="mr-1 h-4 w-4" /> 重置
-        </Button>
-      </div>
+    <div className="flex h-full flex-col space-y-3">
+      <PageHeader
+        title="对话"
+        description="告诉主控你想做什么样的矩阵；多聊几轮，主题确定后会自动建目标 + 启动 Agent。"
+        actions={
+          <Button variant="ghost" size="sm" onClick={reset} disabled={messages.length === 0}>
+            <RotateCcw className="mr-1 h-4 w-4" /> 重置
+          </Button>
+        }
+      />
 
       {confirmed && (
         <Card className="border-emerald-500/40 bg-emerald-50/30">

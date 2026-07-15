@@ -14,6 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusBadge } from '@/components/common/status-badge';
 import { ErrorState } from '@/components/common/error-state';
 import { LoadingBlock } from '@/components/common/loading-spinner';
+import { PageHeader } from '@/components/common/page-header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -214,45 +215,43 @@ export function GoalDetail() {
         </Link>
       </Button>
 
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">
-            {(data.target as { theme?: string })?.theme ?? data.type}
-          </h1>
-          <p className="text-sm text-muted-foreground">ID: {data.id}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          {data.status === 'active' && (
+      <PageHeader
+        title={(data.target as { theme?: string })?.theme ?? data.type}
+        description={`ID: ${data.id}`}
+        actions={
+          <div className="flex items-center gap-2">
+            {data.status === 'active' && (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => setStopOpen(true)}
+              >
+                <XCircle className="mr-1 h-3 w-3" />
+                停止
+              </Button>
+            )}
             <Button
-              variant="destructive"
+              variant="ghost"
               size="sm"
-              onClick={() => setStopOpen(true)}
+              className="text-destructive hover:bg-destructive/10"
+              onClick={() => setDeleteOpen(true)}
             >
-              <XCircle className="mr-1 h-3 w-3" />
-              停止
+              <Trash2 className="mr-1 h-3 w-3" />
+              删除
             </Button>
-          )}
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-destructive hover:bg-destructive/10"
-            onClick={() => setDeleteOpen(true)}
-          >
-            <Trash2 className="mr-1 h-3 w-3" />
-            删除
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
-            <Pencil className="mr-1 h-3 w-3" />
-            编辑
-          </Button>
-          <StatusBadge status={data.status} />
-          {data.phase && (
-            <span className="rounded bg-muted px-2 py-0.5 text-xs">
-              第 {data.current_round ?? 1} / {data.max_rounds ?? 3} 轮
-            </span>
-          )}
-        </div>
-      </div>
+            <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+              <Pencil className="mr-1 h-3 w-3" />
+              编辑
+            </Button>
+            <StatusBadge status={data.status} />
+            {data.phase && (
+              <span className="rounded bg-muted px-2 py-0.5 text-xs">
+                第 {data.current_round ?? 1} / {data.max_rounds ?? 3} 轮
+              </span>
+            )}
+          </div>
+        }
+      />
 
       {/* Phase 进度 */}
       <Card>

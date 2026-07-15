@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusBadge } from '@/components/common/status-badge';
 import { ErrorState } from '@/components/common/error-state';
 import { LoadingBlock } from '@/components/common/loading-spinner';
+import { PageHeader } from '@/components/common/page-header';
 import { formatDate, formatRelative } from '@/lib/format';
 
 export function DeviceDetail() {
@@ -25,15 +26,11 @@ export function DeviceDetail() {
       {error && <ErrorState error={error} onRetry={() => refetch()} />}
       {data && (
         <>
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight">{data.nickname}</h1>
-              <p className="text-sm text-muted-foreground">
-                {data.model ?? '—'} · Android {data.android_version ?? '—'}
-              </p>
-            </div>
-            <StatusBadge status={data.status} />
-          </div>
+          <PageHeader
+            title={data.nickname}
+            description={`${data.model ?? '—'} · Android ${data.android_version ?? '—'}`}
+            actions={<StatusBadge status={data.status} />}
+          />
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <Card>

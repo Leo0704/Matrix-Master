@@ -3,6 +3,7 @@ import { Users } from 'lucide-react';
 import { apiClient } from '@/lib/api-client';
 import { Card, CardContent } from '@/components/ui/card';
 import { LoadingSpinner } from '@/components/common/loading-spinner';
+import { PageHeader } from '@/components/common/page-header';
 import type { AccountContentStats } from '@/types/api';
 
 /**
@@ -25,12 +26,10 @@ export function Data() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">数据</h1>
-        <p className="text-sm text-muted-foreground">
-          账号 {accountCount} 个 · 草稿池 {poolCount} 个（草稿阶段先落库没绑账号的那批）
-        </p>
-      </div>
+      <PageHeader
+        title="数据"
+        description={`账号 ${accountCount} 个 · 草稿池 ${poolCount} 个（草稿阶段先落库没绑账号的那批）`}
+      />
 
       {isLoading ? (
         <LoadingSpinner />

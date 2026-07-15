@@ -5,7 +5,7 @@ import { useGoals } from '@/hooks/use-goals';
 import { GoalForm } from '@/components/goals/goal-form';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusBadge } from '@/components/common/status-badge';
-import { LoadingBlock } from '@/components/common/loading-spinner';
+import { PageHeader } from '@/components/common/page-header';
 import { ErrorState } from '@/components/common/error-state';
 import { EmptyState } from '@/components/common/empty-state';
 import { Button } from '@/components/ui/button';
@@ -28,30 +28,29 @@ export function Goals() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">目标</h1>
-          <p className="text-sm text-muted-foreground">共 {items.length} 个</p>
-        </div>
-        <Dialog open={open} onOpenChange={setOpen}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="mr-1 h-4 w-4" /> 新建目标
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>新建目标</DialogTitle>
-              <DialogDescription>
-                用自然语言描述目标；AI 会自动检索知识库并启动新 run。
-              </DialogDescription>
-            </DialogHeader>
-            <GoalForm onCreated={() => setOpen(false)} />
-          </DialogContent>
-        </Dialog>
-      </div>
+      <PageHeader
+        title="目标"
+        description={`共 ${items.length} 个`}
+        actions={
+          <Dialog open={open} onOpenChange={setOpen}>
+            <DialogTrigger asChild>
+              <Button>
+                <Plus className="mr-1 h-4 w-4" /> 新建目标
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>新建目标</DialogTitle>
+                <DialogDescription>
+                  用自然语言描述目标；AI 会自动检索知识库并启动新 run。
+                </DialogDescription>
+              </DialogHeader>
+              <GoalForm onCreated={() => setOpen(false)} />
+            </DialogContent>
+          </Dialog>
+        }
+      />
 
-      {isLoading && <LoadingBlock />}
       {error && <ErrorState error={error} onRetry={() => refetch()} />}
       {!isLoading && items.length === 0 && (
         <EmptyState title="无目标" description="创建第一个目标让 AI 开始工作" />

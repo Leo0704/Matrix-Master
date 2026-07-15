@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import {
   useNotes,
   useCreateNote,
@@ -10,9 +10,10 @@ import {
 } from '@/hooks/use-notes';
 import { useAccounts } from '@/hooks/use-accounts';
 import { NoteCard } from '@/components/notes/note-card';
-import { LoadingBlock } from '@/components/common/loading-spinner';
+import { PageHeader } from '@/components/common/page-header';
 import { ErrorState } from '@/components/common/error-state';
 import { EmptyState } from '@/components/common/empty-state';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -173,31 +174,31 @@ export function Notes() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">内容</h1>
-          <p className="text-sm text-muted-foreground">笔记列表 / 日历视图</p>
-        </div>
-        <Dialog open={open} onOpenChange={setOpen}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="mr-1 h-4 w-4" /> 新建笔记
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="max-w-xl">
-            <DialogHeader>
-              <DialogTitle>新建笔记</DialogTitle>
-              <DialogDescription>手动写一条笔记。AI run 也会自动创建。</DialogDescription>
-            </DialogHeader>
-            <NoteForm
-              defaultAccountId={defaultAccountId}
-              onSubmit={handleCreate}
-              onCancel={() => setOpen(false)}
-              submitting={createMut.isPending}
-            />
-          </DialogContent>
-        </Dialog>
-      </div>
+      <PageHeader
+        title="内容"
+        description="笔记列表 / 日历视图"
+        actions={
+          <Dialog open={open} onOpenChange={setOpen}>
+            <DialogTrigger asChild>
+              <Button>
+                <Plus className="mr-1 h-4 w-4" /> 新建笔记
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-xl">
+              <DialogHeader>
+                <DialogTitle>新建笔记</DialogTitle>
+                <DialogDescription>手动写一条笔记。AI run 也会自动创建。</DialogDescription>
+              </DialogHeader>
+              <NoteForm
+                defaultAccountId={defaultAccountId}
+                onSubmit={handleCreate}
+                onCancel={() => setOpen(false)}
+                submitting={createMut.isPending}
+              />
+            </DialogContent>
+          </Dialog>
+        }
+      />
 
       <Tabs value={status} onValueChange={(v) => setStatus(v as NoteStatus | 'all')}>
         <TabsList>
@@ -208,25 +209,16 @@ export function Notes() {
           ))}
         </TabsList>
         <TabsContent value={status} className="space-y-4">
-          {isLoading && <LoadingBlock />}
           {error && <ErrorState error={error} onRetry={() => refetch()} />}
           {!isLoading && items.length === 0 && (
             <EmptyState title="无笔记" description="目标创建后 AI 会自动生成笔记" />
           )}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {items.map((n) => (
-              <div key={n.id} className="relative">
-                <NoteCard note={n} />
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleDelete(n)}
-                  className="absolute right-2 top-2 text-destructive opacity-50 hover:opacity-100"
-                >
-                  <Trash2 className="h-3 w-3" />
-                </Button>
-              </div>
-            ))}
+            {isLoading
+              ? Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-40 w-full" />)
+              : items.map((n) => (
+                  <NoteCard key={n.id} note={n} onDelete={() => handleDelete(n)} />
+                ))}
           </div>
         </TabsContent>
       </Tabs>

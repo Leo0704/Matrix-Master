@@ -26,15 +26,15 @@ export function Topbar() {
   const unreadNotifCount = useUnreadNotificationCount();
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between border-b bg-card px-4">
-      <div className="flex items-center gap-2">
+    <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b bg-card px-4">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         <Button variant="ghost" size="icon" onClick={toggleSidebar} aria-label="切换侧边栏">
           <Menu className="h-5 w-5" />
         </Button>
-        <h1 className="text-lg font-semibold">监控控制台</h1>
+        <h1 className="truncate text-lg font-semibold">监控控制台</h1>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 shrink-0 items-center gap-1 sm:gap-2">
         <SystemHealth health={health} />
         <Button variant="ghost" size="icon" onClick={toggleTheme} aria-label="切换主题">
           {theme === 'light' ? <Moon className="h-5 w-5" /> : <Sun className="h-5 w-5" />}
@@ -91,13 +91,13 @@ function SystemHealth({ health }: { health?: Health }) {
           ? 'bg-destructive'
           : 'bg-muted-foreground';
   return (
-    <div className="flex items-center gap-2 rounded-md border bg-background px-3 py-1.5 text-xs">
+    <div className="hidden sm:flex items-center gap-2 rounded-md border bg-background px-2 py-1.5 text-xs">
       <span className={cn('h-2 w-2 rounded-full', color)} />
-      <span>
+      <span className="whitespace-nowrap">
         主控: <span className="font-medium">{status}</span>
       </span>
       {health && (
-        <span className="text-muted-foreground">v{health.version}</span>
+        <span className="whitespace-nowrap text-muted-foreground">v{health.version}</span>
       )}
     </div>
   );
