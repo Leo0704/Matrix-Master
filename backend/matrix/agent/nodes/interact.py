@@ -14,6 +14,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from .._services import get_services, llm_complete
+from ..interact_policy import InteractPolicy
 from ..nodes._util import parse_json_response
 from ..prompts import INTERACT_SYSTEM, INTERACT_USER
 from ..types import AgentState
@@ -104,6 +105,12 @@ async def interact_node(state: AgentState) -> dict[str, Any]:
             "last_error": None,
         }
 
+    # Phase 2b #5 + A：构造去重 + 自适应策略（session_factory 缺失就跳过，
+    # 等价于旧行为）
+    policy: InteractPolicy | None = None
+    if services.session_factory is not None:
+        policy = InteractPolicy(services.session_factory)
+
     for item in plan:
         if not isinstance(item, dict):
             continue
@@ -121,6 +128,27 @@ async def interact_node(state: AgentState) -> dict[str, Any]:
                 }
             )
             continue
+
+        # Phase 2b：去重 + 风险自适应检查
+        if policy is not None:
+            decision = await policy.should_skip(
+                account_id=account_id,
+                target_note_id=target_note_id,
+                kind=kind,
+            )
+            if decision.skip:
+                # 跳过不算 failed（不是设备问题），但要记一条 details 让上层看见
+                details.append(
+                    {
+                        "kind": kind,
+                        "target_note_id": target_note_id,
+                        "ok": False,
+                        "error_code": decision.reason,
+                        "error_message": decision.message,
+                        "skipped": True,
+                    }
+                )
+                continue
 
         # comment 必须先生成文案
         content: str | None = item.get("content")  # content_template 也走这条；运营者手填

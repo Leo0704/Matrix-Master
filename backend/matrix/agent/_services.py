@@ -75,6 +75,8 @@ class AgentServices:
     llm_rate_limiter: Any | None = None
     # Phase 2a B：成本护栏（per-goal + global 单日 token 上限）。None → 不护栏。
     cost_guard: Any | None = None
+    # Phase 2b：DB session 工厂（interact 节点查重 + adaptive 用）。None → 跳过这些特性。
+    session_factory: Any | None = None
 
 
 _SERVICES: AgentServices | None = None
