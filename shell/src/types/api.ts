@@ -356,6 +356,31 @@ export interface AlertItem {
   resolved_at?: string;
 }
 
+// ---------- Notifications (Phase 1 反向反馈) ----------
+
+export type NotificationSeverity = 'info' | 'success' | 'warning' | 'error';
+
+export interface NotificationItem {
+  id: string;
+  recipient: string;
+  code: string;
+  severity: NotificationSeverity;
+  title: string;
+  body: string;
+  goal_id?: string;
+  run_id?: string;
+  note_id?: string;
+  device_id?: string;
+  payload: Record<string, unknown>;
+  read_at?: string;
+  created_at: string;
+}
+
+export interface NotificationListResponse {
+  items: NotificationItem[];
+  total: number;
+}
+
 export type KbType =
   | 'brand'
   | 'persona'

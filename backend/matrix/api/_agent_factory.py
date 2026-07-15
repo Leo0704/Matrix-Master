@@ -108,6 +108,7 @@ async def build_runtime_services(
     embedding_client_cls: Callable[..., Any] | None = None,
     task_writer: Any | None = None,
     scheduler: Any | None = None,
+    notifier: Any | None = None,
 ) -> AgentServices:
     """构造生产链所需的 AgentServices：LLM / KB 检索 / KB 写库 / Usage 跟踪。
 
@@ -118,6 +119,9 @@ async def build_runtime_services(
         task_writer: 写 task 的 callable（默认 None → dispatch_node 静默跳过落库；
             生产路径传 :class:`matrix.scheduler.db.DbTaskWriter`）
         scheduler: 可选 slot picker；未传时构造默认 :class:`DefaultSlotPicker`
+        notifier: Phase 1 反向反馈通道。默认 None → 构造 :class:`WebhookNotifier`：
+            写 ``notifications`` 表 + 可选 POST webhook。
+            调用方应在 lifespan 收尾 ``await notifier.aclose()`` 关闭长生命周期 httpx client。
     """
     llm = llm_factory()
     if embedding_client_cls is None:
@@ -145,6 +149,16 @@ async def build_runtime_services(
     sem_size = int(os.environ.get("MATRIX_LLM_CONCURRENCY", "8"))
     llm_rate_limiter = LLMRateLimiter(semaphore=asyncio.Semaphore(sem_size))
 
+    if notifier is None:
+        # Phase 1：替换原 _noop_notifier。WebhookNotifier 内部持长生命周期 httpx 客户端，
+        # lifespan 收尾需 aclose()（app.py 处理）。
+        from matrix.agent._notifier_webhook import WebhookNotifier
+
+        notifier = WebhookNotifier(
+            session_factory=session_factory,
+            config_reader=_LazyConfigReader(session_factory),
+        )
+
     services = build_agent_services(
         llm=llm,
         kb_retriever=_LazyRetriever(session_factory, embedder),
@@ -154,6 +168,7 @@ async def build_runtime_services(
         task_writer=task_writer,
         note_writer=db_note_writer,  # v0.7 Phase 5：DRAFT 草稿直接落 notes 表
         scheduler=scheduler,
+        notifier=notifier,
         llm_rate_limiter=llm_rate_limiter,
     )
     return services

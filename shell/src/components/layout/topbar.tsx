@@ -1,4 +1,4 @@
-import { Bell, Menu, Moon, Sun } from 'lucide-react';
+import { Bell, Inbox, Menu, Moon, Sun } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useUIStore } from '@/stores/ui-store';
 import { Button } from '@/components/ui/button';
@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api-client';
 import type { Health } from '@/types/api';
 import { useAlerts } from '@/hooks/use-alerts';
+import { useUnreadNotificationCount } from '@/hooks/use-notifications';
 import { cn } from '@/lib/utils';
 
 export function Topbar() {
@@ -20,7 +21,9 @@ export function Topbar() {
 
   // 未读 alert 角标（resolved=false）；30s 轮询
   const { data: unresolvedAlerts } = useAlerts({ resolved: false });
-  const unreadCount = unresolvedAlerts?.total ?? 0;
+  const unreadAlertCount = unresolvedAlerts?.total ?? 0;
+  // Phase 1: 通知未读角标
+  const unreadNotifCount = useUnreadNotificationCount();
 
   return (
     <header className="flex h-14 shrink-0 items-center justify-between border-b bg-card px-4">
@@ -39,13 +42,13 @@ export function Topbar() {
         <Button variant="ghost" size="icon" asChild aria-label="告警">
           <Link to="/alerts" className="relative inline-flex">
             <Bell className="h-5 w-5" />
-            {unreadCount > 0 ? (
+            {unreadAlertCount > 0 ? (
               <span
                 className={cn(
                   'absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-medium text-destructive-foreground',
                 )}
               >
-                {unreadCount > 99 ? '99+' : unreadCount}
+                {unreadAlertCount > 99 ? '99+' : unreadAlertCount}
               </span>
             ) : (
               <span
@@ -54,6 +57,21 @@ export function Topbar() {
                   health?.status === 'ok' && 'opacity-50',
                 )}
               />
+            )}
+          </Link>
+        </Button>
+        {/* Phase 1: 通知中心 — 运营进度与结果 */}
+        <Button variant="ghost" size="icon" asChild aria-label="消息">
+          <Link to="/notifications" className="relative inline-flex">
+            <Inbox className="h-5 w-5" />
+            {unreadNotifCount > 0 && (
+              <span
+                className={cn(
+                  'absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-success px-1 text-[10px] font-medium text-success-foreground',
+                )}
+              >
+                {unreadNotifCount > 99 ? '99+' : unreadNotifCount}
+              </span>
             )}
           </Link>
         </Button>

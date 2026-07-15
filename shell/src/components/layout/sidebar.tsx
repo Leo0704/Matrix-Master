@@ -8,6 +8,7 @@ import {
   BarChart3,
   BookOpen,
   Bell,
+  Inbox,
 } from 'lucide-react';
 import { useUIStore } from '@/stores/ui-store';
 import { cn } from '@/lib/utils';
@@ -21,6 +22,7 @@ const nav = [
   { to: '/data', label: '数据', icon: BarChart3 },
   { to: '/kb', label: '知识库', icon: BookOpen },
   { to: '/alerts', label: '告警', icon: Bell },
+  { to: '/notifications', label: '消息', icon: Inbox }, // Phase 1
 ];
 
 export function Sidebar() {

@@ -175,6 +175,8 @@ def _build_run_payload(
     target: dict,
     round_number: int,
     slot,
+    *,
+    learnings_text: str = "",
 ) -> dict[str, Any]:
     """构造 AgentRun.payload；slot 为 None 时不带 preassigned_slot（旧随机路径）。"""
     brief = dict(target)
@@ -187,6 +189,8 @@ def _build_run_payload(
         "goal_type": goal.type,
         "round_number": round_number,
     }
+    if learnings_text:
+        payload["learnings_text"] = learnings_text
     if slot is not None:
         payload["preassigned_slot"] = {
             "device_id": str(slot.device_id),
@@ -211,6 +215,19 @@ async def _prepare_round(
     """
     target = dict(goal.target or {})
 
+    # 拉历史经验（v0.7 Phase 3：learning_prompt，KB 里有 strategy_card/rule 时带入 prompt）
+    learnings_text = ""
+    try:
+        from .learning_prompt import fetch_relevant_learnings
+
+        learnings_text = await fetch_relevant_learnings(
+            session,
+            theme=str(target.get("theme", "")),
+            audience=target.get("audience"),
+        )
+    except Exception:
+        logger.exception("orchestrator.learnings_fetch_failed", goal_id=str(goal.id))
+
     # 主路径：拉 N 个 slot
     slots, _n = await _allocate_round_slots(session, goal)
 
@@ -218,7 +235,7 @@ async def _prepare_round(
     if slots:
         # 每台设备 1 个 run，同主题 + style_hint 轮换 + 时间错开
         for slot in slots:
-            payload = _build_run_payload(goal, target, round_number, slot)
+            payload = _build_run_payload(goal, target, round_number, slot, learnings_text=learnings_text)
             run = AgentRun(
                 goal_id=goal.id,
                 current_state="IDLE",
@@ -232,7 +249,7 @@ async def _prepare_round(
         # 降级路径：N 份占位 brief（旧随机 choose_slot 路径）
         n = _count_target_for_round(goal)
         for _ in range(n):
-            payload = _build_run_payload(goal, target, round_number, slot=None)
+            payload = _build_run_payload(goal, target, round_number, slot=None, learnings_text=learnings_text)
             run = AgentRun(
                 goal_id=goal.id,
                 current_state="IDLE",
@@ -517,6 +534,21 @@ def _should_continue(
 # ---------------------------------------------------------------------------
 
 
+async def _safe_notify(code: str, payload: dict[str, Any]) -> None:
+    """Phase 1 反向反馈：调 notifier 但绝不抛异常（与主流程解耦）。
+
+    失败只记日志，不挡 phase 推进。notifier 内部本身已经 try/except，
+    这里再包一层防御，避免 get_services() 未初始化等场景。
+    """
+    try:
+        notifier = get_services().notifier
+        await notifier(code, payload)
+    except Exception:
+        logger.warning(
+            "orchestrator.notify_safe_failed", code=code, exc_info=True
+        )
+
+
 async def advance_goal(
     session: AsyncSession,
     goal: Goal,
@@ -556,6 +588,17 @@ async def advance_goal(
         await _set_phase(session, goal, PHASE_EXECUTING)
         action = f"prepared {created} runs"
         await session.commit()
+        # Phase 1：通知"本轮已派出 N 个 run"
+        if created > 0:
+            await _safe_notify(
+                "goal.round.prepared",
+                {
+                    "goal_id": str(goal.id),
+                    "round_number": goal.current_round,
+                    "runs_created": created,
+                    "eta_min": 5,
+                },
+            )
         return OrchestratorResult(
             goal_id=goal.id,
             phase_before=phase_before,
@@ -593,6 +636,15 @@ async def advance_goal(
         await _write_round_kpi(session, goal.id, goal.current_round, kpi)
         await _set_phase(session, goal, PHASE_SUMMARIZING)
         await session.commit()
+        # Phase 1：通知"本轮 KPI 已收齐"
+        await _safe_notify(
+            "goal.round.monitored",
+            {
+                "goal_id": str(goal.id),
+                "round_number": goal.current_round,
+                "notes_count": kpi.get("notes_count", 0),
+            },
+        )
         return OrchestratorResult(
             goal_id=goal.id,
             phase_before=phase_before,
@@ -608,6 +660,11 @@ async def advance_goal(
         await _summarize_round(session, goal, goal.current_round, kpi)
         await _set_phase(session, goal, PHASE_DECIDING)
         await session.commit()
+        # Phase 1：通知"本轮已总结完，进决策"
+        await _safe_notify(
+            "goal.round.decided",
+            {"goal_id": str(goal.id), "round_number": goal.current_round},
+        )
         return OrchestratorResult(
             goal_id=goal.id,
             phase_before=phase_before,
@@ -629,6 +686,17 @@ async def advance_goal(
             )
             await _set_phase(session, goal, PHASE_PREPARING)
             await session.commit()
+            # Phase 1：通知"决策：继续下一轮"
+            await _safe_notify(
+                "goal.round.decided.continue",
+                {
+                    "goal_id": str(goal.id),
+                    "round_number": goal.current_round,
+                    "next_round": goal.current_round,
+                    "reason": reason,
+                    "eta_min": 5,
+                },
+            )
             return OrchestratorResult(
                 goal_id=goal.id,
                 phase_before=phase_before,
@@ -646,6 +714,16 @@ async def advance_goal(
                 (goal.learning_summary or "") + f"\n[收工] {reason}"
             )
             await session.commit()
+            # Phase 1：通知"目标完成/收工"
+            await _safe_notify(
+                "goal.round.decided.done",
+                {
+                    "goal_id": str(goal.id),
+                    "round_number": goal.current_round,
+                    "total_rounds": goal.current_round,
+                    "reason": reason,
+                },
+            )
             return OrchestratorResult(
                 goal_id=goal.id,
                 phase_before=phase_before,

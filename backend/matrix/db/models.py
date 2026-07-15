@@ -362,6 +362,14 @@ class Note(Base):
     request_id: Mapped[Optional[str]] = mapped_column(String(64), unique=True)
     scheduled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # Phase 1 P1-1：发布成功后由 publish_node 写入 = now + 24h；collect 成功后由
+    # ``_do_collect`` 写入实际执行时间。两者都为 NULL 表示"非 Phase 1 之后发布，
+    # 不自动采"。
+    scheduled_collect_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    collected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    collected_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('agent_runs.id', ondelete='SET NULL'), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=sa_text('NOW()')
     )
@@ -445,7 +453,7 @@ class KbDocument(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "type IN ('brand', 'persona', 'rule', 'topic', 'history', 'template', 'product')",
+            "type IN ('brand', 'persona', 'rule', 'topic', 'history', 'template', 'product', 'strategy_card')",
             name='kb_documents_type_check',
         ),
     )
@@ -848,6 +856,55 @@ class Alert(Base):
     )
 
 
+class Notification(Base):
+    """Phase 1 反馈通道：终态用户/运营通知。
+
+    不同于 ``Alert``（监控语义、resolved/unresolved 二态）：
+    - severity 含 success——"目标完成"也是要通知的事，不是错误
+    - read_at 表示"已读"，不是"已解决"
+    - 4 个可选 typed FK（goal/run/note/device），用于按维度过滤和跳详情
+    - payload JSONB 携带渲染所需的原始字段（kpi / next_round / ...）
+    """
+    __tablename__ = 'notifications'
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=sa_text('uuid_generate_v4()'),
+    )
+    recipient: Mapped[str] = mapped_column(String(64), nullable=False)
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)
+    title: Mapped[str] = mapped_column(String(256), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    goal_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('goals.id', ondelete='SET NULL'), nullable=True
+    )
+    run_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('agent_runs.id', ondelete='SET NULL'), nullable=True
+    )
+    note_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('notes.id', ondelete='SET NULL'), nullable=True
+    )
+    device_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('devices.id', ondelete='SET NULL'), nullable=True
+    )
+    payload: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=sa_text("'{}'::jsonb")
+    )
+    read_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=sa_text('NOW()')
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "severity IN ('info','success','warning','error')",
+            name='notifications_severity_check',
+        ),
+    )
+
+
 class AppConfig(Base):
     __tablename__ = 'app_config'
 
@@ -903,5 +960,6 @@ __all__ = [
     'DailyCounter',
     'AuditLog',
     'Alert',
+    'Notification',
     'AppConfig',
 ]

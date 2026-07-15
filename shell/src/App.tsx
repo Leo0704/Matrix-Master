@@ -12,6 +12,7 @@ import { Data } from './pages/data';
 import { KB } from './pages/kb';
 import { Chat } from './pages/chat';
 import { Alerts } from './pages/alerts';
+import { Notifications } from './pages/notifications'; // Phase 1
 import { NotFound } from './pages/not-found';
 import { useUIStore } from './stores/ui-store';
 import { useEffect } from 'react';
@@ -39,6 +40,7 @@ export function App() {
         <Route path="/data" element={<Data />} />
         <Route path="/kb" element={<KB />} />
         <Route path="/alerts" element={<Alerts />} />
+        <Route path="/notifications" element={<Notifications />} /> {/* Phase 1 */}
 
         <Route path="*" element={<NotFound />} />
       </Route>

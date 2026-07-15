@@ -35,6 +35,7 @@ from matrix.api.routes import (
     logs as logs_routes,
     metrics as metrics_routes,
     notes as notes_routes,
+    notifications as notifications_routes,
     personas as personas_routes,
     settings as settings_routes,
 )
@@ -122,6 +123,8 @@ def create_app(
                 task_writer=task_writer,
             )
             _set_services(services)
+            # Phase 1：保留 notifier 引用，lifespan 收尾需 aclose 关闭长生命周期 httpx 客户端
+            app.state.notifier = services.notifier
             manager = build_run_manager(
                 services=services, repository=DefaultAgentRepository()
             )
@@ -334,6 +337,13 @@ def create_app(
                 await apk_client.aclose()
             except Exception:  # pragma: no cover
                 logger.warning("apk_client aclose failed", exc_info=True)
+        # Phase 1：关闭 WebhookNotifier 内部 httpx 客户端
+        notifier = getattr(app.state, "notifier", None)
+        if notifier is not None and hasattr(notifier, "aclose"):
+            try:
+                await notifier.aclose()
+            except Exception:  # pragma: no cover
+                logger.warning("notifier aclose failed", exc_info=True)
         try:
             shutdown_tracing()
         except Exception:  # pragma: no cover
@@ -389,6 +399,7 @@ def create_app(
     app.include_router(chat_routes.router, prefix=API_PREFIX)
     app.include_router(kb_routes.router, prefix=API_PREFIX)
     app.include_router(alerts_routes.router, prefix=API_PREFIX)
+    app.include_router(notifications_routes.router, prefix=API_PREFIX)  # Phase 1
     app.include_router(analytics_routes.router, prefix=API_PREFIX)
     app.include_router(metrics_routes.router, prefix=API_PREFIX)
     app.include_router(interactions_routes.router, prefix=API_PREFIX)  # v0.6

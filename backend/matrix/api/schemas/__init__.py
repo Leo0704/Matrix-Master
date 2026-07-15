@@ -58,6 +58,13 @@ from matrix.api.schemas.kb import (
     KbType,
 )
 from matrix.api.schemas.note import Note, NoteCreate, NoteListResponse, NoteUpdate
+from matrix.api.schemas.notification import (
+    NotificationItem,
+    NotificationListResponse,
+    NotificationMarkReadRequest,
+    NotificationMarkReadResponse,
+    NotificationSeverity,
+)
 from matrix.api.schemas.persona import (
     Persona,
     PersonaCreate,
@@ -120,6 +127,11 @@ __all__ = [
     "NoteCreate",
     "NoteListResponse",
     "NoteUpdate",
+    "NotificationItem",
+    "NotificationListResponse",
+    "NotificationMarkReadRequest",
+    "NotificationMarkReadResponse",
+    "NotificationSeverity",
     "OkResponse",
     "Persona",
     "PersonaCreate",
