@@ -110,6 +110,7 @@ def create_app(
             from matrix.api._agent_factory import build_runtime_services
             from matrix.scheduler.db import DbTaskLoader, DbTaskStatusWriter, DbTaskWriter
             from matrix.scheduler.db_task_executor import DeviceTaskExecutor
+            from matrix.scheduler.circuit_breaker import CircuitBreaker
             from matrix.scheduler.rate_limiter import RateLimiter
             from matrix.scheduler.scheduler import Scheduler
 
@@ -261,6 +262,8 @@ def create_app(
                 session_factory=app.state.db_session_factory,
                 # Phase 1：失败/成功都发反馈通知
                 notifier=services.notifier,
+                # Phase 2a #7：滑动窗口熔断器，5min 内 10 次失败就熔 30min
+                breaker=CircuitBreaker(window=300, threshold=10, cool_off=1800),
             )
             scheduler = Scheduler(
                 loader=DbTaskLoader(app.state.db_session_factory),

@@ -43,6 +43,7 @@ class DeviceTaskExecutor:
         device_interactor: Any | None = None,
         session_factory: Any | None = None,
         notifier: Any | None = None,
+        breaker: Any | None = None,
     ) -> None:
         self._publisher = device_publisher
         self._collector = device_collector
@@ -51,21 +52,46 @@ class DeviceTaskExecutor:
         # （保留向后兼容，测试场景可省）
         self._session_factory = session_factory
         self._notifier = notifier
+        # Phase 2a #7：滑动窗口熔断器。None → 不熔断（向后兼容 dev/test）。
+        # 生产路径在 app.py lifespan 注入一个进程级实例。
+        self._breaker = breaker
 
     async def execute(self, task: TaskLike) -> bool:
+        # Phase 2a #7：熔断期间直接放弃，避免在风控/账号封禁/网络全挂时反复重试
+        if self._breaker is not None and self._breaker.is_open():
+            logger.warning(
+                "executor.circuit_open", task_id=task.id, action=task.action
+            )
+            await self._notify_circuit_open(task)
+            return False
+
         action = task.action
+        ok = False
+        try:
+            if action == "device_publish":
+                ok = await self._do_publish(task)
+            elif action == "device_collect_metrics":
+                ok = await self._do_collect(task)
+            elif action in _INTERACT_ACTIONS:
+                ok = await self._do_interact(task, action)
+            else:
+                logger.warning(
+                    "executor.unknown_action", action=action, task_id=task.id
+                )
+                ok = False
+        except Exception as exc:
+            # 兜底：适配器实现意外抛 → 走熔断记录 + 返 False，绝不让 worker 崩
+            logger.exception(
+                "executor.unhandled_exception", task_id=task.id, action=action
+            )
+            if self._breaker is not None:
+                self._breaker.record_failure()
+            await self._notify_executor_failed(task, action, str(exc))
+            return False
 
-        if action == "device_publish":
-            return await self._do_publish(task)
-
-        if action == "device_collect_metrics":
-            return await self._do_collect(task)
-
-        if action in _INTERACT_ACTIONS:
-            return await self._do_interact(task, action)
-
-        logger.warning("executor.unknown_action", action=action, task_id=task.id)
-        return False
+        if not ok and self._breaker is not None:
+            self._breaker.record_failure()
+        return ok
 
     # ---- action handlers ------------------------------------------------
 
@@ -238,3 +264,52 @@ class DeviceTaskExecutor:
             )
         except Exception:
             logger.exception("executor.notify_collect_failed_failed", task_id=task.id)
+
+    # ---- Phase 2a #7：熔断器相关通知 ----
+
+    async def _notify_circuit_open(self, task: TaskLike) -> None:
+        """熔断打开时丢一个 warning 通知（限流：只在 open→closed 边界发，不每次都发）。"""
+        if self._notifier is None:
+            return
+        # 用 device_id 作为 subject；不带 goal/run（熔断是全局的，不是某条 task）
+        try:
+            await self._notifier(
+                "agent.alert",
+                {
+                    "code": "CIRCUIT_OPEN",
+                    "severity": "warning",
+                    "title": "设备任务熔断中",
+                    "body": "近期失败率过高，调度器暂停派发新任务，等冷却结束再恢复。",
+                    "device_id": str(task.device_id) if task.device_id else "",
+                    "action": task.action,
+                },
+            )
+        except Exception:
+            logger.exception("executor.notify_circuit_open_failed", task_id=task.id)
+
+    async def _notify_executor_failed(
+        self, task: TaskLike, action: str, error: str
+    ) -> None:
+        """兜底异常通知：适配器自己抛时也能让运营看到。"""
+        if self._notifier is None:
+            return
+        payload = task.payload or {}
+        try:
+            await self._notifier(
+                "agent.alert",
+                {
+                    "code": "EXECUTOR_EXCEPTION",
+                    "severity": "error",
+                    "title": "设备任务执行异常",
+                    "body": f"action={action}: {error[:200]}",
+                    "note_id": payload.get("note_id", ""),
+                    "goal_id": payload.get("goal_id", ""),
+                    "run_id": payload.get("run_id", ""),
+                    "device_id": str(task.device_id) if task.device_id else "",
+                    "action": action,
+                },
+            )
+        except Exception:
+            logger.exception(
+                "executor.notify_executor_failed_failed", task_id=task.id
+            )

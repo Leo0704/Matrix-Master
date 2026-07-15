@@ -505,6 +505,129 @@ class TestDeviceTaskExecutor:
         # 没 session_factory → 不写 DB → 不发通知
         assert notifier_calls == []
 
+    # ---- Phase 2a #7：熔断器 ----
+
+    @pytest.mark.asyncio
+    async def test_circuit_open_skips_dispatch_and_notifies(self):
+        """熔断打开时直接 return False，且发 agent.alert 通知。"""
+        from matrix.scheduler.circuit_breaker import CircuitBreaker
+
+        breaker = CircuitBreaker(window=600, threshold=2, cool_off=60)
+        breaker.record_failure()
+        breaker.record_failure()  # 触发熔断
+        assert breaker.is_open() is True
+
+        notifier_calls: list[tuple[str, dict]] = []
+
+        async def fake_notifier(code: str, payload: dict) -> None:
+            notifier_calls.append((code, payload))
+
+        pub = _FakePublisher(ok=True)
+        col = _FakeCollector(metrics={"views": 10})
+        executor = DeviceTaskExecutor(
+            device_publisher=pub,
+            device_collector=col,
+            notifier=fake_notifier,
+            breaker=breaker,
+        )
+        task = _make_task_like(
+            action="device_publish",
+            payload={"title": "t", "content": "c", "images": [], "tags": []},
+        )
+        # publisher/collector 不应被调用
+        assert await executor.execute(task) is False
+        assert pub.calls == []
+        # 发了熔断告警
+        assert len(notifier_calls) == 1
+        assert notifier_calls[0][0] == "agent.alert"
+        assert notifier_calls[0][1]["code"] == "CIRCUIT_OPEN"
+        assert notifier_calls[0][1]["severity"] == "warning"
+
+    @pytest.mark.asyncio
+    async def test_failure_records_to_breaker(self):
+        """publish 失败要喂给 breaker。"""
+        from matrix.scheduler.circuit_breaker import CircuitBreaker
+
+        breaker = CircuitBreaker(window=600, threshold=10, cool_off=60)
+        executor = DeviceTaskExecutor(
+            device_publisher=_FakePublisher(ok=False, error_code="RISK_BLOCKED"),
+            device_collector=_FakeCollector(),
+            breaker=breaker,
+        )
+        task = _make_task_like(
+            action="device_publish",
+            payload={"title": "t", "content": "c", "images": [], "tags": []},
+        )
+        assert await executor.execute(task) is False
+        assert len(breaker.failures) == 1
+        # 没到 threshold → 还没熔
+        assert breaker.is_open() is False
+
+    @pytest.mark.asyncio
+    async def test_success_does_not_record_to_breaker(self):
+        """成功不喂 breaker。"""
+        from matrix.scheduler.circuit_breaker import CircuitBreaker
+
+        breaker = CircuitBreaker(window=600, threshold=10, cool_off=60)
+        executor = DeviceTaskExecutor(
+            device_publisher=_FakePublisher(ok=True),
+            device_collector=_FakeCollector(),
+            breaker=breaker,
+        )
+        task = _make_task_like(
+            action="device_publish",
+            payload={"title": "t", "content": "c", "images": [], "tags": []},
+        )
+        assert await executor.execute(task) is True
+        assert breaker.failures == []
+
+    @pytest.mark.asyncio
+    async def test_unhandled_exception_records_failure_and_notifies(self):
+        """适配器抛异常 → 记录失败 + 发 ERROR 通知，绝不传给 worker。"""
+        from matrix.scheduler.circuit_breaker import CircuitBreaker
+
+        class BoomPublisher:
+            def __init__(self):
+                self.calls = 0
+
+            async def publish(self, **kw):
+                self.calls += 1
+                raise RuntimeError("apk timed out")
+
+        breaker = CircuitBreaker(window=600, threshold=10, cool_off=60)
+        notifier_calls: list[tuple[str, dict]] = []
+
+        async def fake_notifier(code: str, payload: dict) -> None:
+            notifier_calls.append((code, payload))
+
+        pub = BoomPublisher()
+        executor = DeviceTaskExecutor(
+            device_publisher=pub,
+            device_collector=_FakeCollector(),
+            notifier=fake_notifier,
+            breaker=breaker,
+        )
+        task = _make_task_like(action="device_publish", payload={"title": "t"})
+        assert await executor.execute(task) is False
+        # 喂给 breaker 一次
+        assert len(breaker.failures) == 1
+        # 发了一条 EXECUTOR_EXCEPTION 告警
+        assert len(notifier_calls) == 1
+        assert notifier_calls[0][0] == "agent.alert"
+        assert notifier_calls[0][1]["code"] == "EXECUTOR_EXCEPTION"
+        assert notifier_calls[0][1]["severity"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_no_breaker_is_backward_compatible(self):
+        """breaker=None 时：原行为不变（失败不喂任何东西）。"""
+        executor = DeviceTaskExecutor(
+            device_publisher=_FakePublisher(ok=False, error_code="X"),
+            device_collector=_FakeCollector(),
+        )
+        task = _make_task_like(action="device_publish", payload={"title": "t"})
+        # 单纯失败，没有 breaker、没有 notifier → 不会崩
+        assert await executor.execute(task) is False
+
 
 # ---------------------------------------------------------------------------
 # _DbTaskAdapter
