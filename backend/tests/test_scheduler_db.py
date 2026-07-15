@@ -401,6 +401,110 @@ class TestDeviceTaskExecutor:
         task = _make_task_like(action="device_teleport", payload={})
         assert await executor.execute(task) is False
 
+    # ---- Phase 1 P1-1：_do_collect 持久化 + 通知 ----
+
+    @pytest.mark.asyncio
+    async def test_collect_persists_note_metric_and_updates_note(self):
+        """采集成功：写 NoteMetric + 更新 Note.collected_at + 发 note.collected 通知。"""
+        col = _FakeCollector(metrics={"views": 100, "likes": 10, "collects": 3})
+        session_factory, session = _build_mock_session_factory()
+        # session.get(Note, ...) 返回一个 mock note 对象
+        mock_note = MagicMock()
+        mock_note.collected_at = None
+        mock_note.collected_run_id = None
+        session.get = AsyncMock(return_value=mock_note)
+        notifier_calls: list[tuple[str, dict]] = []
+
+        async def fake_notifier(code: str, payload: dict) -> None:
+            notifier_calls.append((code, payload))
+
+        executor = DeviceTaskExecutor(
+            device_publisher=_FakePublisher(),
+            device_collector=col,
+            session_factory=session_factory,
+            notifier=fake_notifier,
+        )
+        note_id = uuid4()
+        task = _make_task_like(
+            action="device_collect_metrics",
+            payload={
+                "platform_note_id": "p1",
+                "scope": "recent_24h",
+                "note_id": str(note_id),
+                "goal_id": str(uuid4()),
+                "run_id": str(uuid4()),
+            },
+        )
+        assert await executor.execute(task) is True
+
+        # NoteMetric 行被 add；Note 被 get + 字段被写
+        session.add.assert_called_once()
+        added = session.add.call_args[0][0]
+        # NoteMetric 模型；检查字段
+        assert added.__class__.__name__ == "NoteMetric"
+        assert added.note_id == note_id
+        assert added.views == 100
+        assert added.likes == 10
+        assert added.collects == 3
+        # Note.collected_at 被赋值；collected_run_id 被设为 run_id
+        assert mock_note.collected_at is not None
+        # session.commit 被调（写库 + 通知都在 commit 之后）
+        assert session.commit.await_count >= 1
+        # 通知被发
+        assert len(notifier_calls) == 1
+        assert notifier_calls[0][0] == "note.collected"
+        assert notifier_calls[0][1]["views"] == 100
+        assert notifier_calls[0][1]["likes"] == 10
+
+    @pytest.mark.asyncio
+    async def test_collect_failure_emits_warning_notification(self):
+        """采集失败：发 note.collect.failed 通知、return False。"""
+        col = _FakeCollector(raise_exc=True)
+        session_factory, _session = _build_mock_session_factory()
+        notifier_calls: list[tuple[str, dict]] = []
+
+        async def fake_notifier(code: str, payload: dict) -> None:
+            notifier_calls.append((code, payload))
+
+        executor = DeviceTaskExecutor(
+            device_publisher=_FakePublisher(),
+            device_collector=col,
+            session_factory=session_factory,
+            notifier=fake_notifier,
+        )
+        note_id = uuid4()
+        task = _make_task_like(
+            action="device_collect_metrics",
+            payload={"platform_note_id": "p1", "note_id": str(note_id)},
+        )
+        assert await executor.execute(task) is False
+        assert len(notifier_calls) == 1
+        assert notifier_calls[0][0] == "note.collect.failed"
+        assert notifier_calls[0][1]["platform_note_id"] == "p1"
+
+    @pytest.mark.asyncio
+    async def test_collect_without_session_factory_returns_true_silently(self):
+        """没注入 session_factory 时：拿到 metrics 就 return True，不持久化、不通知。
+        （向后兼容旧调用方；新生产路径已传 session_factory）"""
+        col = _FakeCollector(metrics={"views": 50})
+        notifier_calls: list = []
+
+        async def fake_notifier(code: str, payload: dict) -> None:
+            notifier_calls.append(code)
+
+        executor = DeviceTaskExecutor(
+            device_publisher=_FakePublisher(),
+            device_collector=col,
+            notifier=fake_notifier,  # 有 notifier 但没 session_factory
+        )
+        task = _make_task_like(
+            action="device_collect_metrics",
+            payload={"platform_note_id": "p1", "note_id": str(uuid4())},
+        )
+        assert await executor.execute(task) is True
+        # 没 session_factory → 不写 DB → 不发通知
+        assert notifier_calls == []
+
 
 # ---------------------------------------------------------------------------
 # _DbTaskAdapter

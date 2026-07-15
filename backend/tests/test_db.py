@@ -174,6 +174,7 @@ EXPECTED_TABLES = [
     "comments",
     "audit_logs",
     "alerts",
+    "notifications",  # Phase 1 P1-1
     "daily_counters",
     "app_config",
 ]
@@ -262,7 +263,9 @@ def test_tableless_count():
     ]
     # Base 自己也要排除
     subclasses = [s for s in subclasses if s is not models.Base]
-    assert len(subclasses) == 25, f"got {len(subclasses)}: {[s.__name__ for s in subclasses]}"
+    # Phase 1 P1-1 加了 Notification 类，从 25 升到 26。
+    # 后续加表时记得同步这个数（也可用 >= 25 模糊断言，但精确计数能挡忘记 export 的情况）
+    assert len(subclasses) == 26, f"got {len(subclasses)}: {[s.__name__ for s in subclasses]}"
 
 
 def test_base_is_declarative():
