@@ -73,6 +73,8 @@ class AgentServices:
     image_generator: Any | None = None
     # v0.7+ 第 2 期：LLM 全局并发 + 每模型限速；None 则跳过限速（dev/test）
     llm_rate_limiter: Any | None = None
+    # Phase 2a B：成本护栏（per-goal + global 单日 token 上限）。None → 不护栏。
+    cost_guard: Any | None = None
 
 
 _SERVICES: AgentServices | None = None
@@ -117,15 +119,21 @@ async def llm_complete(
     call_type: str = "generation",
     run_id: str | None = None,
     account_id: str | None = None,
+    goal_id: str | None = None,
 ) -> str:
     """调用 LLM，失败按指数退避 1s/3s/9s，最多 retries 次。返回生成文本。
 
     v0.7+ 第 2 期：可选接入 ``llm_rate_limiter``（全局并发 + 每模型令牌桶）。
     抢不到令牌直接抛 :class:`RateLimitTimeout`，不进入退避重试（限速超时和 LLM 失败语义不同）。
     整个逻辑调用（含重试退避）始终持着同一把 slot，到终态（成功/抛 LLMError/超限速）才释放。
+
+    Phase 2a B：可选接入 ``cost_guard``（per-goal + global 单日 token 上限）。
+    成功返回后用 LLM 返回的 ``prompt_tokens + completion_tokens`` 计数；
+    拿不到时退回 ``max_tokens + len(prompt)//4`` 估。超限抛 :class:`LLMCostLimitExceeded`。
     """
     svc = services or get_services()
     rate = getattr(svc, "llm_rate_limiter", None)
+    guard = getattr(svc, "cost_guard", None)
     model = svc.model
     last_exc: BaseException | None = None
     total = max(1, retries)
@@ -144,6 +152,23 @@ async def llm_complete(
                     run_id=run_id,
                     account_id=account_id,
                 )
+                # Phase 2a B：成功后才记 token，失败不记（重试会再发一次）
+                if guard is not None:
+                    pt = getattr(result, "prompt_tokens", 0) or 0
+                    ct = getattr(result, "completion_tokens", 0) or 0
+                    if pt <= 0 and ct <= 0:
+                        # LLM 没回 usage：按 prompt 长 + max_tokens 上界估
+                        from .cost_guard import CostGuard as _CG
+
+                        pt = _CG.estimate_tokens(user) + _CG.estimate_tokens(
+                            system or ""
+                        )
+                        ct = int(getattr(svc, "max_tokens", 0) or 0)
+                    await guard.record(
+                        goal_id=goal_id,
+                        prompt_tokens=int(pt),
+                        completion_tokens=int(ct),
+                    )
                 return result.text
             except LLMError as exc:  # 可重试错误
                 last_exc = exc

@@ -106,17 +106,30 @@ class DbDailyCounter:
             ).scalar_one_or_none()
             return int(row or 0)
 
-    async def add(self, scope: str, key: object, kind: str, day: date) -> int:
+    async def add(
+        self,
+        scope: str,
+        key: object,
+        kind: str,
+        day: date,
+        amount: int = 1,
+    ) -> int:
+        """原子自增 ``count += amount``（默认 1，保持 rate_limiter 旧行为）。
+
+        Phase 2a B：cost_guard 一次记 N 个 token（不再是 1 个事件），amount>1。
+        """
+        if amount < 1:
+            amount = 1
         async with self._factory() as session:
             stmt = pg_insert(DailyCounter).values(
                 scope=scope,
                 key=str(key),
                 kind=kind,
                 day=day,
-                count=1,
+                count=amount,
             ).on_conflict_do_update(
                 constraint="daily_counters_pkey",
-                set_={"count": DailyCounter.count + 1},
+                set_={"count": DailyCounter.count + amount},
             ).returning(DailyCounter.count)
             row = (await session.execute(stmt)).scalar_one()
             await session.commit()

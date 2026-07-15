@@ -98,6 +98,8 @@ async def draft_node(state: AgentState) -> dict[str, Any]:
             prompts.DRAFT_SYSTEM.format(persona_name=persona_name or "default"),
             user,
             call_type="draft",
+            # Phase 2a B：把 goal_id 透传给 cost_guard，按 goal 维度计 token
+            goal_id=str(state.get("goal_id") or "") or None,
         )
     except Exception as exc:
         logger.exception("draft.llm failed")
