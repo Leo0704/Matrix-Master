@@ -30,7 +30,7 @@ logger = get_logger(__name__)
 # 允许的 doc.type（agent research/draft/review 节点真查的就是这几个）
 # strategy_card 由 analyze 节点提炼 history 写入，draft 节点优先召回。
 KB_TYPES: frozenset[str] = frozenset(
-    {"brand", "persona", "rule", "history", "strategy_card"}
+    {"brand", "persona", "rule", "topic", "history", "template", "product", "strategy_card"}
 )
 
 
