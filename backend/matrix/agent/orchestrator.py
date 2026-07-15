@@ -480,7 +480,10 @@ async def _summarize_round(
             api_key=s.openai_api_key,
             base_url=s.embedding_base_url,
         )
-        kb_docs = await summarize_goal_to_kb(session, embedder, goal.id)
+        # Phase 4 #3：自动发布爆款模板，关闭学习循环
+        kb_docs = await summarize_goal_to_kb(
+            session, embedder, goal.id, auto_publish=True
+        )
     except Exception:
         logger.exception("orchestrator.summarize.kb_failed", goal_id=str(goal.id))
         kb_docs = []

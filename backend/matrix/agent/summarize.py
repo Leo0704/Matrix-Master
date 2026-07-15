@@ -170,8 +170,15 @@ async def summarize_goal_to_kb(
     session: AsyncSession,
     embedder: EmbeddingService,
     goal_id: uuid.UUID,
+    *,
+    auto_publish: bool = False,
 ) -> list[KbDocument]:
     """复盘一个 goal：拉数据 → 调 LLM → 写 2 篇 KB doc（strategy_card + rule）。
+
+    Phase 4 #3：``auto_publish=True`` 时自动把 ``strategy_card`` 标记为已发布。
+    理由：爆款模板是 LLM 从本 goal 数据里提炼的（有人审过整个过程），
+    不再卡人工 review 才能让下一 goal 的 DRAFT 立即读到——学习闭环才闭合。
+    ``rule``（避坑）保留 ``is_published=False``：避坑规则可能误伤，宁可慢。
 
     Returns:
         写出的 KbDocument 列表（可能为空，如果 goal 不存在或 LLM 啥也没提炼到）。
@@ -204,11 +211,12 @@ async def summarize_goal_to_kb(
                 "audience": snapshot.audience,
                 "run_count": len(snapshot.runs),
             },
-            is_published=False,  # 等人工 review
+            # Phase 4 #3：自动发布爆款模板（rule 仍走 review）
+            is_published=auto_publish,
         )
         written.append(doc)
 
-    # 2) 失败教训 → rule
+    # 2) 失败教训 → rule（始终不自动发布 —— 避坑规则副作用大）
     if learnings["failure_lessons"]:
         body = (
             f"# 失败教训（goal: {snapshot.theme}）\n\n"
@@ -233,6 +241,7 @@ async def summarize_goal_to_kb(
         goal_id=str(goal_id),
         viral=len(learnings["viral_patterns"]),
         failures=len(learnings["failure_lessons"]),
+        auto_publish=auto_publish,
     )
     return written
 

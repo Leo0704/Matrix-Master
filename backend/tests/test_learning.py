@@ -323,3 +323,85 @@ class TestSummarizeGoalToKb:
                     )
         assert len(result) == 1
         assert result[0].type == "strategy_card"
+
+    async def test_auto_publish_true_publishes_strategy_card_only(self):
+        """Phase 4 #3：auto_publish=True 时 strategy_card 标已发布，rule 不变。"""
+        from matrix.agent.summarize import summarize_goal_to_kb
+
+        snapshot = GoalSnapshot(
+            goal_id=uuid.uuid4(),
+            theme="夏季",
+            audience="18-25",
+            runs=[{"run_id": "r1"}],
+        )
+        llm_json = json.dumps({
+            "viral_patterns": ["数字+痛点"],
+            "failure_lessons": ["别用违规词"],
+        })
+        with patch(
+            "matrix.agent.summarize._load_goal_snapshot",
+            AsyncMock(return_value=snapshot),
+        ):
+            with patch(
+                "matrix.agent.summarize.llm_complete",
+                AsyncMock(return_value=llm_json),
+            ):
+                with patch(
+                    "matrix.agent.summarize.KbStore"
+                ) as MockStore:
+                    instance = MockStore.return_value
+                    viral = _make_kb_doc(type_="strategy_card", title="爆款")
+                    rule = _make_kb_doc(type_="rule", title="避坑")
+                    instance.create_document = AsyncMock(
+                        side_effect=[viral, rule]
+                    )
+                    result = await summarize_goal_to_kb(
+                        MagicMock(),
+                        MagicMock(),
+                        uuid.uuid4(),
+                        auto_publish=True,
+                    )
+        # 记录 create_document 的两次调用
+        calls = instance.create_document.call_args_list
+        # 第一次（viral/strategy_card）is_published=True
+        assert calls[0].kwargs["is_published"] is True
+        assert calls[0].kwargs["type"] == "strategy_card"
+        # 第二次（rule）is_published=False
+        assert calls[1].kwargs["is_published"] is False
+        assert calls[1].kwargs["type"] == "rule"
+        assert len(result) == 2
+
+    async def test_auto_publish_false_default(self):
+        """auto_publish 缺省 False：strategy_card 也不发布。"""
+        from matrix.agent.summarize import summarize_goal_to_kb
+
+        snapshot = GoalSnapshot(
+            goal_id=uuid.uuid4(),
+            theme="t",
+            audience=None,
+            runs=[{"run_id": "r1"}],
+        )
+        llm_json = json.dumps({
+            "viral_patterns": ["x"],
+            "failure_lessons": [],
+        })
+        with patch(
+            "matrix.agent.summarize._load_goal_snapshot",
+            AsyncMock(return_value=snapshot),
+        ):
+            with patch(
+                "matrix.agent.summarize.llm_complete",
+                AsyncMock(return_value=llm_json),
+            ):
+                with patch(
+                    "matrix.agent.summarize.KbStore"
+                ) as MockStore:
+                    instance = MockStore.return_value
+                    instance.create_document = AsyncMock(
+                        return_value=_make_kb_doc(type_="strategy_card")
+                    )
+                    await summarize_goal_to_kb(
+                        MagicMock(), MagicMock(), uuid.uuid4()
+                    )
+        call = instance.create_document.call_args
+        assert call.kwargs["is_published"] is False
