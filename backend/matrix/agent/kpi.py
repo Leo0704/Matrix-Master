@@ -82,18 +82,18 @@ def compute_dim_kpi(per_note_metrics: Iterable[Mapping[str, Any]]) -> dict[str, 
     }
 
 
-def is_kpi_dominant(
+def should_continue(
     dimensions: Mapping[str, Any],
     *,
     target_likes: int,
     min_views: int = 0,
     min_engagement: int = 0,
 ) -> tuple[bool, str]:
-    """多维达标判断：任一维满足 = 续跑，全不满足 = 收工。
+    """多维 KPI 续跑判断：和 :func:`matrix.agent.orchestrator._should_continue`
+    一样的语义 —— ``(True, reason)`` 表示"接着跑"，``(False, reason)`` 表示"收工"。
 
-    返回 ``(should_continue, reason)``：
-    - likes < target_likes 且 views < min_views 且 engagement < min_engagement → 收工
-    - 否则续跑（至少有一维够格，让下一轮把弱的拉起来）
+    三维阈值：likes / views / engagement 任何一个达到目标 → 收工（已经够格，
+    再跑一轮只是浪费 LLM token）。全不达标 → 续跑（再调一轮试试）。
 
     默认 ``min_views=0, min_engagement=0`` → 等价于只看 likes（向后兼容）。
     调用方传更严的阈值时启用三维判断。
@@ -104,17 +104,21 @@ def is_kpi_dominant(
     views = int(exposure.get("views", 0) or 0)
     engage_total = int(engagement.get("total", 0) or 0)
 
+    # 任一维达标 → 收工（False）
     if likes >= target_likes:
-        return True, f"likes {likes}/{target_likes} reached"
+        return False, f"likes {likes}/{target_likes} met → stop"
     if min_views and views >= min_views:
-        return True, f"views {views}/{min_views} reached (likes lagging)"
+        return False, f"views {views}/{min_views} met (likes lagging) → stop"
     if min_engagement and engage_total >= min_engagement:
-        return True, f"engagement {engage_total}/{min_engagement} reached"
-    return False, (
+        return False, (
+            f"engagement {engage_total}/{min_engagement} met → stop"
+        )
+    # 全不达标 → 续跑（True）
+    return True, (
         f"kpi short: likes {likes}/{target_likes}, "
         f"views {views}/{min_views or '-'}, "
         f"engagement {engage_total}/{min_engagement or '-'}"
     )
 
 
-__all__ = ["compute_dim_kpi", "is_kpi_dominant"]
+__all__ = ["compute_dim_kpi", "should_continue"]

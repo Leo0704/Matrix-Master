@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from matrix.agent.kpi import compute_dim_kpi, is_kpi_dominant
+from matrix.agent.kpi import compute_dim_kpi, should_continue
 
 
 def _m(note_id: str, **kw) -> dict:
@@ -79,42 +79,43 @@ class TestComputeDimKpi:
         assert d["engagement"]["likes"] == 0
 
 
-class TestIsKpiDominant:
-    def test_likes_target_met_returns_continue(self):
+class TestShouldContinue:
+    def test_likes_target_met_returns_stop(self):
         d = compute_dim_kpi([_m("a", views=100, likes=600)])
-        ok, reason = is_kpi_dominant(d, target_likes=500)
-        assert ok is True
+        ok, reason = should_continue(d, target_likes=500)
+        assert ok is False
         assert "likes" in reason
+        assert "stop" in reason
 
-    def test_likes_short_and_no_min_views_returns_done(self):
+    def test_likes_short_and_no_min_views_returns_continue(self):
         # target_likes=500，但 min_views=0, min_engagement=0 → 等价旧逻辑
         d = compute_dim_kpi([_m("a", views=100, likes=10)])
-        ok, reason = is_kpi_dominant(d, target_likes=500)
-        assert ok is False
+        ok, reason = should_continue(d, target_likes=500)
+        assert ok is True
         assert "short" in reason
 
-    def test_views_target_met_keeps_going(self):
+    def test_views_target_met_stops(self):
         d = compute_dim_kpi([_m("a", views=1000, likes=10)])
-        ok, reason = is_kpi_dominant(
-            d, target_likes=500, min_views=500
-        )
-        assert ok is True
+        ok, reason = should_continue(d, target_likes=500, min_views=500)
+        assert ok is False
         assert "views" in reason
+        assert "stop" in reason
 
-    def test_engagement_target_met_keeps_going(self):
+    def test_engagement_target_met_stops(self):
         d = compute_dim_kpi(
             [_m("a", views=50, likes=5, collects=3, comments=2, follows_gained=0)]
         )
-        ok, reason = is_kpi_dominant(
+        ok, reason = should_continue(
             d, target_likes=500, min_views=200, min_engagement=10
         )
-        assert ok is True
+        assert ok is False
         assert "engagement" in reason
+        assert "stop" in reason
 
-    def test_all_dimensions_short_returns_done(self):
+    def test_all_dimensions_short_returns_continue(self):
         d = compute_dim_kpi([_m("a", views=10, likes=5)])
-        ok, reason = is_kpi_dominant(
+        ok, reason = should_continue(
             d, target_likes=500, min_views=200, min_engagement=50
         )
-        assert ok is False
+        assert ok is True
         assert "kpi short" in reason

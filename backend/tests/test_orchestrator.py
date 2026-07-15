@@ -116,6 +116,70 @@ class TestShouldContinue:
         assert cont is True
         assert "continue" in reason
 
+    # ---- Phase 2a #4 真正接入：多维 KPI 影响决策 ----
+
+    def test_multi_dim_dimensions_actually_used(self):
+        """kpi 带 dimensions 字段时，决策要走多维判断（不是只看 total_likes）。"""
+        future = datetime.now(timezone.utc) + timedelta(days=1)
+        g = _make_goal(deadline=future, current_round=1, max_rounds=3, target_likes=500)
+        # 场景 A：total_likes 字段缺失/0，但 dimensions 里有 data → 仍能正常判断
+        kpi_with_dim = {
+            "total_likes": 0,  # 老字段 0
+            "dimensions": {
+                "exposure": {"views": 0, "notes": 1},
+                "engagement": {"likes": 600, "total": 700},  # 新字段达标
+                "conversion": {"rate": 0.0},
+            },
+        }
+        cont, reason = _should_continue(g, kpi_with_dim)
+        # dimensions 显示 likes=600 ≥ 500 → 应该收工（而不是因为 total_likes=0 续跑）
+        assert cont is False, f"expected stop but got continue: {reason!r}"
+        assert "likes" in reason or "stop" in reason
+
+    def test_multi_dim_views_or_engagement_can_stop(self):
+        """三维判断中任一达标都收工（likes 未达标时）。"""
+        future = datetime.now(timezone.utc) + timedelta(days=1)
+        g = _make_goal(deadline=future, current_round=1, max_rounds=3, target_likes=500)
+        # views 巨高但 likes 0（极端场景：被推荐到首页但没人喜欢）
+        kpi = {
+            "total_likes": 0,
+            "dimensions": {
+                "exposure": {"views": 100_000, "notes": 1},
+                "engagement": {"likes": 0, "total": 0},
+                "conversion": {"rate": 0.0},
+            },
+        }
+        # 老 _should_continue：total_likes=0 < 500 → 续跑
+        # 新逻辑：dimensions 里 likes 0 < 500 → 续跑（多维也帮不了）
+        cont, _ = _should_continue(g, kpi)
+        assert cont is True
+
+    def test_multi_dim_short_continues(self):
+        """dimensions 全不达标 → 续跑。"""
+        future = datetime.now(timezone.utc) + timedelta(days=1)
+        g = _make_goal(deadline=future, current_round=1, max_rounds=3, target_likes=500)
+        kpi = {
+            "total_likes": 10,
+            "dimensions": {
+                "exposure": {"views": 100, "notes": 1},
+                "engagement": {"likes": 10, "total": 15},
+                "conversion": {"rate": 0.001},
+            },
+        }
+        cont, _ = _should_continue(g, kpi)
+        # dimensions 不达标 → 不走 stop 分支 → 落到"还能再跑一轮"分支
+        assert cont is True
+
+    def test_legacy_kpi_without_dimensions_still_works(self):
+        """老 kpi_summary 没有 dimensions 字段时，回退到单 likes 判断。"""
+        future = datetime.now(timezone.utc) + timedelta(days=1)
+        g = _make_goal(deadline=future, current_round=1, max_rounds=3, target_likes=100)
+        # 老格式：只有 total_likes
+        cont, _ = _should_continue(g, {"total_likes": 50})
+        assert cont is True
+        cont, _ = _should_continue(g, {"total_likes": 150})
+        assert cont is False
+
 
 # ---------------------------------------------------------------------------
 # advance_goal: 状态机推进

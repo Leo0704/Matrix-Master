@@ -534,15 +534,34 @@ def _should_continue(
 ) -> tuple[bool, str]:
     """判断是否续跑。返回 (should_continue, reason)。
 
-    KPI 阈值用 goal.target_likes（创建 goal 时可指定，缺省 500）。
+    Phase 2a #4 真正接入：多维 KPI 取代单 likes 阈值。
+    优先看 ``kpi['dimensions']``（新格式），缺失时回退 ``kpi['total_likes']``
+    单字段（向后兼容老 kpi_summary）。
     """
     # 1) deadline 到了 → 收工
     if goal.deadline is not None and _utcnow() >= goal.deadline:
         return False, f"deadline reached: {goal.deadline.isoformat()}"
-    # 2) KPI 达成 → 收工（用 goal.target_likes 替代硬编码）
-    target_likes = getattr(goal, "target_likes", DEFAULT_KPI_LIKES_TARGET) or DEFAULT_KPI_LIKES_TARGET
-    if kpi.get("total_likes", 0) >= target_likes:
-        return False, f"KPI achieved: {kpi.get('total_likes')}/{target_likes} likes"
+    # 2) 多维 KPI 达成 → 收工
+    target_likes = (
+        getattr(goal, "target_likes", DEFAULT_KPI_LIKES_TARGET)
+        or DEFAULT_KPI_LIKES_TARGET
+    )
+    from .kpi import should_continue as _should_continue_kpi
+
+    dimensions = kpi.get("dimensions") if isinstance(kpi, dict) else None
+    if dimensions:
+        # 三维判断（likes / views / engagement 任一达标即收工）
+        cont, reason = _should_continue_kpi(
+            dimensions, target_likes=target_likes
+        )
+        if not cont:
+            return False, reason
+    else:
+        # 老 kpi_summary 格式兜底：只看 likes
+        if kpi.get("total_likes", 0) >= target_likes:
+            return False, (
+                f"KPI achieved: {kpi.get('total_likes')}/{target_likes} likes"
+            )
     # 3) 跑满 max_rounds → 收工
     if goal.current_round >= goal.max_rounds:
         return False, f"max_rounds reached: {goal.max_rounds}"
