@@ -31,6 +31,10 @@ class Note(BaseModel):
     platform_url: Optional[str] = None
     scheduled_at: Optional[datetime] = None
     published_at: Optional[datetime] = None
+    # Phase 1 P1-1：发布成功后由 publish_node 写入采集调度时间；collect 成功后由 _do_collect 填回执
+    scheduled_collect_at: Optional[datetime] = None
+    collected_at: Optional[datetime] = None
+    collected_run_id: Optional[uuid.UUID] = None
 
 
 class NoteCreate(BaseModel):

@@ -172,6 +172,11 @@ export interface Note {
   platform_url?: string;
   scheduled_at?: string;
   published_at?: string;
+  /** Phase 1 P1-1：发布成功后由 publish_node 写入 = now + 24h */
+  scheduled_collect_at?: string;
+  /** Phase 1 P1-1：collect 成功后由 _do_collect 填 */
+  collected_at?: string;
+  collected_run_id?: string;
 }
 
 // ---------- Goal ----------

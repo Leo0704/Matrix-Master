@@ -257,6 +257,10 @@ def create_app(
                 device_publisher=apk_client,
                 device_collector=apk_client,
                 device_interactor=apk_client,
+                # Phase 1 P1-1：让 _do_collect 写 note_metrics + notes.collected_at
+                session_factory=app.state.db_session_factory,
+                # Phase 1：失败/成功都发反馈通知
+                notifier=services.notifier,
             )
             scheduler = Scheduler(
                 loader=DbTaskLoader(app.state.db_session_factory),

@@ -37,6 +37,9 @@ def _to_schema(n: NoteORM) -> Note:
         platform_url=n.platform_url,
         scheduled_at=n.scheduled_at,
         published_at=n.published_at,
+        scheduled_collect_at=n.scheduled_collect_at,
+        collected_at=n.collected_at,
+        collected_run_id=n.collected_run_id,
     )
 
 

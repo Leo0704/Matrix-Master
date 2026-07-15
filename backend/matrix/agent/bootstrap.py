@@ -131,6 +131,8 @@ async def db_note_writer(record: dict[str, Any]) -> Any:
             "platform_note_id",
             "platform_url",
             "published_at",
+            # Phase 1：让 publish_node 排 24h 延时采集时写入 scheduled_collect_at
+            "scheduled_collect_at",
         )
         if c in payload
     }
