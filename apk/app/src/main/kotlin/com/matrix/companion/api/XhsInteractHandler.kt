@@ -11,22 +11,43 @@ import io.ktor.server.routing.post
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
 
-/** POST /xhs/interact */
+/**
+ * POST /xhs/interact
+ *
+ * Wire contract:
+ *   success → 200, {"ok":true,"data":null}
+ *   unknown action → 400, INVALID_PARAMS
+ *   rate/risk    → 429
+ *   other errors → 500
+ *
+ * `target.note_id` is now actually used: the runner opens that note via
+ * deep link before performing like/comment/etc. (see XhsInteractor).
+ */
 fun Route.xhsInteractRoute(interactor: XhsInteractor) {
     post("/xhs/interact") {
         val req: InteractBody = RouteBodies.decode(call, InteractBody.serializer())
-        val target = XhsInteractor.Target(noteId = req.target.note_id, userId = req.target.user_id)
         val action = runCatching { XhsInteractor.Action.valueOf(req.action.uppercase()) }
             .getOrNull()
             ?: return@post call.respond(
                 HttpStatusCode.BadRequest,
-                ErrResp(ok = false, ErrorCode.INVALID_PARAMS.name, "unknown action ${req.action}", retryable = false)
+                errResp(
+                    code = ErrorCode.INVALID_PARAMS.name,
+                    message = "unknown action ${req.action}",
+                    retryable = false,
+                ),
             )
+        val target = XhsInteractor.Target(noteId = req.target.note_id, userId = req.target.user_id)
         when (val r = interactor.run(action, target, req.content)) {
-            is ApiResult.Ok -> call.respond(HttpStatusCode.OK, OkResp(true))
+            is ApiResult.Ok -> call.respond(HttpStatusCode.OK, okResp())
             is ApiResult.Err -> {
-                val code = if (r.code == ErrorCode.RISK_BLOCKED || r.code == ErrorCode.RATE_LIMITED) 429 else 500
-                call.respond(HttpStatusCode(code, "Err"), ErrResp(ok = false, r.code.name, r.message, r.retryable))
+                val httpCode = when (r.code) {
+                    ErrorCode.RISK_BLOCKED, ErrorCode.RATE_LIMITED -> 429
+                    else -> 500
+                }
+                call.respond(
+                    HttpStatusCode(httpCode, "Err"),
+                    errResp(code = r.code.name, message = r.message, retryable = r.retryable),
+                )
             }
         }
     }
@@ -38,6 +59,9 @@ data class InteractBody(
     val target: InteractTarget,
     val content: String? = null,
     val request_id: String,
+    // Backend also sends account_id; ignored here for the same reason as
+    // PublishBody (1 device : 1 account invariant).
+    val account_id: String? = null,
 )
 
 @Serializable

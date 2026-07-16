@@ -6,6 +6,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { useCreateGoal } from '@/hooks/use-goals';
+import { useActiveBusinessId } from '@/stores/ui-store';
 import { toast } from '@/components/ui/use-toast';
 import { cn } from '@/lib/utils';
 
@@ -62,6 +63,7 @@ const SCENARIOS: Scenario[] = [
 ];
 
 export function GoalForm({ onCreated }: { onCreated?: () => void }) {
+  const activeBusinessId = useActiveBusinessId();
   const [scenario, setScenario] = useState<Scenario['id'] | null>(null);
   const [text, setText] = useState('');
   const [targetLikes, setTargetLikes] = useState(1000);
@@ -93,6 +95,10 @@ export function GoalForm({ onCreated }: { onCreated?: () => void }) {
       return;
     }
     try {
+      if (!activeBusinessId) {
+        toast({ title: '请先选择业务', variant: 'destructive' });
+        return;
+      }
       await mutate({
         type: 'natural_language',
         target: {
@@ -100,6 +106,7 @@ export function GoalForm({ onCreated }: { onCreated?: () => void }) {
           audience: '',
           product_category: '',
         },
+        business_id: activeBusinessId,  // v0.7+ 业务归属
         target_likes: parsed.data.target_likes,
         notes_per_round: parsed.data.notes_per_round,
         max_rounds: parsed.data.max_rounds,

@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from matrix.api.deps import get_db
+from matrix.api.deps import get_db, resolve_active_business
 from matrix.api.schemas import Account, AccountCreate, AccountListResponse, AccountUpdate
 from matrix.db.models import Account as AccountORM, Device, Persona
 
@@ -21,6 +21,7 @@ def _to_schema(a: AccountORM) -> Account:
         handle=a.handle,
         persona_id=a.persona_id,
         device_id=a.device_id,
+        business_id=a.business_id,  # v0.7+ 业务归属
         status=a.status,  # type: ignore[arg-type]
         last_active=a.last_active,
         risk_score=float(a.risk_score or 0),
@@ -32,6 +33,7 @@ async def list_accounts(
     device_id: Optional[uuid.UUID] = Query(None),
     persona_id: Optional[uuid.UUID] = Query(None),
     status_filter: Optional[str] = Query(None, alias="status"),
+    business_id: Optional[uuid.UUID] = Query(None, description="v0.7+ 业务过滤"),
     session: AsyncSession = Depends(get_db),
 ) -> AccountListResponse:
     stmt = select(AccountORM).where(AccountORM.deleted_at.is_(None))
@@ -41,6 +43,8 @@ async def list_accounts(
         stmt = stmt.where(AccountORM.persona_id == persona_id)
     if status_filter:
         stmt = stmt.where(AccountORM.status == status_filter)
+    if business_id:
+        stmt = stmt.where(AccountORM.business_id == business_id)
     stmt = stmt.order_by(AccountORM.created_at.desc())
     rows = (await session.execute(stmt)).scalars().all()
     return AccountListResponse(items=[_to_schema(r) for r in rows])
@@ -51,6 +55,9 @@ async def create_account(
     body: AccountCreate,
     session: AsyncSession = Depends(get_db),
 ) -> Account:
+    # v0.7+ 业务模型重构：业务上下文校验（存在 + active）
+    await resolve_active_business(session, body.business_id)
+
     # 外键存在性校验（FK 不会立刻抛错，先查后插更友好）
     device = await session.get(Device, body.device_id)
     if device is None or device.deleted_at is not None:
@@ -90,6 +97,7 @@ async def create_account(
         handle=body.handle,
         device_id=body.device_id,
         persona_id=body.persona_id,
+        business_id=body.business_id,  # v0.7+ 业务归属
         status="pending",
         risk_score=0,
     )

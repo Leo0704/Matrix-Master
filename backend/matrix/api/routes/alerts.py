@@ -39,6 +39,7 @@ def _to_schema(a: AlertORM) -> AlertItem:
         resolved=a.resolved,
         created_at=a.created_at,
         resolved_at=a.resolved_at,
+        business_id=a.business_id,  # v0.7+ 业务归属（018 migration 加列）
     )
 
 
@@ -47,6 +48,13 @@ async def list_alerts(
     resolved: Optional[bool] = Query(None),
     code: Optional[str] = Query(None),
     severity: Optional[str] = Query(None),
+    business_id: Optional[uuid.UUID] = Query(
+        None,
+        description=(
+            "v0.7+ 业务过滤（018 migration 加 alerts.business_id 列）；"
+            "subject_id 是 String 多语义，本参数只按 alerts.business_id 列过滤"
+        ),
+    ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db),
@@ -62,6 +70,10 @@ async def list_alerts(
     if severity:
         stmt = stmt.where(AlertORM.severity == severity)
         count_stmt = count_stmt.where(AlertORM.severity == severity)
+    if business_id is not None:
+        # v0.7+ 业务过滤（018 migration 加 alerts.business_id 列）
+        stmt = stmt.where(AlertORM.business_id == business_id)
+        count_stmt = count_stmt.where(AlertORM.business_id == business_id)
 
     stmt = stmt.order_by(AlertORM.created_at.desc()).limit(limit).offset(offset)
     rows = (await session.execute(stmt)).scalars().all()

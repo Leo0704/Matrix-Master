@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from matrix.api.deps import get_db
+from matrix.api.deps import get_db, resolve_active_business
 from matrix.api.schemas import (
     Persona,
     PersonaCreate,
@@ -32,6 +32,7 @@ def _to_schema(p: PersonaORM) -> Persona:
         forbidden_words=list(p.forbidden_words or []),
         sample_note_ids=[uuid.UUID(str(x)) for x in (p.sample_note_ids or [])],
         version=p.version,
+        business_id=p.business_id,  # v0.7+ 业务归属
     )
 
 
@@ -39,6 +40,7 @@ def _to_schema(p: PersonaORM) -> Persona:
 async def list_personas(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    business_id: Optional[uuid.UUID] = Query(None, description="v0.7+ 业务过滤"),
     session: AsyncSession = Depends(get_db),
 ) -> PersonaListResponse:
     stmt = (
@@ -48,6 +50,8 @@ async def list_personas(
         .limit(limit)
         .offset(offset)
     )
+    if business_id:
+        stmt = stmt.where(PersonaORM.business_id == business_id)
     rows = (await session.execute(stmt)).scalars().all()
     return PersonaListResponse(items=[_to_schema(r) for r in rows])
 
@@ -67,6 +71,9 @@ async def create_persona(
     body: PersonaCreate,
     session: AsyncSession = Depends(get_db),
 ) -> Persona:
+    # v0.7+ 业务模型重构：业务上下文校验（存在 + active）
+    await resolve_active_business(session, body.business_id)
+
     exists = (
         await session.execute(select(PersonaORM).where(PersonaORM.name == body.name))
     ).scalar_one_or_none()
@@ -82,6 +89,7 @@ async def create_persona(
         style_guide=body.style_guide,
         forbidden_words=body.forbidden_words,
         sample_note_ids=body.sample_note_ids,
+        business_id=body.business_id,  # v0.7+ 业务归属
         version=1,
     )
     session.add(p)

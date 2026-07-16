@@ -147,10 +147,11 @@ async def test_get_session_always_closes():
 # ---------------------------------------------------------------------------
 
 
-# 全部 25 张表（外加 Base），按 schema.sql 顺序 + 004 migration 加的 alerts
-# + 008 migration 加的 goal_rounds
+# 全部 27 张业务表（外加 Base），按 schema.sql 顺序 + 004 migration 加的 alerts
+# + 008 migration 加的 goal_rounds + 015 migration 加的 businesses
 # （schema.sql 尚未同步；migration 是事实源）
 EXPECTED_TABLES = [
+    "businesses",  # v0.7+ 业务模型重构：业务是项目根
     "devices",
     "device_hmac_keys",
     "device_heartbeats",
@@ -263,9 +264,10 @@ def test_tableless_count():
     ]
     # Base 自己也要排除
     subclasses = [s for s in subclasses if s is not models.Base]
-    # Phase 1 P1-1 加了 Notification 类，从 25 升到 26。
+    # Phase 1 P1-1 加了 Notification 类，从 25 升到 26；
+    # v0.7+ 业务模型重构加 Business 类，从 26 升到 27。
     # 后续加表时记得同步这个数（也可用 >= 25 模糊断言，但精确计数能挡忘记 export 的情况）
-    assert len(subclasses) == 26, f"got {len(subclasses)}: {[s.__name__ for s in subclasses]}"
+    assert len(subclasses) == 27, f"got {len(subclasses)}: {[s.__name__ for s in subclasses]}"
 
 
 def test_base_is_declarative():

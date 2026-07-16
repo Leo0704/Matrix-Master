@@ -19,6 +19,7 @@ async def test_register_with_only_nickname_persists_nulls():
     body_mock = MagicMock()
     body_mock.nickname = "minimal-device"
     body_mock.adb_serial = None
+    body_mock.business_id = uuid.uuid4()  # v0.7+ 业务模型重构
 
     session = MagicMock()
     session.add = MagicMock()
@@ -32,7 +33,9 @@ async def test_register_with_only_nickname_persists_nulls():
         "matrix.api.routes.devices._issue_pair_code", return_value="123456"
     ), patch(
         "matrix.api.routes.devices._to_schema", return_value=fake_schema
-    ) as to_schema_mock:
+    ) as to_schema_mock, patch(
+        "matrix.api.routes.devices.resolve_active_business", new=AsyncMock()
+    ):
         result = await register_device(body=body_mock, session=session)
 
     # 只有一次 add —— DeviceORM
@@ -61,6 +64,7 @@ async def test_register_with_adb_serial_keeps_it():
     body_mock = MagicMock()
     body_mock.nickname = "minimal-with-adb"
     body_mock.adb_serial = "12ab34cd"
+    body_mock.business_id = uuid.uuid4()  # v0.7+ 业务模型重构
 
     session = MagicMock()
     session.add = MagicMock()
@@ -73,6 +77,8 @@ async def test_register_with_adb_serial_keeps_it():
         "matrix.api.routes.devices._issue_pair_code", return_value="654321"
     ), patch(
         "matrix.api.routes.devices._to_schema", return_value=fake_schema
+    ), patch(
+        "matrix.api.routes.devices.resolve_active_business", new=AsyncMock()
     ):
         result = await register_device(body=body_mock, session=session)
 

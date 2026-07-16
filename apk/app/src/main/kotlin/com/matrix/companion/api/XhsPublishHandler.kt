@@ -10,8 +10,19 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.post
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 
-/** POST /xhs/publish */
+/**
+ * POST /xhs/publish
+ *
+ * Wire contract (matches backend/matrix/device/adapters.py):
+ *   success → 200, {"ok":true,"data":{"platform_note_id":<非空>,"url":<str>}}
+ *   failure → 4xx/5xx, {"ok":false,"code":<ErrorCode.name>,"message":...,"retryable":...}
+ *
+ * The backend raises RuntimeError if `platform_note_id` is empty, so we
+ * must only return 200 when [XhsPublisher] actually produced a real note ID.
+ */
 fun Route.xhsPublishRoute(publisher: XhsPublisher) {
     post("/xhs/publish") {
         val req: PublishBody = RouteBodies.decode(call, PublishBody.serializer())
@@ -24,24 +35,39 @@ fun Route.xhsPublishRoute(publisher: XhsPublisher) {
                 imagePaths = req.images,
             )
         )) {
-            is ApiResult.Ok -> call.respond(
-                HttpStatusCode.OK,
-                mapOf(
-                    "ok" to true,
-                    "data" to mapOf(
-                        "platform_note_id" to (r.value.noteId ?: ""),
-                        "url" to (r.value.url ?: ""),
-                    ),
-                ),
-            )
+            is ApiResult.Ok -> {
+                val outcome = r.value
+                if (outcome.noteId.isNullOrBlank()) {
+                    // Backend treats empty platform_note_id as a hard failure.
+                    // Surface it as DRAFT_FAILED instead of returning 200 with
+                    // an empty id (the master would log "missing platform_note_id").
+                    call.respond(
+                        HttpStatusCode(500, "Err"),
+                        errResp(
+                            code = ErrorCode.DRAFT_FAILED.name,
+                            message = "publish completed but noteId could not be parsed",
+                            retryable = false,
+                        ),
+                    )
+                } else {
+                    val data = buildJsonObject {
+                        put("platform_note_id", JsonPrimitive(outcome.noteId))
+                        put("url", JsonPrimitive(outcome.url ?: ""))
+                    }
+                    call.respond(HttpStatusCode.OK, okResp(data))
+                }
+            }
             is ApiResult.Err -> {
-                val code = when (r.code) {
+                val httpCode = when (r.code) {
                     ErrorCode.DRAFT_FAILED -> 400
                     ErrorCode.UPLOAD_FAILED -> 403
                     ErrorCode.RISK_BLOCKED, ErrorCode.RATE_LIMITED -> 429
                     else -> 500
                 }
-                call.respond(HttpStatusCode(code, "Err"), ErrResp(ok = false, r.code.name, r.message, r.retryable))
+                call.respond(
+                    HttpStatusCode(httpCode, "Err"),
+                    errResp(code = r.code.name, message = r.message, retryable = r.retryable),
+                )
             }
         }
     }
@@ -55,4 +81,8 @@ data class PublishBody(
     val tags: List<String>,
     val visibility: String = "public",
     val request_id: String,
+    // Backend also sends account_id; we accept it but do not use it
+    // here — APK assumes the device is already paired with exactly one
+    // XHS account (1 device : 1 account invariant).
+    val account_id: String? = null,
 )

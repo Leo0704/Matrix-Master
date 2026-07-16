@@ -43,6 +43,8 @@ def _mock_session_with_device(d):
     s.get = AsyncMock(return_value=d)
     s.add = MagicMock()
     s.flush = AsyncMock()
+    s.commit = AsyncMock()
+    s.rollback = AsyncMock()
     return s
 
 
@@ -57,7 +59,11 @@ async def test_pair_without_identity_leaves_fields_null():
     body_mock.identity = None
 
     with patch(
-        "matrix.api.routes.devices._consume_pair_code", return_value=True
+        "matrix.api.routes.devices._claim_pair_code", return_value=d.id
+    ), patch(
+        "matrix.api.routes.devices._finalize_pair_code"
+    ), patch(
+        "matrix.api.routes.devices._restore_pair_code"
     ), patch(
         "matrix.api.routes.devices.KeyManager"
     ) as km_cls:
@@ -97,7 +103,11 @@ async def test_pair_with_identity_writes_4_fields():
     )
 
     with patch(
-        "matrix.api.routes.devices._consume_pair_code", return_value=True
+        "matrix.api.routes.devices._claim_pair_code", return_value=d.id
+    ), patch(
+        "matrix.api.routes.devices._finalize_pair_code"
+    ), patch(
+        "matrix.api.routes.devices._restore_pair_code"
     ), patch(
         "matrix.api.routes.devices.KeyManager"
     ) as km_cls:
@@ -138,7 +148,11 @@ async def test_pair_partial_identity_does_not_overwrite_with_empty():
     )
 
     with patch(
-        "matrix.api.routes.devices._consume_pair_code", return_value=True
+        "matrix.api.routes.devices._claim_pair_code", return_value=d.id
+    ), patch(
+        "matrix.api.routes.devices._finalize_pair_code"
+    ), patch(
+        "matrix.api.routes.devices._restore_pair_code"
     ), patch(
         "matrix.api.routes.devices.KeyManager"
     ) as km_cls:
@@ -162,3 +176,45 @@ async def test_pair_partial_identity_does_not_overwrite_with_empty():
     assert d.apk_version == "0.4.0"
     # None 没动
     assert d.tailnet_ip is None
+
+
+@pytest.mark.asyncio
+async def test_pair_db_failure_restores_code_and_reraises():
+    """事务 commit 抛异常时：配对码必须被 restore（清掉领用标记），异常继续上抛。
+
+    锁住原子性修复：避免“码被领用但 key 没下发”的不可恢复态。
+    """
+    from matrix.api.routes.devices import pair_device
+
+    d = _make_device_orm()
+    s = _mock_session_with_device(d)
+    # 让 commit 抛异常，模拟 DB 事务失败。
+    s.commit = AsyncMock(side_effect=RuntimeError("db connection lost"))
+    body_mock = MagicMock(spec=["pair_code", "identity"])
+    body_mock.pair_code = "333333"
+    body_mock.identity = None
+
+    with patch(
+        "matrix.api.routes.devices._claim_pair_code", return_value=d.id
+    ), patch(
+        "matrix.api.routes.devices._finalize_pair_code"
+    ) as finalize_mock, patch(
+        "matrix.api.routes.devices._restore_pair_code"
+    ) as restore_mock, patch(
+        "matrix.api.routes.devices.KeyManager"
+    ) as km_cls:
+        km = MagicMock()
+        km.revoke_all = AsyncMock()
+        km.issue_key = AsyncMock(
+            return_value=SimpleNamespace(key_id="kid-x", secret=b"\x00" * 32)
+        )
+        km_cls.return_value = km
+
+        with pytest.raises(RuntimeError, match="db connection lost"):
+            await pair_device(device_id=d.id, body=body_mock, session=s)
+
+    # 失败路径：码被还原（可重试），绝不会被 finalize 删掉。
+    restore_mock.assert_called_once_with("333333")
+    finalize_mock.assert_not_called()
+    # rollback 也被调用，保证事务清理。
+    s.rollback.assert_awaited_once()

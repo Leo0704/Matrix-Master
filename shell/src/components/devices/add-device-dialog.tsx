@@ -13,9 +13,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { QrCode, Copy } from 'lucide-react';
 import { useRegisterDevice } from '@/hooks/use-devices';
+import { useActiveBusinessId } from '@/stores/ui-store';
 import { toast } from '@/components/ui/use-toast';
 
 export function AddDeviceDialog({ trigger }: { trigger?: React.ReactNode }) {
+  const activeBusinessId = useActiveBusinessId();
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<'form' | 'pair'>('form');
   const [pairCode, setPairCode] = useState<string>('');
@@ -34,9 +36,14 @@ export function AddDeviceDialog({ trigger }: { trigger?: React.ReactNode }) {
 
   async function handleSubmit() {
     try {
+      if (!activeBusinessId) {
+        toast({ title: '请先选择业务', variant: 'destructive' });
+        return;
+      }
       const device = await register.mutateAsync({
         nickname,
         adb_serial: adbSerial || undefined,
+        business_id: activeBusinessId,
       });
       if (!device.pair_code) throw new Error('主控没有返回配对码');
       setPairCode(device.pair_code);

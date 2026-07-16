@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from matrix.api.deps import get_db
+from matrix.api.deps import get_db, resolve_active_business
 from matrix.api.schemas import (
     Note,
     NoteCreate,
@@ -40,6 +40,7 @@ def _to_schema(n: NoteORM) -> Note:
         scheduled_collect_at=n.scheduled_collect_at,
         collected_at=n.collected_at,
         collected_run_id=n.collected_run_id,
+        business_id=n.business_id,  # v0.7+ 业务归属
     )
 
 
@@ -47,6 +48,7 @@ def _to_schema(n: NoteORM) -> Note:
 async def list_notes(
     account_id: Optional[uuid.UUID] = Query(None),
     status_filter: Optional[str] = Query(None, alias="status"),
+    business_id: Optional[uuid.UUID] = Query(None, description="v0.7+ 业务过滤"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db),
@@ -56,6 +58,8 @@ async def list_notes(
         base = base.where(NoteORM.account_id == account_id)
     if status_filter:
         base = base.where(NoteORM.status == status_filter)
+    if business_id:
+        base = base.where(NoteORM.business_id == business_id)
 
     total = (
         await session.execute(select(func.count()).select_from(base.subquery()))
@@ -81,11 +85,30 @@ async def get_note(
 async def create_note(
     body: NoteCreate, session: AsyncSession = Depends(get_db)
 ) -> Note:
-    from matrix.db.models import Account
+    from matrix.db.models import Account, Goal
 
-    acct = await session.get(Account, body.account_id)
-    if acct is None or acct.deleted_at is not None:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "account not found")
+    # v0.7+ 业务模型重构：business_id 可选；缺则从 account_id 或 goal_id 推断
+    inferred_business_id = body.business_id
+    if inferred_business_id is None:
+        if body.account_id is not None:
+            acct = await session.get(Account, body.account_id)
+            if acct is None or acct.deleted_at is not None:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "account not found")
+            inferred_business_id = acct.business_id
+        else:
+            # 都缺 → 拒（无法推断业务）
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "business_id required when account_id is also missing",
+            )
+    else:
+        # 显式传了 business_id → 校验业务上下文
+        await resolve_active_business(session, inferred_business_id)
+        if body.account_id is not None:
+            acct = await session.get(Account, body.account_id)
+            if acct is None or acct.deleted_at is not None:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "account not found")
+
     n = NoteORM(
         account_id=body.account_id,
         title=body.title,
@@ -94,6 +117,7 @@ async def create_note(
         tags=body.tags,
         status=body.status,
         scheduled_at=body.scheduled_at,
+        business_id=inferred_business_id,  # v0.7+ 业务归属
     )
     session.add(n)
     await session.flush()

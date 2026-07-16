@@ -24,8 +24,13 @@ import java.util.UUID
  * Coordinates the bootstrap handshake:
  *
  *   1. read-or-generate device_id, persist in shared prefs
- *   2. POST /api/v1/devices/pair { device_id, pair_code, tailscale_ip, model, os_version }
- *      → returns { hmac_secret (base64) }
+ *   2. POST /api/v1/devices/{device_id}/pair { pair_code, identity... }
+ *      → returns { key_id, hmac_key (base64) }
+ *
+ * P2-3 (added during real-device testing): the master route is
+ * `/devices/{device_id}/pair` (URL-path device_id, not in body). The
+ * body still carries the full identity block so the master can persist
+ * model/android_version/apk_version/tailscale_ip on the device row.
  *
  * Pair-once: HMAC secret is wrapped in Keystore and persisted via
  * [HmacSecretStore.save]. Tailscale mesh ACLs are applied master-side.
@@ -49,27 +54,45 @@ class DeviceRegistrar(private val context: Context) {
     }
 
     @Serializable
-    data class PairRequest(
-        val device_id: String,
-        val pair_code: String,
-        val tailscale_ip: String,
-        val model: String,
-        val os_version: String,
-        // P2-3：APK 自报版本号，让主控在配对时回填到 devices.apk_version；
-        // 老 API 缺这字段时 Pydantic 给 None 跳过，主控不会崩
+    data class PairIdentity(
+        val model: String = "",
+        val android_version: String = "",
         val apk_version: String = "",
+        val tailnet_ip: String = "",
+    )
+
+    @Serializable
+    data class PairRequest(
+        val pair_code: String,
+        val identity: PairIdentity,
     )
 
     @Serializable
     data class PairResponse(
-        val ok: Boolean,
-        val data: PairData? = null,
-        val error: ApiErrorBody? = null,
+        // P2-1 real-device test fix: master returns flat
+        // `{key_id, hmac_key, pair_code}` (DevicePairResponse schema), not
+        // the old envelope `{ok, data: {hmac_secret}, error}`. Align here.
+        val key_id: String = "",
+        val hmac_key: String = "",
+        val pair_code: String? = null,
+    )
+
+    /**
+     * Master's StatusPages handler turns every 4xx/5xx into
+     * `{ok:false, error:{code, message, retryable}}`. We deserialize that
+     * on failure to surface the human-readable reason in the Toast.
+     */
+    @Serializable
+    data class ErrorEnvelope(
+        val ok: Boolean = false,
+        val error: ErrorBody? = null,
     )
 
     @Serializable
-    data class PairData(
-        val hmac_secret: String,
+    data class ErrorBody(
+        val code: String = "",
+        val message: String = "",
+        val retryable: Boolean = false,
     )
 
     @Serializable
@@ -89,18 +112,52 @@ class DeviceRegistrar(private val context: Context) {
             val os = android.os.Build.VERSION.RELEASE ?: "unknown"
             val apkVer = com.matrix.companion.BuildConfig.VERSION_NAME
 
-            val resp: PairResponse = http.post("$MASTER_DEFAULT/api/v1/devices/pair") {
+            // Master has different schemas for 2xx (PairResponse: {key_id, hmac_key})
+            // and 4xx (ErrorEnvelope: {ok, error:{code, message, retryable}}).
+            // Dispatch on status code so we can surface the human-readable
+            // reason from the error envelope.
+            // device_id 仍走 URL path（后端现在会忽略 path 里的 device_id、
+            // 改由配对码反查真实 device_id），body 只需 pair_code + identity。
+            val httpResp = http.post("$MASTER_DEFAULT/api/v1/devices/$deviceId/pair") {
                 contentType(ContentType.Application.Json)
-                setBody(PairRequest(deviceId, pairCode, ip, model, os, apkVer))
-            }.body()
-
-            val secret = resp.data?.hmac_secret
-                ?: throw IllegalStateException(resp.error?.message ?: "pair response missing secret")
-            val bytes = java.util.Base64.getDecoder().decode(secret)
-            App.get(context).hmacSecretStore.save(bytes)
-            _state.value = RegistrationState.Paired
-            Logx.i("Paired; secret=${bytes.size}B stored in Keystore")
-            Result.success(Unit)
+                setBody(
+                    PairRequest(
+                        pairCode,
+                        PairIdentity(
+                            model = model,
+                            android_version = os,
+                            apk_version = apkVer,
+                            tailnet_ip = ip,
+                        ),
+                    )
+                )
+            }
+            val isOk = httpResp.status.value in 200..299
+            if (isOk) {
+                val resp: PairResponse = httpResp.body()
+                val secretB64 = resp.hmac_key
+                if (secretB64.isBlank()) {
+                    throw IllegalStateException(
+                        "pair response missing hmac_key (key_id='${resp.key_id}')"
+                    )
+                }
+                val bytes = java.util.Base64.getDecoder().decode(secretB64)
+                App.get(context).hmacSecretStore.save(bytes)
+                _state.value = RegistrationState.Paired
+                Logx.i("Paired; secret=${bytes.size}B stored in Keystore (key_id=${resp.key_id})")
+                Result.success(Unit)
+            } else {
+                val errBody: ErrorEnvelope = try {
+                    httpResp.body()
+                } catch (_: Throwable) {
+                    ErrorEnvelope(error = ErrorBody(message = httpResp.status.description))
+                }
+                val msg = errBody.error?.message
+                    ?: httpResp.status.description
+                    ?: "HTTP ${httpResp.status.value}"
+                Logx.w("Pair rejected: status=${httpResp.status} msg=$msg")
+                throw IllegalStateException(msg)
+            }
         } catch (t: Throwable) {
             Logx.e("Pair failed", t)
             _state.value = RegistrationState.Failed(t.message ?: "unknown")
@@ -122,6 +179,6 @@ class DeviceRegistrar(private val context: Context) {
          * Override via [net.DeviceRegistrar.MASTER_URL_OVERRIDE] at runtime
          * by editing BuildConfig field in app/build.gradle.kts.
          */
-        const val MASTER_DEFAULT = "http://127.0.0.1:8666"
+        const val MASTER_DEFAULT = "http://192.168.1.172:8666"
     }
 }

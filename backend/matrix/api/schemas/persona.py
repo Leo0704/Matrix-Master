@@ -15,6 +15,7 @@ class Persona(BaseModel):
     forbidden_words: list[str] = Field(default_factory=list)
     sample_note_ids: list[uuid.UUID] = Field(default_factory=list)
     version: int = 1
+    business_id: uuid.UUID  # v0.7+ 业务模型重构：人设绑死业务，跨业务允许重名
 
 
 class PersonaCreate(BaseModel):
@@ -23,6 +24,7 @@ class PersonaCreate(BaseModel):
     style_guide: str
     forbidden_words: list[str] = Field(default_factory=list)
     sample_note_ids: list[uuid.UUID] = Field(default_factory=list)
+    business_id: uuid.UUID  # v0.7+ 业务模型重构：必填
 
 
 class PersonaUpdate(BaseModel):

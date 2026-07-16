@@ -15,6 +15,7 @@ class Account(BaseModel):
     handle: str
     persona_id: Optional[uuid.UUID] = None
     device_id: Optional[uuid.UUID] = None
+    business_id: uuid.UUID  # v0.7+ 业务模型重构：账号绑死业务
     status: AccountStatus = "pending"
     last_active: Optional[datetime] = None
     risk_score: float = Field(0.0, ge=0.0, le=1.0)
@@ -24,6 +25,7 @@ class AccountCreate(BaseModel):
     handle: str
     device_id: uuid.UUID
     persona_id: uuid.UUID
+    business_id: uuid.UUID  # v0.7+ 业务模型重构：必填
 
 
 class AccountUpdate(BaseModel):

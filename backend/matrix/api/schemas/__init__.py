@@ -5,6 +5,13 @@ from matrix.api.schemas.account import (
     AccountListResponse,
     AccountUpdate,
 )
+from matrix.api.schemas.business import (
+    Business,
+    BusinessCreate,
+    BusinessListResponse,
+    BusinessStatus,
+    BusinessUpdate,
+)
 from matrix.api.schemas.device import (
     Device,
     DeviceListResponse,
@@ -25,6 +32,8 @@ from matrix.api.schemas.alerts import (
 from matrix.api.schemas.analytics import (
     AccountContentStats,
     AccountContentStatsResponse,
+    BusinessComparisonResponse,
+    BusinessComparisonRow,
 )
 from matrix.api.schemas.chat import (
     ChatAction,
@@ -86,9 +95,16 @@ __all__ = [
     "AccountCreate",
     "AccountListResponse",
     "AccountUpdate",
+    "Business",
+    "BusinessCreate",
+    "BusinessListResponse",
+    "BusinessStatus",
+    "BusinessUpdate",
     "AccountContentStats",
     "AccountContentStatsResponse",
     "AgentRun",
+    "BusinessComparisonResponse",
+    "BusinessComparisonRow",
     "AgentRunListResponse",
     "AlertItem",
     "AlertListResponse",

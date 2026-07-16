@@ -49,6 +49,9 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 # ---------------------------------------------------------------------------
 
 _CONFIRMATION_STORE: dict[str, dict[str, Any]] = {}
+# token → {"args": dict, "business_id": uuid.UUID, "expires_at": float}
+# v0.7+：每个 token 绑定创建时的 business_id，/confirm 时跨业务拒绝
+
 _CONFIRMATION_TTL_SEC = 600  # 10 分钟
 
 
@@ -58,22 +61,26 @@ def _make_token() -> str:
     return token
 
 
-def _store_token(token: str, args: dict[str, Any]) -> None:
+def _store_token(token: str, args: dict[str, Any], business_id: uuid.UUID) -> None:
     _CONFIRMATION_STORE[token] = {
         "args": args,
+        "business_id": business_id,  # v0.7+ 跨业务校验
         "expires_at": time.time() + _CONFIRMATION_TTL_SEC,
     }
     _lazy_cleanup()
 
 
-def _consume_token(token: str) -> Optional[dict[str, Any]]:
-    """校验 + 取出（消费即删除，避免重复执行）。"""
+def _consume_token(token: str) -> tuple[Optional[dict[str, Any]], Optional[uuid.UUID]]:
+    """校验 + 取出（消费即删除，避免重复执行）。
+
+    返回 (args, business_id) — 任一为 None 表示令牌无效/已过期。
+    """
     entry = _CONFIRMATION_STORE.pop(token, None)
     if entry is None:
-        return None
+        return None, None
     if entry["expires_at"] < time.time():
-        return None  # 已过期
-    return entry["args"]
+        return None, None
+    return entry["args"], entry.get("business_id")
 
 
 def _lazy_cleanup() -> None:
@@ -143,7 +150,7 @@ async def chat(
     # 1) /confirm <token> 短路 —— 用户在前端确认 preview_change 后调用
     if message.startswith("/confirm "):
         token = message[len("/confirm ") :].strip()
-        cached_args = _consume_token(token)
+        cached_args, cached_business_id = _consume_token(token)
         if cached_args is None:
             return ChatResponse(
                 reply="确认令牌无效或已过期，请重新发起指令。",
@@ -152,9 +159,23 @@ async def chat(
                 ),
                 error_hint="令牌 10 分钟内有效；重新发起预览即可拿到新令牌。",
             )
+        # v0.7+ 跨业务拒绝：token 创建时的 business 与当前请求 business 必须一致
+        if cached_business_id != body.business_id:
+            return ChatResponse(
+                reply="确认令牌的所属业务与当前请求不一致，已拒绝执行。",
+                action=ChatAction(
+                    type="parse_error", payload={"reason": "business_mismatch"}
+                ),
+                error_hint="跨业务确认被拦截，请重新切到令牌对应的业务再确认。",
+            )
         tool = CHAT_TOOL_DISPATCH["apply_change"]
         try:
-            result = await tool(session, {**cached_args, "confirmation_token": token})
+            # apply_change 工具接收 operator_business_id 鉴权
+            result = await tool(
+                session,
+                {**cached_args, "confirmation_token": token},
+                operator_business_id=body.business_id,
+            )
         except Exception as e:
             logger.exception("chat.apply_change.error", token=token)
             return ChatResponse(
@@ -173,7 +194,7 @@ async def chat(
     # 2) /cancel <token> 短路 —— 用户取消预览
     if message.startswith("/cancel "):
         token = message[len("/cancel ") :].strip()
-        _consume_token(token)
+        _consume_token(token)  # 不关心返回值，丢弃即可
         return ChatResponse(
             reply="已取消，未执行任何操作。",
             action=ChatAction(type="noop", payload={"cancelled_token": token}),
@@ -256,7 +277,9 @@ async def chat(
     if intent == "preview_change":
         filter_args = args.get("filter") or {}
         if isinstance(filter_args, dict):
-            matched = await _resolve_goal_filter(session, filter_args)
+            matched = await _resolve_goal_filter(
+                session, filter_args, business_id=body.business_id
+            )
             if len(matched) > CHAT_BATCH_LIMIT:
                 return ChatResponse(
                     reply=(
@@ -273,9 +296,16 @@ async def chat(
                     error_hint="批量操作有上限，避免误伤。",
                 )
 
-    # 10) dispatch 到工具
+    # 10) dispatch 到工具（v0.7+ 全部透传 business_id）
     try:
-        result = await tool(session, args)
+        # preview_change / apply_change 多传 operator_business_id（默认用 body.business_id）
+        if intent in ("preview_change", "apply_change"):
+            result = await tool(
+                session, args, business_id=body.business_id,
+                operator_business_id=body.business_id,
+            )
+        else:
+            result = await tool(session, args, business_id=body.business_id)
     except Exception as e:
         logger.exception("chat.tool.error", intent=intent)
         return ChatResponse(
@@ -287,10 +317,10 @@ async def chat(
     payload = result.get("payload", {})
     requires_confirmation = bool(result.get("requires_confirmation"))
 
-    # 11) 写操作需要 confirmation
+    # 11) 写操作需要 confirmation（v0.7+ 绑定 business_id）
     if requires_confirmation:
         token = _make_token()
-        _store_token(token, args)
+        _store_token(token, args, body.business_id)
         return ChatResponse(
             reply=reply_text or f"准备好执行，请确认。",
             action=ChatAction(

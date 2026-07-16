@@ -143,7 +143,10 @@ async def _allocate_round_slots(
             "orchestrator.count_active_devices failed", goal_id=str(goal.id)
         )
         return [], 0
-    n = min(active, DEFAULT_MAX_ROUND_FANOUT)
+    # 第 1 期：N 计算统一为 min(_count_target_for_round(goal), active, MAX)
+    # _count_target_for_round 取 notes_per_round 上限；active 受设备数约束；MAX 全局上限
+    n_target = _count_target_for_round(goal)
+    n = min(n_target, active, DEFAULT_MAX_ROUND_FANOUT)
     if n <= 0:
         return [], 0
     try:

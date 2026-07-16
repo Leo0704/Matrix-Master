@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from matrix.api.deps import get_db
+from matrix.api.deps import get_db, resolve_active_business
 from matrix.api.schemas import (
     KbDocument,
     KbDocumentCreate,
@@ -79,6 +79,7 @@ def _to_schema(d: KbDocumentORM) -> KbDocument:
         is_published=d.is_published,
         created_at=d.created_at,
         updated_at=d.updated_at,
+        business_id=d.business_id,  # v0.7+ 业务归属
     )
 
 
@@ -92,6 +93,7 @@ async def list_documents(
     type: Optional[str] = Query(None, description="按 type 过滤"),
     is_published: Optional[bool] = Query(None),
     ref_id: Optional[uuid.UUID] = Query(None),
+    business_id: Optional[uuid.UUID] = Query(None, description="v0.7+ 业务过滤"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db),
@@ -114,6 +116,9 @@ async def list_documents(
     if ref_id is not None:
         stmt = stmt.where(KbDocumentORM.ref_id == ref_id)
         count_stmt = count_stmt.where(KbDocumentORM.ref_id == ref_id)
+    if business_id is not None:
+        stmt = stmt.where(KbDocumentORM.business_id == business_id)
+        count_stmt = count_stmt.where(KbDocumentORM.business_id == business_id)
 
     stmt = stmt.order_by(KbDocumentORM.updated_at.desc()).limit(limit).offset(offset)
     rows = (await session.execute(stmt)).scalars().all()
@@ -147,6 +152,9 @@ async def get_document(
 async def create_document(
     body: KbDocumentCreate, session: AsyncSession = Depends(get_db)
 ) -> KbDocument:
+    # v0.7+ 业务模型重构：业务上下文校验（存在 + active）
+    await resolve_active_business(session, body.business_id)
+
     if body.type not in KB_TYPES:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -165,6 +173,7 @@ async def create_document(
         ref_id=body.ref_id,
         metadata=body.metadata,
         is_published=body.is_published,
+        business_id=body.business_id,  # v0.7+ 业务归属
     )
     logger.info(
         "kb.api.create",

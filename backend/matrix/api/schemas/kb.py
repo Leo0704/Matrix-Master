@@ -28,6 +28,7 @@ class KbDocument(BaseModel):
     is_published: bool = False
     created_at: datetime
     updated_at: datetime
+    business_id: uuid.UUID  # v0.7+ 业务模型重构：经验卡是业务知识沉淀
 
 
 class KbDocumentCreate(BaseModel):
@@ -37,6 +38,7 @@ class KbDocumentCreate(BaseModel):
     ref_id: Optional[uuid.UUID] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     is_published: bool = False
+    business_id: uuid.UUID  # v0.7+ 业务模型重构：必填
 
 
 class KbDocumentUpdate(BaseModel):

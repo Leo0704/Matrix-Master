@@ -20,7 +20,6 @@ function isTauri(): boolean {
 
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T | null> {
   if (!isTauri()) {
-    // eslint-disable-next-line no-console
     console.warn(`[use-tauri] ${cmd} called outside Tauri — returning null`);
     return null;
   }

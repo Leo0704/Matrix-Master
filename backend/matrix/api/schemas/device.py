@@ -24,13 +24,15 @@ class Device(BaseModel):
     bound_accounts: int = 0  # 严格 1 机 1 账号下 ≤ 1
     bound_account_handle: Optional[str] = None  # 绑定账号的 handle（1:1 下最多一个）
     pair_code: str | None = None
+    business_id: uuid.UUID  # v0.7+ 业务模型重构：设备挂业务名下
 
 
 class DeviceRegisterRequest(BaseModel):
-    """P2-3：注册时只需昵称 + adb_serial，其余身份信息由 APK 配对后回填。"""
+    """P2-3：注册时只需昵称 + adb_serial + business_id，其余身份信息由 APK 配对后回填。"""
 
     nickname: str
     adb_serial: Optional[str] = None
+    business_id: uuid.UUID  # v0.7+ 业务模型重构：必填
 
 
 class DevicePairIdentity(BaseModel):
@@ -66,6 +68,10 @@ class DevicePairRequest(BaseModel):
 class DevicePairResponse(BaseModel):
     key_id: str = Field(..., description="主控签发的密钥 ID")
     hmac_key: str = Field(..., description="base64 编码的 HMAC 密钥")
+    # P2-1 测试期：admin 触发生成配对码的 endpoint 需要把配对码回在响应里
+    # （老 pairDevice 路由不返回，正常 pair 流程不需要）。Optional 兼容
+    # 老的 pairDevice 调用。
+    pair_code: str | None = Field(default=None, description="P2-1 测试用：admin-issued 时返回 6 位配对码")
 
 
 class DeviceListResponse(BaseModel):

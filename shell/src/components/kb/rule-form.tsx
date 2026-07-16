@@ -4,6 +4,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import type { KbDocument, KbDocumentCreate } from '@/types/api';
+import { useActiveBusinessId } from '@/stores/ui-store';
 
 interface RuleFormProps {
   initial?: KbDocument;
@@ -18,6 +19,7 @@ interface RuleFormProps {
  * 提供"违禁词列表"快捷输入：逗号分隔，自动转成 [禁] 多行格式。
  */
 export function RuleForm({ initial, onSubmit, onCancel, submitting }: RuleFormProps) {
+  const activeBusinessId = useActiveBusinessId();
   const [title, setTitle] = useState(initial?.title ?? '');
   const [content, setContent] = useState(initial?.content ?? '');
   const [words, setWords] = useState('');
@@ -53,11 +55,13 @@ export function RuleForm({ initial, onSubmit, onCancel, submitting }: RuleFormPr
       .filter((l) => l.trim() && !/^\[(禁|forbidden)\]\s*/i.test(l));
     const finalContent = [...forbiddenLines, ...baseContent].join('\n').trim();
     if (!finalContent) return;
+    if (!activeBusinessId) return;
     await onSubmit({
       type: 'rule',
       title: title.trim(),
       content: finalContent,
       is_published: false,
+      business_id: activeBusinessId,  // v0.7+ 业务归属
     });
   }
 

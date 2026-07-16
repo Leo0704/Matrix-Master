@@ -4,9 +4,11 @@
 """
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,6 +55,13 @@ def _ago(hours: int) -> datetime:
 
 @router.get("/summary", response_model=MetricsSummary)
 async def get_metrics_summary(
+    business_id: Optional[uuid.UUID] = Query(
+        None,
+        description=(
+            "v0.7+ 业务过滤（schema 占位，暂未实际过滤；"
+            "汇总聚合跨多表，TODO 后续重构）"
+        ),
+    ),
     session: AsyncSession = Depends(get_db),
 ) -> MetricsSummary:
     # --- devices ---

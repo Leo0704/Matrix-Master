@@ -6,6 +6,8 @@ import { PageHeader } from '@/components/common/page-header';
 import { ChatBlockRenderer } from '@/components/chat/chat-block-renderer';
 import { QuickPromptButtons } from '@/components/chat/quick-prompt-buttons';
 import { useChat, useConfirmChat } from '@/hooks/use-chat';
+import { useActiveBusinessId } from '@/stores/ui-store';
+import { encryptString, decryptString } from '@/lib/encrypt';
 import type { ChatHistoryMessage, ChatResponse } from '@/types/api';
 
 interface ChatMessage {
@@ -17,13 +19,26 @@ interface ChatMessage {
   consumed?: boolean;
 }
 
-const STORAGE_KEY = 'matrix.chat.messages.v1';
+/** v0.7+ 业务模型重构：localStorage 按业务分区（切换业务看到不同上下文）。
+ *  存的是 AES-GCM 加密后的 base64（见 lib/encrypt.ts）。 */
+function storageKey(businessId: string | null): string {
+  return `matrix.chat.messages.v1.${businessId ?? 'unknown'}`;
+}
 
-function loadMessages(): ChatMessage[] {
+async function loadMessages(businessId: string | null): Promise<ChatMessage[]> {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey(businessId));
     if (!raw) return [];
-    const parsed = JSON.parse(raw);
+    // v0.7+ 加密：密文 base64，解密 → JSON.parse
+    // 兼容旧明文：尝试解密失败时 fallback 到明文解析
+    let plaintext: string;
+    try {
+      plaintext = await decryptString(raw, businessId);
+    } catch {
+      // 旧版（v0.6.x 之前）明文存储：直接 parse
+      plaintext = raw;
+    }
+    const parsed = JSON.parse(plaintext);
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(
       (m): m is ChatMessage =>
@@ -38,11 +53,13 @@ function loadMessages(): ChatMessage[] {
   }
 }
 
-function saveMessages(msgs: ChatMessage[]): void {
+async function saveMessages(businessId: string | null, msgs: ChatMessage[]): Promise<void> {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(msgs));
+    const plaintext = JSON.stringify(msgs);
+    const encrypted = await encryptString(plaintext, businessId);
+    localStorage.setItem(storageKey(businessId), encrypted);
   } catch {
-    // localStorage 满 / 不可用 — 静默失败
+    // localStorage 满 / 加密失败 — 静默失败
   }
 }
 
@@ -59,7 +76,7 @@ type Action =
   | { type: 'set_text'; text: string }
   | { type: 'append'; message: ChatMessage }
   | { type: 'mark_consumed'; id: string }
-  | { type: 'reset' };
+  | { type: 'reset'; messages?: ChatMessage[] };
 
 function reducer(s: State, a: Action): State {
   switch (a.type) {
@@ -75,33 +92,46 @@ function reducer(s: State, a: Action): State {
         ),
       };
     case 'reset':
-      return { messages: [], text: '' };
+      return { messages: a.messages ?? [], text: '' };
     default:
       return s;
   }
 }
 
 export function Chat() {
+  const activeBusinessId = useActiveBusinessId();
   const [state, dispatch] = useReducer(reducer, undefined, () => ({
-    messages: loadMessages(),
+    messages: [],  // 初次空；下面 useEffect 异步 loadMessages 填充
     text: '',
   }));
   const chat = useChat();
   const confirmChat = useConfirmChat();
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
+  // v0.7+ 切业务时重新加载（避免上一个业务的历史串到当前业务）
+  // loadMessages 现在 async（解密），用 useEffect 异步填充
+  useEffect(() => {
+    let cancelled = false;
+    void loadMessages(activeBusinessId).then((msgs) => {
+      if (!cancelled) dispatch({ type: 'reset', messages: msgs });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeBusinessId, dispatch]);
+
   // 持久化 + 自动滚到底
   useEffect(() => {
-    saveMessages(state.messages);
+    void saveMessages(activeBusinessId, state.messages);
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [state.messages]);
+  }, [state.messages, activeBusinessId]);
 
   function reset() {
     dispatch({ type: 'reset' });
     try {
-      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(storageKey(activeBusinessId));
     } catch {
       // ignore
     }
@@ -138,7 +168,11 @@ export function Chat() {
       const history: ChatHistoryMessage[] = state.messages
         .filter((m) => m.role === 'user' || m.role === 'assistant')
         .map((m) => ({ role: m.role, content: m.content }));
-      const resp = await chat.mutateAsync({ message: trimmed, history });
+      const resp = await chat.mutateAsync({
+        message: trimmed,
+        history,
+        business_id: activeBusinessId ?? '',  // v0.7+ 业务归属（缺时由后端 422）
+      });
       pushAssistantFromResponse(resp);
     } catch (e) {
       dispatch({
@@ -173,7 +207,11 @@ export function Chat() {
 
   async function handleCancel(token: string, sourceMessageId: string) {
     try {
-      await chat.mutateAsync({ message: `/cancel ${token}`, history: [] });
+      await chat.mutateAsync({
+        message: `/cancel ${token}`,
+        history: [],
+        business_id: activeBusinessId ?? '',  // v0.7+ 业务归属
+      });
     } catch {
       // ignore
     }

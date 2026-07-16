@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusBadge } from '@/components/common/status-badge';
 import { ErrorState } from '@/components/common/error-state';
 import { LoadingBlock } from '@/components/common/loading-spinner';
+import { PageHeader } from '@/components/common/page-header';
 import { Button } from '@/components/ui/button';
 import { formatDate, formatRelative } from '@/lib/format';
 import { formatState } from '@/types/api';
@@ -40,31 +41,34 @@ export function AgentRunDetail() {
       {error && <ErrorState error={error} onRetry={() => refetch()} />}
       {data && (
         <>
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight font-mono">{data.id}</h1>
-              <p className="text-sm text-muted-foreground">
+          <PageHeader
+            title={data.id}
+            titleClassName="font-mono"
+            description={
+              <>
                 目标：<Link to={`/goals/${data.goal_id ?? ''}`} className="text-primary hover:underline">{data.goal_id ?? '—'}</Link>
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <StatusBadge status={data.status} />
-              {data.status === 'running' && (
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={() => {
-                    cancel.mutate(data.id, {
-                      onSuccess: () => toast({ title: '已发送取消请求' }),
-                    });
-                  }}
-                >
-                  <StopCircle className="mr-1 h-4 w-4" />
-                  取消
-                </Button>
-              )}
-            </div>
-          </div>
+              </>
+            }
+            actions={
+              <div className="flex items-center gap-2">
+                <StatusBadge status={data.status} />
+                {data.status === 'running' && (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => {
+                      cancel.mutate(data.id, {
+                        onSuccess: () => toast({ title: '已发送取消请求' }),
+                      });
+                    }}
+                  >
+                    <StopCircle className="mr-1 h-4 w-4" />
+                    取消
+                  </Button>
+                )}
+              </div>
+            }
+          />
 
           <Card>
             <CardHeader>

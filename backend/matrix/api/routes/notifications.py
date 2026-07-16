@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from matrix.api.deps import get_db
+from matrix.api.deps import filter_derived_by_business, get_db
 from matrix.api.schemas import (
     NotificationItem,
     NotificationListResponse,
@@ -46,6 +46,7 @@ def _to_schema(n: NotificationORM) -> NotificationItem:
         payload=n.payload or {},
         read_at=n.read_at,
         created_at=n.created_at,
+        business_id=n.business_id,  # v0.7+ 业务归属
     )
 
 
@@ -55,12 +56,27 @@ async def list_notifications(
     code: Optional[str] = Query(None),
     severity: Optional[str] = Query(None),
     recipient: Optional[str] = Query(None),
+    business_id: Optional[uuid.UUID] = Query(None, description="v0.7+ 业务过滤"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db),
 ) -> NotificationListResponse:
+    from matrix.db.models import Device, Goal, Note
+
     stmt = select(NotificationORM)
     count_stmt = select(func.count(NotificationORM.id))
+    # v0.7+：衍生表业务过滤（4 个 FK 任一匹配业务即返回）
+    sources = [
+        (NotificationORM, Goal, "goal_id"),
+        (NotificationORM, Note, "note_id"),
+        (NotificationORM, Device, "device_id"),
+        # run_id → agent_runs.business_id 在 helper 内不可达（agent_runs.business_id 已存在，
+        # 但 chain 起来需要两次 EXISTS，复杂度高，暂不处理；run_id 直接走 agent_runs 表）
+    ]
+    stmt = filter_derived_by_business(stmt, business_id=business_id, sources=sources)
+    count_stmt = filter_derived_by_business(
+        count_stmt, business_id=business_id, sources=sources
+    )
 
     if unread is True:
         stmt = stmt.where(NotificationORM.read_at.is_(None))

@@ -5,15 +5,19 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.os.Build
-import com.matrix.companion.auth.IdempotencyCache
-import com.matrix.companion.auth.HmacVerifier
-import com.matrix.companion.crypto.HmacSecretStore
-import com.matrix.companion.crypto.KeystoreManager
-import com.matrix.companion.status.StatusProvider
 import com.matrix.companion.accessibility.AccessibilityDriver
 import com.matrix.companion.accessibility.ActionExecutor
+import com.matrix.companion.auth.HmacVerifier
+import com.matrix.companion.auth.IdempotencyCache
+import com.matrix.companion.crypto.HmacSecretStore
+import com.matrix.companion.crypto.KeystoreManager
 import com.matrix.companion.net.LogForwarder
+import com.matrix.companion.status.StatusProvider
 import com.matrix.companion.util.Logx
+import com.matrix.companion.xhs.FollowsBaseline
+import com.matrix.companion.xhs.ImagePipeline
+import com.matrix.companion.xhs.XhsImagePicker
+import com.matrix.companion.xhs.XhsNoteOpener
 
 /**
  * Process-wide singletons. We avoid Hilt/Dagger here — APK is small enough
@@ -23,6 +27,8 @@ import com.matrix.companion.util.Logx
  *   App.onCreate() → KeystoreManager().ensureKey() → HmacSecretStore
  *                 → IdempotencyCache
  *                 → StatusProvider / TailscaleClient (constructed but not started)
+ *                 → XHS dependency graph (FollowsBaseline, ImagePipeline,
+ *                   XhsNoteOpener, XhsImagePicker)
  *                 → register notification channel
  *   MainActivity onClick "Start" → start CompanionService
  *   CompanionService.onCreate()  → bind Tailscale → register device → start HttpServer
@@ -43,6 +49,18 @@ class App : Application() {
     lateinit var executor: ActionExecutor
         private set
 
+    // XHS dependency graph. These are constructed once per process so
+    // state (HTTP client, SharedPreferences for FollowsBaseline) is shared
+    // across requests — important for the follower-count delta math.
+    lateinit var imagePipeline: ImagePipeline
+        private set
+    lateinit var followsBaseline: FollowsBaseline
+        private set
+    lateinit var noteOpener: XhsNoteOpener
+        private set
+    lateinit var imagePicker: XhsImagePicker
+        private set
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -54,6 +72,16 @@ class App : Application() {
             statusProvider = StatusProvider(this)
             driver = AccessibilityDriver(serviceRef = { accessibilityServiceInstance })
             executor = ActionExecutor(driver, this)
+
+            // XHS dependencies. Order matters: FollowsBaseline (no deps)
+            // → ImagePipeline (Context only) → XhsNoteOpener (uses
+            // driver + actions via App singleton access in code that
+            // needs them) → XhsImagePicker.
+            followsBaseline = FollowsBaseline(this)
+            imagePipeline = ImagePipeline(this)
+            noteOpener = XhsNoteOpener(actions = executor, appContext = this, driver = driver)
+            imagePicker = XhsImagePicker(driver = driver, actions = executor)
+
             ensureNotificationChannel()
             // Plant the LogForwarder Tree so every Logx.i/w/e (and any
             // direct Timber call) is shipped to master. Must run after

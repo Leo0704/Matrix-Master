@@ -36,6 +36,39 @@ export type ErrorCode =
   | 'INTERNAL_ERROR'
   | string; // forward-compat for unknown codes
 
+// ---------- Business（v0.7+ 业务模型重构） ----------
+
+export type BusinessStatus = 'active' | 'archived';
+
+export interface Business {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  status: BusinessStatus;
+  created_at: string;
+  updated_at: string;
+  archived_at?: string | null;
+}
+
+export interface BusinessCreate {
+  name: string;
+  slug: string;
+  description?: string;
+}
+
+export interface BusinessUpdate {
+  /** 局部更新；status 不暴露（用 /archive /unarchive 端点） */
+  name?: string;
+  slug?: string;
+  description?: string;
+}
+
+export interface BusinessListResponse {
+  items: Business[];
+  total: number;
+}
+
 // ---------- Health ----------
 
 export type HealthStatus = 'ok' | 'degraded' | 'down';
@@ -68,12 +101,16 @@ export interface Device {
   /** 绑定账号的 handle（严格 1 机 1 账号下最多一个） */
   bound_account_handle?: string | null;
   pair_code?: string;
+  /** v0.7+ 业务归属 */
+  business_id: string;
 }
 
 // P2-3：注册时只填 nickname + 可选 adb_serial；其余 4 字段由 APK 配对时自动回填
 export interface DeviceRegisterRequest {
   nickname: string;
   adb_serial?: string;
+  /** v0.7+ 业务归属（必填） */
+  business_id: string;
 }
 
 export interface DevicePairRequest {
@@ -100,6 +137,8 @@ export interface Account {
   handle: string;
   persona_id?: string;
   device_id?: string;
+  /** v0.7+ 业务归属：账号绑死业务，换业务=起新号 */
+  business_id: string;
   status: AccountStatus;
   last_active?: string;
   risk_score: number;
@@ -109,6 +148,8 @@ export interface AccountCreate {
   handle: string;
   device_id: string;
   persona_id: string;
+  /** v0.7+ 业务归属（必填） */
+  business_id: string;
 }
 
 // ---------- Persona ----------
@@ -121,6 +162,8 @@ export interface Persona {
   forbidden_words?: string[];
   sample_note_ids?: string[];
   version: number;
+  /** v0.7+ 业务归属：人设绑死业务，跨业务允许重名 */
+  business_id: string;
 }
 
 export interface PersonaCreate {
@@ -129,6 +172,8 @@ export interface PersonaCreate {
   style_guide: string;
   forbidden_words?: string[];
   sample_note_ids?: string[];
+  /** v0.7+ 业务归属（必填） */
+  business_id: string;
 }
 
 // ---------- 账号内容表现（数据看板核心指标） ----------
@@ -146,6 +191,33 @@ export interface AccountContentStats {
   avg_views: number;
   avg_likes: number;
   avg_comments: number;
+}
+
+export interface AccountContentStatsResponse {
+  items: AccountContentStats[];
+}
+
+// v0.7+ 多业务对比（dashboard 第 4 期）
+export interface BusinessComparisonRow {
+  business_id: string;
+  business_name: string;
+  business_slug: string;
+  status: 'active' | 'archived';
+  devices: number;
+  accounts: number;
+  personas: number;
+  goals: number;
+  notes: number;
+  published_notes: number;
+  kb_documents: number;
+  agent_runs: number;
+  successful_runs: number;
+  notes_per_account: number;
+}
+
+export interface BusinessComparisonResponse {
+  items: BusinessComparisonRow[];
+  total_businesses: number;
 }
 
 // ---------- Note ----------
@@ -177,6 +249,8 @@ export interface Note {
   /** Phase 1 P1-1：collect 成功后由 _do_collect 填 */
   collected_at?: string;
   collected_run_id?: string;
+  /** v0.7+ 业务归属 */
+  business_id: string;
 }
 
 // ---------- Goal ----------
@@ -221,6 +295,8 @@ export interface Goal {
   notes_per_round?: number;
   learning_summary?: string | null;
   phase_updated_at?: string | null;
+  /** v0.7+ 业务归属 */
+  business_id: string;
 }
 
 export type GoalPhase =
@@ -254,6 +330,8 @@ export interface GoalCreate {
   target_likes?: number;
   notes_per_round?: number;
   max_rounds?: number;
+  /** v0.7+ 业务归属（必填） */
+  business_id: string;
 }
 
 export interface GoalUpdate {
@@ -312,6 +390,8 @@ export interface AgentRun {
   ended_at?: string;
   /** 主题摘要（仅展示用，agent_runs.payload.brief 透传） */
   brief?: ThemeTarget | Record<string, unknown>;
+  /** v0.7+ 业务归属 */
+  business_id?: string;
 }
 
 // ---------- Chat ----------
@@ -325,6 +405,8 @@ export interface ChatRequest {
   message: string;
   history?: ChatHistoryMessage[];
   session_id?: string;
+  /** v0.7+ 业务归属（必填；缺则 422） */
+  business_id: string;
 }
 
 /** 与后端 matrix.api.schemas.chat.ChatActionType 一一对应。
@@ -386,6 +468,8 @@ export interface AlertItem {
   resolved: boolean;
   created_at: string;
   resolved_at?: string;
+  /** v0.7+ 业务归属（018 migration 加列；可选字段，向前兼容） */
+  business_id?: string;
 }
 
 // ---------- Notifications (Phase 1 反向反馈) ----------
@@ -406,6 +490,8 @@ export interface NotificationItem {
   payload: Record<string, unknown>;
   read_at?: string;
   created_at: string;
+  /** v0.7+ 业务归属（可选；015/017 migration 加列） */
+  business_id?: string;
 }
 
 export interface NotificationListResponse {
@@ -431,6 +517,8 @@ export interface KbDocument {
   is_published: boolean;
   created_at: string;
   updated_at: string;
+  /** v0.7+ 业务归属 */
+  business_id: string;
 }
 
 export interface KbDocumentCreate {
@@ -440,6 +528,8 @@ export interface KbDocumentCreate {
   ref_id?: string;
   metadata?: Record<string, unknown>;
   is_published?: boolean;
+  /** v0.7+ 业务归属（必填） */
+  business_id: string;
 }
 
 export interface KbDocumentUpdate {

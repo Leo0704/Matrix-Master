@@ -47,9 +47,14 @@ def _ago(days: int) -> datetime:
 
 
 async def _resolve_goal_filter(
-    session: AsyncSession, filter_args: dict[str, Any]
+    session: AsyncSession,
+    filter_args: dict[str, Any],
+    *,
+    business_id: uuid.UUID,
 ) -> list[GoalORM]:
     """把 LLM 的模糊描述反查为 GoalORM 列表。
+
+    v0.7+：强制按 business_id 过滤（chat 鉴权链路核心）。
 
     接受的 filter_args 字段（多个 AND 关系）：
       - goal_id: uuid（精确）
@@ -61,7 +66,12 @@ async def _resolve_goal_filter(
     if not filter_args:
         return []
 
-    stmt = select(GoalORM).where(GoalORM.deleted_at.is_(None))
+    # v0.7+：强制业务过滤（chat_tools.py 是 chat 鉴权链路最后一关）
+    stmt = (
+        select(GoalORM)
+        .where(GoalORM.deleted_at.is_(None))
+        .where(GoalORM.business_id == business_id)
+    )
 
     goal_id_str = filter_args.get("goal_id")
     if goal_id_str:
@@ -126,9 +136,25 @@ def _validate_change_field(field: str, value: Any) -> None:
             raise ValueError(f"status must be one of {sorted(allowed_status)}")
 
 
-def _do_change(goal: GoalORM, field: str, to_value: Any) -> Any:
-    """preview 和 apply 共享的写操作。返回旧值（用于 diff 展示）。"""
+def _do_change(
+    goal: GoalORM,
+    field: str,
+    to_value: Any,
+    *,
+    operator_business_id: uuid.UUID,
+) -> Any:
+    """preview 和 apply 共享的写操作。返回旧值（用于 diff 展示）。
+
+    v0.7+：校验 goal.business_id == operator_business_id，跨业务直接抛错。
+    """
     _validate_change_field(field, to_value)
+    # v0.7+ 业务鉴权：goal 所属业务必须与操作者业务一致
+    if goal.business_id != operator_business_id:
+        raise ValueError(
+            f"cross_business_modification_forbidden: "
+            f"goal {goal.id} belongs to business {goal.business_id}, "
+            f"operator business {operator_business_id}"
+        )
     old = getattr(goal, field, None)
     setattr(goal, field, to_value)
     return old
@@ -139,7 +165,12 @@ def _do_change(goal: GoalORM, field: str, to_value: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
-async def ask_data(session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+async def ask_data(
+    session: AsyncSession,
+    args: dict[str, Any],
+    *,
+    business_id: uuid.UUID,
+) -> dict[str, Any]:
     """只读数据查询。子命令：summary / weekly_top / running / single。
 
     返回 {"requires_confirmation": False, "payload": {...}}
@@ -155,6 +186,7 @@ async def ask_data(session: AsyncSession, args: dict[str, Any]) -> dict[str, Any
             select(GoalORM, GoalRoundORM)
             .join(GoalRoundORM, GoalRoundORM.goal_id == GoalORM.id)
             .where(GoalORM.deleted_at.is_(None))
+            .where(GoalORM.business_id == business_id)  # v0.7+ 业务过滤
             .where(GoalRoundORM.started_at >= cutoff)
             .order_by(GoalRoundORM.total_likes.desc())
             .limit(limit)
@@ -180,7 +212,11 @@ async def ask_data(session: AsyncSession, args: dict[str, Any]) -> dict[str, Any
     if subcommand == "running":
         stmt = (
             select(GoalORM)
-            .where(GoalORM.deleted_at.is_(None), GoalORM.status == "active")
+            .where(
+                GoalORM.deleted_at.is_(None),
+                GoalORM.status == "active",
+                GoalORM.business_id == business_id,  # v0.7+ 业务过滤
+            )
             .order_by(GoalORM.created_at.desc())
         )
         rows = (await session.execute(stmt)).scalars().all()
@@ -219,6 +255,13 @@ async def ask_data(session: AsyncSession, args: dict[str, Any]) -> dict[str, Any
                 "requires_confirmation": False,
                 "payload": {"subcommand": "single", "error": "goal not found"},
             }
+        # v0.7+ 跨业务拒绝：goal 必须在当前业务下
+        if g.business_id != business_id:
+            return {
+                "requires_confirmation": False,
+                "payload": {"subcommand": "single", "error": "goal_not_in_business"},
+            }
+        goals = [g]
         return {
             "requires_confirmation": False,
             "payload": {
@@ -240,7 +283,10 @@ async def ask_data(session: AsyncSession, args: dict[str, Any]) -> dict[str, Any
     # 默认：summary
     stmt = (
         select(GoalORM)
-        .where(GoalORM.deleted_at.is_(None))
+        .where(
+            GoalORM.deleted_at.is_(None),
+            GoalORM.business_id == business_id,  # v0.7+ 业务过滤
+        )
         .order_by(GoalORM.created_at.desc())
     )
     rows = (await session.execute(stmt)).scalars().all()
@@ -262,7 +308,12 @@ async def ask_data(session: AsyncSession, args: dict[str, Any]) -> dict[str, Any
     }
 
 
-async def diagnose(session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+async def diagnose(
+    session: AsyncSession,
+    args: dict[str, Any],
+    *,
+    business_id: uuid.UUID,
+) -> dict[str, Any]:
     """诊断：拉最近两轮 KPI diff + KB 召回 + 二次 LLM 归因。
 
     必须能唯一定位一个 goal：goal_id / theme_keyword / product_category 三选一。
@@ -284,7 +335,7 @@ async def diagnose(session: AsyncSession, args: dict[str, Any]) -> dict[str, Any
     from matrix.db.models import KbDocument as KbDocumentORM
 
     # 1) 解析 filter → 唯一 goal
-    goals = await _resolve_goal_filter(session, args)
+    goals = await _resolve_goal_filter(session, args, business_id=business_id)
     if len(goals) == 0:
         return {
             "requires_confirmation": False,
@@ -354,6 +405,7 @@ async def diagnose(session: AsyncSession, args: dict[str, Any]) -> dict[str, Any
                 KbDocumentORM.type == "strategy_card",
                 KbDocumentORM.is_published.is_(True),
                 KbDocumentORM.deleted_at.is_(None),
+                KbDocumentORM.business_id == business_id,  # v0.7+ 业务过滤
             )
             .order_by(KbDocumentORM.updated_at.desc())
             .limit(50)
@@ -435,7 +487,13 @@ async def diagnose(session: AsyncSession, args: dict[str, Any]) -> dict[str, Any
     }
 
 
-async def preview_change(session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+async def preview_change(
+    session: AsyncSession,
+    args: dict[str, Any],
+    *,
+    business_id: uuid.UUID,
+    operator_business_id: uuid.UUID,
+) -> dict[str, Any]:
     """调参数预览。
 
     必须有 filter + changes（路由层已校验，这里再校验一次兜底）。
@@ -464,7 +522,7 @@ async def preview_change(session: AsyncSession, args: dict[str, Any]) -> dict[st
             },
         }
 
-    goals = await _resolve_goal_filter(session, filter_args)
+    goals = await _resolve_goal_filter(session, filter_args, business_id=business_id)
     if not goals:
         return {
             "requires_confirmation": False,
@@ -537,7 +595,13 @@ async def preview_change(session: AsyncSession, args: dict[str, Any]) -> dict[st
     }
 
 
-async def apply_change(session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+async def apply_change(
+    session: AsyncSession,
+    args: dict[str, Any],
+    *,
+    business_id: uuid.UUID,
+    operator_business_id: uuid.UUID,
+) -> dict[str, Any]:
     """已确认执行：重新查 DB → 调 _do_change → 部分失败返 partial_success。
 
     args 必含 confirmation_token（路由层已经校验过）；filter + changes 由
@@ -564,7 +628,7 @@ async def apply_change(session: AsyncSession, args: dict[str, Any]) -> dict[str,
         }
 
     # 重新查 DB（preview 后用户可能等了 10 分钟，goal 状态可能已变）
-    goals = await _resolve_goal_filter(session, filter_args)
+    goals = await _resolve_goal_filter(session, filter_args, business_id=business_id)
     if not goals:
         return {
             "requires_confirmation": False,
@@ -581,7 +645,7 @@ async def apply_change(session: AsyncSession, args: dict[str, Any]) -> dict[str,
                     continue
                 field = str(change.get("field", ""))
                 to_value = change.get("to")
-                _do_change(g, field, to_value)
+                _do_change(g, field, to_value, operator_business_id=operator_business_id)
             succeeded.append(str(g.id))
         except Exception as e:
             logger.exception("apply_change.goal_failed", goal_id=str(g.id))
@@ -608,7 +672,12 @@ async def apply_change(session: AsyncSession, args: dict[str, Any]) -> dict[str,
     }
 
 
-async def browse_kb(session: AsyncSession, args: dict[str, Any]) -> dict[str, Any]:
+async def browse_kb(
+    session: AsyncSession,
+    args: dict[str, Any],
+    *,
+    business_id: uuid.UUID,
+) -> dict[str, Any]:
     """审 KB 经验卡。按 type / is_published / 时间窗过滤。
 
     返回：
@@ -635,6 +704,7 @@ async def browse_kb(session: AsyncSession, args: dict[str, Any]) -> dict[str, An
             KbDocumentORM.deleted_at.is_(None),
             KbDocumentORM.type == doc_type,
             KbDocumentORM.updated_at >= cutoff,
+            KbDocumentORM.business_id == business_id,  # v0.7+ 业务过滤
         )
         .order_by(KbDocumentORM.updated_at.desc())
         .limit(50)

@@ -74,6 +74,11 @@ class Device(Base):
         DateTime(timezone=True), nullable=False, server_default=sa_text("NOW()")
     )
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # 业务归属（v0.7+ 业务模型重构：所有资源挂在业务名下）
+    # 015 migration 加 nullable 列；017 升 NOT NULL + FK
+    business_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -124,6 +129,43 @@ class DeviceHeartbeat(Base):
 
 
 # =============================================================================
+# 业务（v0.7+ 业务模型重构：业务是项目根，所有资源挂在业务名下）
+# =============================================================================
+
+
+class Business(Base):
+    __tablename__ = "businesses"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=sa_text("uuid_generate_v4()"),
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    slug: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    # 二态：active / archived（业务支持软归档，不删行）
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=sa_text("'active'")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=sa_text("NOW()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=sa_text("NOW()")
+    )
+    archived_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'archived')", name="businesses_status_check"
+        ),
+    )
+
+
+# =============================================================================
 # 账号
 # =============================================================================
 
@@ -158,6 +200,11 @@ class Account(Base):
         DateTime(timezone=True), nullable=False, server_default=sa_text("NOW()")
     )
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # 业务归属（v0.7+ 业务模型重构：账号绑死业务，换业务=起新号）
+    # 015 migration 加 nullable 列；017 升 NOT NULL + FK
+    business_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -266,6 +313,11 @@ class Persona(Base):
         DateTime(timezone=True), nullable=False, server_default=sa_text("NOW()")
     )
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # 业务归属（v0.7+ 业务模型重构：人设绑死业务，跨业务允许重名）
+    # 015 加 nullable 列；017 升 NOT NULL + FK；017 同时把 UNIQUE(name) 改为 UNIQUE(business_id, name)
+    business_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
 
 
 class Topic(Base):
@@ -377,6 +429,11 @@ class Note(Base):
         DateTime(timezone=True), nullable=False, server_default=sa_text('NOW()')
     )
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # 业务归属（v0.7+ 业务模型重构：已发布笔记不可丢）
+    # 015 加 nullable 列；017 升 NOT NULL + FK
+    business_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -450,6 +507,11 @@ class KbDocument(Base):
         DateTime(timezone=True), nullable=False, server_default=sa_text('NOW()')
     )
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # 业务归属（v0.7+ 业务模型重构：经验卡是业务知识沉淀）
+    # 015 加 nullable 列；017 升 NOT NULL + FK
+    business_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -530,6 +592,11 @@ class Goal(Base):
         DateTime(timezone=True), nullable=False, server_default=sa_text('NOW()')
     )
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # 业务归属（v0.7+ 业务模型重构：历史目标不可丢，archived 业务下不再开新 round）
+    # 015 加 nullable 列；017 升 NOT NULL + FK
+    business_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -676,8 +743,8 @@ class AgentRun(Base):
         server_default=sa_text('uuid_generate_v4()'),
     )
     goal_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey('goals.id')
-    )
+        UUID(as_uuid=True), ForeignKey('goals.id', ondelete='CASCADE')
+    )  # 与 DB 010_goal_fk_cascade.py 对齐（ORM/DB drift 修复）
     current_state: Mapped[str] = mapped_column(
         String(32), nullable=False, server_default=sa_text("'IDLE'")
     )
@@ -699,6 +766,11 @@ class AgentRun(Base):
         DateTime(timezone=True), nullable=False, server_default=sa_text('NOW()')
     )
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # 业务归属（v0.7+ 业务模型重构：执行轨迹不可丢）
+    # 015 加 nullable 列；017 升 NOT NULL + FK
+    business_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -828,6 +900,7 @@ class Alert(Base):
     - severity: critical / warning / info
     - subject_id: 关联 device_id / account_id / run_id / region 等
     - resolved: 是否已处理
+    - business_id: v0.7+ 业务归属（018 migration 加列 + FK + trigger 不可改）
     """
     __tablename__ = 'alerts'
 
@@ -840,6 +913,11 @@ class Alert(Base):
     severity: Mapped[str] = mapped_column(String(16), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     subject_id: Mapped[Optional[str]] = mapped_column(String(128))
+    business_id: Mapped[Optional[uuid.UUID]] = mapped_column(  # v0.7+ 业务归属
+        UUID(as_uuid=True),
+        ForeignKey('businesses.id', ondelete='RESTRICT'),
+        nullable=True,
+    )
     resolved: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=sa_text('FALSE')
     )
@@ -937,6 +1015,7 @@ class DailyCounter(Base):
 
 __all__ = [
     'Base',
+    'Business',  # v0.7+ 业务模型重构：业务是项目根
     'Device',
     'DeviceHmacKey',
     'DeviceHeartbeat',
@@ -951,6 +1030,7 @@ __all__ = [
     'KbDocument',
     'KbChunk',
     'Goal',
+    'GoalRound',  # 既存 drift 修复：class 已定义但未导出
     'Plan',
     'Task',
     'AgentRun',

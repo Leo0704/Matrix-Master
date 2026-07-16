@@ -60,6 +60,7 @@ class KbStore:
         title: Optional[str] = None,
         metadata: Optional[dict] = None,
         is_published: bool = False,
+        business_id: Optional[uuid.UUID] = None,  # v0.7+ 业务归属
     ) -> KbDocument:
         """创建一篇知识库文档，自动 chunk + embed + 写入 chunks。
 
@@ -70,6 +71,7 @@ class KbStore:
             title: 可选标题
             metadata: JSONB metadata
             is_published: 是否已通过 review（默认 False）
+            business_id: v0.7+ 业务归属（可选；路由层 POST /kb/documents 已要求必填）
         """
         if type not in KB_TYPES:
             raise ValueError(
@@ -102,6 +104,7 @@ class KbStore:
             version=1,
             embedding=doc_vec,
             is_published=is_published,
+            business_id=business_id,  # v0.7+ 业务归属
         )
         self._session.add(doc)
         await self._session.flush()  # 拿到 doc.id

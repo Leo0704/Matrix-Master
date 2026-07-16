@@ -1,0 +1,22 @@
+{
+  "name": "Matrix Shell",
+  "image": "node:20-slim",
+  "workspaceFolder": "/app",
+  "mounts": [
+    "source=matrix-shell-node_modules,target=/app/node_modules,type=volume"
+  ],
+  "postCreateCommand": "npm install",
+  "containerUser": "node",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode"
+      }
+    }
+  }
+}

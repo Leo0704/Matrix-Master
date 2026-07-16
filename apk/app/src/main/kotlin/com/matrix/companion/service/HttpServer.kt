@@ -3,7 +3,9 @@ package com.matrix.companion.service
 import com.matrix.companion.App
 import com.matrix.companion.api.appOpenRoute
 import com.matrix.companion.api.deviceStatusRoute
+import com.matrix.companion.api.errResp
 import com.matrix.companion.api.inputRoute
+import com.matrix.companion.api.okResp
 import com.matrix.companion.api.screenshotRoute
 import com.matrix.companion.api.swipeRoute
 import com.matrix.companion.api.tapRoute
@@ -35,6 +37,8 @@ import io.ktor.server.routing.routing
 import io.ktor.util.AttributeKey
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 
 /**
  * Ktor CIO server bound to 0.0.0.0:8765.
@@ -63,25 +67,22 @@ class HttpServer(private val app: App) {
                     exception<Throwable> { call, cause ->
                         call.respond(
                             HttpStatusCode.InternalServerError,
-                            mapOf(
-                                "ok" to false,
-                                "code" to ErrorCode.INTERNAL_ERROR.name,
-                                "message" to (cause.message ?: cause::class.simpleName ?: "internal"),
-                                "retryable" to true,
-                            )
+                            errResp(
+                                code = ErrorCode.INTERNAL_ERROR.name,
+                                message = cause.message ?: cause::class.simpleName ?: "internal",
+                                retryable = true,
+                            ),
                         )
                     }
                 }
                 routing {
                     get("/health") {
-                        call.respond(
-                            mapOf(
-                                "ok" to true,
-                                "app" to "matrix-companion",
-                                "version" to "0.1.0",
-                                "accessibility" to app.driver.isReady(),
-                            )
-                        )
+                        val data = buildJsonObject {
+                            put("app", JsonPrimitive("matrix-companion"))
+                            put("version", JsonPrimitive("0.1.0"))
+                            put("accessibility", JsonPrimitive(app.driver.isReady()))
+                        }
+                        call.respond(okResp(data))
                     }
                     authenticatedBlock()
                 }
@@ -108,8 +109,11 @@ class HttpServer(private val app: App) {
             if (ts == null || sig == null || rid == null) {
                 call.respond(
                     HttpStatusCode.Unauthorized,
-                    mapOf("ok" to false, "code" to ErrorCode.UNAUTHORIZED.name,
-                        "message" to "missing hmac headers", "retryable" to false),
+                    errResp(
+                        code = ErrorCode.UNAUTHORIZED.name,
+                        message = "missing hmac headers",
+                        retryable = false,
+                    ),
                 )
                 return@intercept
             }
@@ -118,8 +122,11 @@ class HttpServer(private val app: App) {
             if (verifyResult is com.matrix.companion.util.ApiResult.Err) {
                 call.respond(
                     HttpStatusCode.Unauthorized,
-                    mapOf("ok" to false, "code" to verifyResult.code.name,
-                        "message" to verifyResult.message, "retryable" to verifyResult.retryable),
+                    errResp(
+                        code = verifyResult.code.name,
+                        message = verifyResult.message,
+                        retryable = verifyResult.retryable,
+                    ),
                 )
                 return@intercept
             }
@@ -128,8 +135,11 @@ class HttpServer(private val app: App) {
             if (method in WRITE_METHODS && !app.idempotency.claimIfFresh(rid)) {
                 call.respond(
                     HttpStatusCode.Conflict,
-                    mapOf("ok" to false, "code" to ErrorCode.REPLAY_DETECTED.name,
-                        "message" to "request_id already seen", "retryable" to false),
+                    errResp(
+                        code = ErrorCode.REPLAY_DETECTED.name,
+                        message = "request_id already seen",
+                        retryable = false,
+                    ),
                 )
                 return@intercept
             }
@@ -143,9 +153,23 @@ class HttpServer(private val app: App) {
         swipeRoute(app.driver)
         inputRoute(app.driver)
         screenshotRoute(app.driver)
-        xhsPublishRoute(XhsPublisher(app.executor))
-        xhsInteractRoute(XhsInteractor(app.executor))
-        xhsCollectMetricsRoute(XhsMetricsCollector(app.driver))
+        xhsPublishRoute(
+            XhsPublisher(
+                actions = app.executor,
+                driver = app.driver,
+                imagePipeline = app.imagePipeline,
+                imagePicker = app.imagePicker,
+            ),
+        )
+        xhsInteractRoute(XhsInteractor(app.executor, app.noteOpener))
+        xhsCollectMetricsRoute(
+            XhsMetricsCollector(
+                driver = app.driver,
+                noteOpener = app.noteOpener,
+                followsBaseline = app.followsBaseline,
+                actions = app.executor,
+            ),
+        )
     }
 
     companion object {

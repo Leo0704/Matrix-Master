@@ -25,6 +25,7 @@ from matrix.api.routes import (
     agent_runs as agent_runs_routes,
     alerts as alerts_routes,
     analytics as analytics_routes,
+    businesses as businesses_routes,  # v0.7+ 业务模型重构
     chat as chat_routes,
     devices as devices_routes,
     goals as goals_routes,
@@ -397,6 +398,7 @@ def create_app(
     app.include_router(health_routes.router, prefix=API_PREFIX)
     app.include_router(devices_routes.router, prefix=API_PREFIX)
     app.include_router(accounts_routes.router, prefix=API_PREFIX)
+    app.include_router(businesses_routes.router, prefix=API_PREFIX)  # v0.7+ 业务模型重构
     app.include_router(personas_routes.router, prefix=API_PREFIX)
     app.include_router(notes_routes.router, prefix=API_PREFIX)
     app.include_router(goals_routes.router, prefix=API_PREFIX)

@@ -2,7 +2,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api-client';
 import type { AlertItem } from '@/types/api';
 
-export function useAlerts(params?: { resolved?: boolean; severity?: string; code?: string }) {
+export function useAlerts(params?: {
+  resolved?: boolean;
+  severity?: string;
+  code?: string;
+  /** v0.7+ 业务过滤（018 migration 加列后生效） */
+  business_id?: string;
+}) {
   return useQuery<{ items: AlertItem[]; total: number }>({
     queryKey: ['alerts', params],
     queryFn: () => apiClient.get('/alerts', { params }),

@@ -138,8 +138,13 @@ async def build_runtime_services(
 
     if scheduler is None:
         from matrix.scheduler import DefaultSlotPicker
+        from matrix.scheduler.round_slot_allocator import (
+            DefaultRoundSlotAllocator,
+        )
 
-        scheduler = DefaultSlotPicker(session_factory)
+        picker = DefaultSlotPicker(session_factory)
+        scheduler = picker
+        round_allocator = DefaultRoundSlotAllocator(session_factory)
 
     from matrix.device.adapters import ApkHttpClient
     from matrix.device.endpoints import DeviceEndpointResolver
@@ -170,5 +175,6 @@ async def build_runtime_services(
         scheduler=scheduler,
         notifier=notifier,
         llm_rate_limiter=llm_rate_limiter,
+        round_allocator=round_allocator,  # 第 1 期：注入 DefaultRoundSlotAllocator
     )
     return services

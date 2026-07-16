@@ -2,7 +2,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api-client';
 import type { Note, NoteStatus } from '@/types/api';
 
-export function useNotes(params?: { account_id?: string; status?: string; limit?: number; offset?: number }) {
+export function useNotes(params?: {
+  account_id?: string;
+  status?: string;
+  limit?: number;
+  offset?: number;
+  /** v0.7+ 业务过滤 */
+  business_id?: string;
+}) {
   return useQuery<{ items: Note[]; total?: number }>({
     queryKey: ['notes', params],
     queryFn: () => apiClient.get<{ items: Note[]; total?: number }>('/notes', { params }),

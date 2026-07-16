@@ -48,6 +48,7 @@ class CompanionService : Service() {
         heartbeat = Heartbeat(
             provider = App.get(this).statusProvider,
             masterUrl = DeviceRegistrar.MASTER_DEFAULT,
+            secretProvider = App.get(this).hmacSecretStore,
         )
         heartbeat.start(scope) { DeviceRegistrar(this).deviceId() }
 

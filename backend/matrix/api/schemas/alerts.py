@@ -19,6 +19,7 @@ class AlertItem(BaseModel):
     resolved: bool = False
     created_at: datetime
     resolved_at: Optional[datetime] = None
+    business_id: Optional[uuid.UUID] = None  # v0.7+ 业务归属（018 migration 加列）
 
 
 class AlertListResponse(BaseModel):

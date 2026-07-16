@@ -59,6 +59,7 @@ def _to_schema(d: KbDocumentORM) -> KbDocumentSchema:
         is_published=d.is_published,
         created_at=d.created_at,
         updated_at=d.updated_at,
+        business_id=d.business_id,  # v0.7+ 业务归属
     )
 
 
@@ -105,6 +106,7 @@ async def list_learning_documents(
         None, description="strategy_card / rule / brand / persona / history"
     ),
     is_published: Optional[bool] = Query(None),
+    business_id: Optional[uuid.UUID] = Query(None, description="v0.7+ 业务过滤"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db),
@@ -115,6 +117,8 @@ async def list_learning_documents(
         stmt = stmt.where(KbDocumentORM.type == type)
     if is_published is not None:
         stmt = stmt.where(KbDocumentORM.is_published == is_published)
+    if business_id is not None:
+        stmt = stmt.where(KbDocumentORM.business_id == business_id)
     stmt = stmt.order_by(KbDocumentORM.updated_at.desc()).limit(limit).offset(offset)
     rows = (await session.execute(stmt)).scalars().all()
     return KbDocumentListResponse(

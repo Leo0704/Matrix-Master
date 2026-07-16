@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from matrix.api.deps import get_db
+from matrix.api.deps import filter_derived_by_business, get_db
 from matrix.api.schemas import Interaction, InteractionListResponse
 from matrix.db.models import Interaction as InteractionORM
 
@@ -39,13 +39,25 @@ async def list_interactions(
     target_note_id: Optional[uuid.UUID] = Query(None, description="按目标笔记过滤"),
     type: Optional[str] = Query(None, description="按互动类型过滤 (like/comment/...)"),
     result: Optional[str] = Query(None, description="按结果过滤 (success/failed/pending)"),
+    business_id: Optional[uuid.UUID] = Query(None, description="v0.7+ 业务过滤"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db),
 ) -> InteractionListResponse:
     """分页列互动记录（默认按时间倒序）。"""
+    from matrix.db.models import Account, Note
+
     stmt = select(InteractionORM).order_by(InteractionORM.ts.desc())
     count_stmt = select(func.count(InteractionORM.id))
+    # v0.7+：衍生表业务过滤（通过 Account 或 Note 的 business_id）
+    sources = [
+        (InteractionORM, Account, "account_id"),
+        (InteractionORM, Note, "target_note_id"),
+    ]
+    stmt = filter_derived_by_business(stmt, business_id=business_id, sources=sources)
+    count_stmt = filter_derived_by_business(
+        count_stmt, business_id=business_id, sources=sources
+    )
     if account_id is not None:
         stmt = stmt.where(InteractionORM.account_id == account_id)
         count_stmt = count_stmt.where(InteractionORM.account_id == account_id)

@@ -1,6 +1,7 @@
-"""Pydantic schemas — analytics (按日聚合序列 + 账号内容表现)。"""
+"""Pydantic schemas — analytics (按日聚合序列 + 账号内容表现 + 多业务对比)。"""
 from __future__ import annotations
 
+import uuid
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -77,6 +78,37 @@ class AccountContentStatsResponse(BaseModel):
     items: list[AccountContentStats] = Field(default_factory=list)
 
 
+# ---------------------------------------------------------------------------
+# v0.7+ 多业务对比（dashboard 第 4 期）
+# ---------------------------------------------------------------------------
+
+
+class BusinessComparisonRow(BaseModel):
+    """单个业务的对比数据（dashboard 表格一行）。"""
+
+    business_id: uuid.UUID
+    business_name: str
+    business_slug: str
+    status: str  # active / archived
+    # 资源计数
+    devices: int = 0
+    accounts: int = 0
+    personas: int = 0
+    goals: int = 0
+    notes: int = 0
+    published_notes: int = 0
+    kb_documents: int = 0
+    agent_runs: int = 0
+    successful_runs: int = 0
+    # 衍生
+    notes_per_account: float = 0.0  # notes / accounts
+
+
+class BusinessComparisonResponse(BaseModel):
+    items: list[BusinessComparisonRow] = Field(default_factory=list)
+    total_businesses: int = 0
+
+
 __all__ = [
     "TaskThroughputPoint",
     "TaskThroughputResponse",
@@ -86,4 +118,6 @@ __all__ = [
     "LlmCostResponse",
     "AccountContentStats",
     "AccountContentStatsResponse",
+    "BusinessComparisonRow",
+    "BusinessComparisonResponse",
 ]

@@ -8,6 +8,8 @@ interface UseNotificationsParams {
   severity?: string;
   limit?: number;
   offset?: number;
+  /** v0.7+ 业务过滤 */
+  business_id?: string;
 }
 
 export function useNotifications(params?: UseNotificationsParams) {

@@ -20,6 +20,14 @@
         android:name="android.permission.BIND_ACCESSIBILITY_SERVICE"
         tools:ignore="ProtectedPermissions" />
 
+    <!-- Media access for the image picker flow (Phase 1). READ_MEDIA_IMAGES
+         is the API 33+ scoped media permission; legacy storage read is
+         gated to maxSdk=32 because Android 13+ ignores it. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
     <!-- Read foreground app + device state. -->
     <queries>
         <package android:name="com.xingin.xhs" />

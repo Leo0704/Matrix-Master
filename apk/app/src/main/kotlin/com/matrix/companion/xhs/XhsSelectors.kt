@@ -1,63 +1,125 @@
 package com.matrix.companion.xhs
 
 import com.matrix.companion.accessibility.Selector
+import com.matrix.companion.accessibility.fromResourceId
 
 /**
- * Known-good resource-ids and content-descs for the XHS Android app
- * (包名 com.xingin.xhs). These are best-guess based on public decompilation
- * snapshots — if a build changes them, override via [http://master/v1/selectors]
- *   or just patch the constant here.
+ * Known-good resource-ids, text and content-desc selectors for the XHS
+ * Android app (`com.xingin.xhs`).
  *
- * ActionScript callers should prefer [Selector.ResourceId] (stable across
- * localization) over text selectors.
+ * Sourcing:
+ * - Public decompilation snapshots — best-guess, may shift across XHS
+ *   builds. When a resource-id disappears, the chained fallback (text /
+ *   content-desc) keeps things working until a human can patch the
+ *   primary.
+ * - All `fromResourceId(...)` calls below use the vararg overload from
+ *   `Selector.Companion`, which composes into [AnyOf] for genuine
+ *   primary-then-fallback matching. The old `orFallbackText` shim that
+ *   silently no-op'd has been removed — see git history for the dead
+ *   implementation.
+ *
+ * To override selectors remotely without an app release, the master
+ * controller can serve an updated selector set over a future
+ * `/v1/selectors` endpoint (not yet implemented — Phase 2 roadmap).
  */
 object XhsSelectors {
 
     const val PACKAGE = "com.xingin.xhs"
 
     // Tab bar (bottom).
-    val TAB_HOME = Selector.ResourceId("com.xingin.xhs:id/tab_home")
-        .orFallbackText("首页")
-    val TAB_DISCOVER = Selector.ResourceId("com.xingin.xhs:id/tab_discover")
-        .orFallbackText("发现")
-    val TAB_PUBLISH = Selector.ResourceId("com.xingin.xhs:id/tab_publish")
-        .orFallbackText("发布")
-    val TAB_MESSAGE = Selector.ResourceId("com.xingin.xhs:id/tab_msg")
-        .orFallbackText("消息")
-    val TAB_PROFILE = Selector.ResourceId("com.xingin.xhs:id/tab_profile")
-        .orFallbackText("我")
+    val TAB_HOME = Selector.fromResourceId("com.xingin.xhs:id/tab_home", Selector.Text("首页"))
+    val TAB_DISCOVER = Selector.fromResourceId("com.xingin.xhs:id/tab_discover", Selector.Text("发现"))
+    val TAB_PUBLISH = Selector.fromResourceId("com.xingin.xhs:id/tab_publish", Selector.Text("发布"))
+    val TAB_MESSAGE = Selector.fromResourceId("com.xingin.xhs:id/tab_msg", Selector.Text("消息"))
+    val TAB_PROFILE = Selector.fromResourceId("com.xingin.xhs:id/tab_profile", Selector.Text("我"))
 
     // Publish flow.
-    val BTN_CREATE_NOTE = Selector.ResourceId("com.xingin.xhs:id/btn_create_note")
-        .orFallbackText("发布笔记")
-    val BTN_NEXT_STEP = Selector.ResourceId("com.xingin.xhs:id/btn_next")
-        .orFallbackText("下一步")
-    val BTN_PUBLISH_FINAL = Selector.ResourceId("com.xingin.xhs:id/btn_publish")
-        .orFallbackText("发布")
-    val EDIT_TITLE = Selector.ResourceId("com.xingin.xhs:id/edit_title")
-        .orFallbackText("填写标题会有更多赞哦")
-    val EDIT_CONTENT = Selector.ResourceId("com.xingin.xhs:id/edit_content")
-        .orFallbackText("输入正文")
-    val BTN_ADD_IMAGE = Selector.ResourceId("com.xingin.xhs:id/btn_add_pic")
-        .orFallbackText("添加图片")
+    val BTN_CREATE_NOTE = Selector.fromResourceId(
+        "com.xingin.xhs:id/btn_create_note",
+        Selector.Text("发布笔记"),
+    )
+    val BTN_NEXT_STEP = Selector.fromResourceId(
+        "com.xingin.xhs:id/btn_next",
+        Selector.Text("下一步"),
+    )
+    val BTN_PUBLISH_FINAL = Selector.fromResourceId(
+        "com.xingin.xhs:id/btn_publish",
+        Selector.Text("发布"),
+        Selector.Text("发布笔记"),
+    )
+    val EDIT_TITLE = Selector.fromResourceId(
+        "com.xingin.xhs:id/edit_title",
+        Selector.Text("填写标题会有更多赞哦"),
+    )
+    val EDIT_CONTENT = Selector.fromResourceId(
+        "com.xingin.xhs:id/edit_content",
+        Selector.Text("输入正文"),
+    )
+    val BTN_ADD_IMAGE = Selector.fromResourceId(
+        "com.xingin.xhs:id/btn_add_pic",
+        Selector.Text("图片"),
+        Selector.ContentDesc("添加图片"),
+    )
 
-    // Discovery / interaction.
-    val BTN_LIKE = Selector.ResourceId("com.xingin.xhs:id/like_btn")
-        .orFallbackText("点赞")
-    val BTN_COLLECT = Selector.ResourceId("com.xingin.xhs:id/collect_btn")
-        .orFallbackText("收藏")
-    val EDIT_COMMENT = Selector.ResourceId("com.xingin.xhs:id/edit_comment")
-        .orFallbackText("说点什么…")
-    val BTN_COMMENT_SEND = Selector.ResourceId("com.xingin.xhs:id/btn_send_comment")
-        .orFallbackText("发送")
+    // Note-detail page (used by XhsNoteOpener + interact + metrics).
+    // The detail page's like button is the canonical "we're on a note page" indicator.
+    val NOTE_DETAIL_LIKE_BTN = Selector.fromResourceId(
+        "com.xingin.xhs:id/like_btn",
+        Selector.Text("点赞"),
+        Selector.ContentDesc("点赞"),
+    )
+    val BTN_LIKE = NOTE_DETAIL_LIKE_BTN
+    val BTN_COLLECT = Selector.fromResourceId(
+        "com.xingin.xhs:id/collect_btn",
+        Selector.Text("收藏"),
+        Selector.ContentDesc("收藏"),
+    )
+    val EDIT_COMMENT = Selector.fromResourceId(
+        "com.xingin.xhs:id/edit_comment",
+        Selector.Text("说点什么…"),
+    )
+    val BTN_COMMENT_SEND = Selector.fromResourceId(
+        "com.xingin.xhs:id/btn_send_comment",
+        Selector.Text("发送"),
+    )
+    val BTN_FOLLOW = Selector.fromResourceId(
+        "com.xingin.xhs:id/follow_btn",
+        Selector.Text("关注"),
+        Selector.ContentDesc("关注"),
+    )
+
+    // Post-publish: snackbar / toast + "我" tab indicators.
+    val TOAST_PUBLISH_SUCCESS = Selector.fromResourceId(
+        "com.xingin.xhs:id/toast_text",
+        Selector.Text("发布成功"),
+        Selector.Text("笔记已发布"),
+    )
+    val NOTE_CARD_FIRST = Selector.fromResourceId(
+        "com.xingin.xhs:id/note_item",
+        Selector.Text("笔记"),
+    )
+
+    // System image picker — vendor packages differ across OEMs.
+    // Try the open-source photo picker first, then legacy Documents UI, then
+    // intent resolver's "Just once" button (covers Chinese OEMs).
+    val SYSTEM_PICKER_FIRST_PHOTO = Selector.fromResourceId(
+        "com.android.providers.media.module:id/icon_thumbnail",
+        Selector.fromResourceId(
+            "com.google.android.providers.media.module:id/icon_thumbnail",
+        ),
+        Selector.fromResourceId(
+            "com.android.documentsui:id/icon_thumbnail",
+        ),
+    )
+    val SYSTEM_PICKER_DONE = Selector.fromResourceId(
+        "com.android.intentresolver:id/button_once",
+        Selector.Text("完成"),
+        Selector.Text("确定"),
+        Selector.Text("添加"),
+    )
+    val SYSTEM_PICKER_ALBUM_TAB = Selector.fromResourceId(
+        "com.android.providers.media.module:id/tab_photos",
+        Selector.Text("相册"),
+        Selector.Text("图库"),
+    )
 }
-
-/**
- * Build a Selector that tries [primary] first and falls back to [text] if
- * the resource-id is missing on the target app version. The action layer
- * resolves this by treating the primary as authoritative; the fallback is
- * here so hand-edits don't ripple into every call site.
- */
-fun Selector.Companion.fromResourceId(id: String): Selector = Selector.ResourceId(id)
-
-private fun Selector.orFallbackText(@Suppress("UNUSED_PARAMETER") text: String): Selector = this

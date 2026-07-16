@@ -2,10 +2,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api-client';
 import type { Goal, GoalCreate, GoalRound, GoalStatus, GoalType } from '@/types/api';
 
-export function useGoals() {
+export function useGoals(params?: { /** v0.7+ 业务过滤 */ business_id?: string }) {
   return useQuery<{ items: Goal[] }>({
-    queryKey: ['goals'],
-    queryFn: () => apiClient.get<{ items: Goal[] }>('/goals'),
+    queryKey: ['goals', params],
+    queryFn: () => apiClient.get<{ items: Goal[] }>('/goals', { params }),
   });
 }
 
@@ -17,11 +17,14 @@ export function useGoal(id: string | undefined) {
   });
 }
 
-export function useGoalRounds(id: string | undefined) {
+export function useGoalRounds(id: string | undefined, params?: { /** v0.7+ 业务校验 */ business_id?: string }) {
   return useQuery<{ items: GoalRound[]; total: number }>({
-    queryKey: ['goal-rounds', id],
+    queryKey: ['goal-rounds', id, params],
     queryFn: () =>
-      apiClient.get<{ items: GoalRound[]; total: number }>(`/goals/${id}/rounds`),
+      apiClient.get<{ items: GoalRound[]; total: number }>(
+        `/goals/${id}/rounds`,
+        { params },
+      ),
     enabled: !!id,
     refetchInterval: 10_000, // 10s 轮询，看 phase 推进
   });

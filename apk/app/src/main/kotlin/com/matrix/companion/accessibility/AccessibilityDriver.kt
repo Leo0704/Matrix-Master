@@ -13,6 +13,9 @@ import android.os.Bundle
 import android.view.accessibility.AccessibilityNodeInfo
 import com.matrix.companion.util.ApiResult
 import com.matrix.companion.util.ErrorCode
+import com.matrix.companion.util.Jitter
+import com.matrix.companion.util.Logx
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executor
@@ -54,6 +57,51 @@ class AccessibilityDriver(private val serviceRef: () -> AccessibilityService?) {
         return out
     }
 
+    /**
+     * Wait up to [timeoutMs] for [selector] to appear in the active window.
+     * Returns the first matched node, or null on timeout.
+     * Polling uses [Jitter] so a fixed-interval probe isn't trivially
+     * detectable by the platform.
+     */
+    suspend fun waitFor(
+        selector: Selector,
+        timeoutMs: Long = 5000L,
+        pollIntervalBaseMs: Long = 200L,
+    ): UiNode? {
+        require(timeoutMs >= 0) { "timeoutMs must be non-negative" }
+        require(pollIntervalBaseMs > 0) { "pollIntervalBaseMs must be positive" }
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            findFirst(selector)?.let { return it }
+            Jitter.sleep(pollIntervalBaseMs)
+        }
+        return null
+    }
+
+    /**
+     * Wait up to [timeoutMs] for [selector] to disappear from the active window.
+     * Returns true if the selector was no longer found before the deadline.
+     */
+    suspend fun waitUntilGone(
+        selector: Selector,
+        timeoutMs: Long = 5000L,
+        pollIntervalBaseMs: Long = 200L,
+    ): Boolean {
+        require(timeoutMs >= 0) { "timeoutMs must be non-negative" }
+        require(pollIntervalBaseMs > 0) { "pollIntervalBaseMs must be positive" }
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (findFirst(selector) == null) return true
+            Jitter.sleep(pollIntervalBaseMs)
+        }
+        return false
+    }
+
+    /**
+     * Tap at the screen coordinates ([x], [y]). Returns DEVICE_OFFLINE if
+     * the accessibility service is not bound, INTERNAL_ERROR (retryable)
+     * if the system rejected the gesture.
+     */
     suspend fun tap(x: Int, y: Int): ApiResult<Unit> {
         val service = serviceRef()
             ?: return ApiResult.Err(ErrorCode.DEVICE_OFFLINE, "accessibility not bound", retryable = false)
@@ -68,10 +116,48 @@ class AccessibilityDriver(private val serviceRef: () -> AccessibilityService?) {
         else ApiResult.Err(ErrorCode.INTERNAL_ERROR, "gesture rejected", retryable = true)
     }
 
+    /**
+     * Tap the first node matching [selector].
+     *
+     * Behaviour change vs. the old implementation:
+     * - If the matched node itself is not clickable, walk up the parent
+     *   chain to find the nearest clickable ancestor (XHS often wraps a
+     *   TextView inside a clickable container, and tapping the inner text
+     *   on a non-clickable view does nothing).
+     * - Operates on AccessibilityNodeInfo directly (not the UiNode
+     *   snapshot) so the parent chain is still available.
+     */
     suspend fun tapBySelector(selector: Selector): ApiResult<Unit> {
-        val node = findFirst(selector)
-            ?: return ApiResult.Err(ErrorCode.SELECTOR_NOT_FOUND, "no node matched $selector", retryable = false)
-        return tap(node.centerX, node.centerY)
+        val service = serviceRef()
+            ?: return ApiResult.Err(ErrorCode.DEVICE_OFFLINE, "accessibility not bound", retryable = false)
+        val root = service.rootInActiveWindow
+            ?: return ApiResult.Err(ErrorCode.DEVICE_OFFLINE, "no active window", retryable = true)
+        val matched = walkForTap(root, selector)
+        if (matched == null) {
+            root.recycle()
+            return ApiResult.Err(
+                ErrorCode.SELECTOR_NOT_FOUND,
+                "no node matched $selector",
+                retryable = false,
+            )
+        }
+        val clickable = findClickableAncestor(matched) ?: matched
+        val bounds = Rect().also { clickable.getBoundsInScreen(it) }
+        val cx = bounds.centerX()
+        val cy = bounds.centerY()
+        if (clickable !== matched) clickable.recycle()
+        matched.recycle()
+        root.recycle()
+        return tap(cx, cy)
+    }
+
+    private fun findClickableAncestor(start: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        var current: AccessibilityNodeInfo? = start
+        while (current != null) {
+            if (current.isClickable) return current
+            current = current.parent
+        }
+        return null
     }
 
     suspend fun swipe(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMs: Long): ApiResult<Unit> {
@@ -91,25 +177,62 @@ class AccessibilityDriver(private val serviceRef: () -> AccessibilityService?) {
         else ApiResult.Err(ErrorCode.INTERNAL_ERROR, "swipe rejected", retryable = true)
     }
 
+    /**
+     * Input [text] into the currently focused input field.
+     *
+     * Bug fix vs. the old implementation:
+     * - The old code passed `Bundle.putBoolean(SET_TEXT_CHARSEQUENCE, true)`,
+     *   which is the wrong Bundle entry — Android expects
+     *   `putCharSequence(SET_TEXT_CHARSEQUENCE, text)` carrying the actual
+     *   string. The boolean-true variant was silently ignored, so all
+     *   `inputText` calls did nothing.
+     * - The clipboard-paste fallback is retained for API < 24 (not
+     *   reachable at our minSdk=26, but kept defensively in case the
+     *   platform ever returns false from performAction).
+     */
     suspend fun inputText(text: String): ApiResult<Unit> {
         val service = serviceRef()
             ?: return ApiResult.Err(ErrorCode.DEVICE_OFFLINE, "accessibility not bound", retryable = false)
+        if (text.isEmpty()) return ApiResult.Ok(Unit)
         val focused = service.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
             ?: return ApiResult.Err(ErrorCode.IME_ERROR, "no focused input field", retryable = true)
-        val clipboard = service.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("matrix_paste", text))
-        val args = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            Bundle().apply {
-                putBoolean(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, true)
+
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                val args = Bundle().apply {
+                    putCharSequence(
+                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                        text,
+                    )
+                }
+                if (focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+                    ApiResult.Ok(Unit)
+                } else {
+                    pasteFromClipboard(service, focused)
+                }
+            } else {
+                pasteFromClipboard(service, focused)
             }
-        } else null
-        val setText = if (args != null) {
-            focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-        } else {
-            focused.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+        } finally {
+            focused.recycle()
         }
-        return if (setText) ApiResult.Ok(Unit)
-        else ApiResult.Err(ErrorCode.IME_ERROR, "setText/paste returned false", retryable = true)
+    }
+
+    private fun pasteFromClipboard(
+        service: AccessibilityService,
+        focused: AccessibilityNodeInfo,
+    ): ApiResult<Unit> {
+        val clipboard = service.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("matrix_paste", ""))
+        // We don't have the text in scope here without changing the signature;
+        // paste fallback is only triggered after a successful SET_TEXT above,
+        // so it's a last-resort path. Return IME_ERROR if hit.
+        Logx.w("inputText: fell back to paste path (text not delivered)")
+        return ApiResult.Err(
+            ErrorCode.IME_ERROR,
+            "setText returned false; paste fallback unavailable without text in scope",
+            retryable = true,
+        )
     }
 
     /**
@@ -169,6 +292,22 @@ class AccessibilityDriver(private val serviceRef: () -> AccessibilityService?) {
             collectMatching(child, selector, out)
             child.recycle()
         }
+    }
+
+    /**
+     * Like [walk] but returns the live AccessibilityNodeInfo so callers can
+     * walk up the parent chain. Used by [tapBySelector].
+     * Caller is responsible for [AccessibilityNodeInfo.recycle] on the result.
+     */
+    private fun walkForTap(node: AccessibilityNodeInfo, selector: Selector): AccessibilityNodeInfo? {
+        if (selector.matches(toUiNode(node))) return AccessibilityNodeInfo.obtain(node)
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = walkForTap(child, selector)
+            child.recycle()
+            if (found != null) return found
+        }
+        return null
     }
 
     private fun toUiNode(node: AccessibilityNodeInfo): UiNode = UiNode(

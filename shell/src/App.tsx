@@ -13,6 +13,8 @@ import { KB } from './pages/kb';
 import { Chat } from './pages/chat';
 import { Alerts } from './pages/alerts';
 import { Notifications } from './pages/notifications'; // Phase 1
+import { Businesses } from './pages/businesses'; // v0.7+ 业务管理页
+import { BusinessComparison } from './pages/business-comparison'; // v0.7+ 多业务对比 dashboard
 import { NotFound } from './pages/not-found';
 import { useUIStore } from './stores/ui-store';
 import { useEffect } from 'react';
@@ -41,6 +43,11 @@ export function App() {
         <Route path="/kb" element={<KB />} />
         <Route path="/alerts" element={<Alerts />} />
         <Route path="/notifications" element={<Notifications />} /> {/* Phase 1 */}
+        <Route path="/businesses" element={<Businesses />} /> {/* v0.7+ 业务管理 */}
+        <Route
+          path="/analytics-comparison"
+          element={<BusinessComparison />}
+        /> {/* v0.7+ 多业务对比 dashboard */}
 
         <Route path="*" element={<NotFound />} />
       </Route>

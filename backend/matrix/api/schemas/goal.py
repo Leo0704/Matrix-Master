@@ -72,6 +72,7 @@ class Goal(BaseModel):
     notes_per_round: int = 3  # 每轮多少篇
     learning_summary: Optional[str] = None
     phase_updated_at: Optional[datetime] = None
+    business_id: uuid.UUID  # v0.7+ 业务模型重构：历史目标不可丢
 
 
 class GoalRound(BaseModel):
@@ -103,6 +104,7 @@ class GoalCreate(BaseModel):
     target_likes: Optional[int] = Field(default=None, ge=1, le=1_000_000)
     notes_per_round: Optional[int] = Field(default=None, ge=1, le=20)
     max_rounds: Optional[int] = Field(default=None, ge=1, le=20)
+    business_id: uuid.UUID  # v0.7+ 业务模型重构：必填
 
     @model_validator(mode="after")
     def _require_theme(self) -> "GoalCreate":

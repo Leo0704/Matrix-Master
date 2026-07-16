@@ -16,6 +16,8 @@ export interface KbListParams {
   is_published?: boolean;
   limit?: number;
   offset?: number;
+  /** v0.7+ 业务过滤 */
+  business_id?: string;
 }
 
 export function useKbDocuments(params?: KbListParams) {

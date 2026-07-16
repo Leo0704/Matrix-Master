@@ -7,12 +7,13 @@
 from __future__ import annotations
 
 import uuid
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from matrix.api.deps import get_db
+from matrix.api.deps import get_db, resolve_active_business
 from matrix.api.schemas import (
     Goal,
     GoalCreate,
@@ -44,6 +45,7 @@ def _to_schema(g: GoalORM) -> Goal:
         notes_per_round=g.notes_per_round or 3,
         learning_summary=g.learning_summary,
         phase_updated_at=g.phase_updated_at,
+        business_id=g.business_id,  # v0.7+ 业务归属
     )
 
 
@@ -65,6 +67,7 @@ def _round_to_schema(r: GoalRoundORM) -> GoalRound:
 
 @router.get("", response_model=GoalListResponse)
 async def list_goals(
+    business_id: Optional[uuid.UUID] = Query(None, description="v0.7+ 业务过滤"),
     session: AsyncSession = Depends(get_db),
 ) -> GoalListResponse:
     stmt = (
@@ -72,6 +75,8 @@ async def list_goals(
         .where(GoalORM.deleted_at.is_(None))
         .order_by(GoalORM.created_at.desc())
     )
+    if business_id:
+        stmt = stmt.where(GoalORM.business_id == business_id)
     rows = (await session.execute(stmt)).scalars().all()
     return GoalListResponse(items=[_to_schema(r) for r in rows])
 
@@ -140,11 +145,17 @@ async def delete_goal(
 @router.get("/{goal_id}/rounds", response_model=GoalRoundListResponse)
 async def list_goal_rounds(
     goal_id: uuid.UUID,
+    business_id: Optional[uuid.UUID] = Query(
+        None, description="v0.7+ 业务校验（跨业务访问视为 404）"
+    ),
     session: AsyncSession = Depends(get_db),
 ) -> GoalRoundListResponse:
     # 先确认 goal 存在
     g = await session.get(GoalORM, goal_id)
     if g is None or g.deleted_at is not None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "goal not found")
+    # v0.7+：跨业务访问 → 404（不暴露存在性）
+    if business_id is not None and g.business_id != business_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "goal not found")
     stmt = (
         select(GoalRoundORM)
@@ -162,6 +173,9 @@ async def create_goal(
     body: GoalCreate,
     session: AsyncSession = Depends(get_db),
 ) -> Goal:
+    # v0.7+ 业务模型重构：业务上下文校验（存在 + active）
+    await resolve_active_business(session, body.business_id)
+
     # target 接受 ThemeTarget 结构或 dict；统一存为 dict 给 JSONB
     target_dict = body.target if isinstance(body.target, dict) else dict(body.target or {})
 
@@ -174,6 +188,7 @@ async def create_goal(
         target_likes=body.target_likes if body.target_likes is not None else 500,
         notes_per_round=body.notes_per_round if body.notes_per_round is not None else 3,
         max_rounds=body.max_rounds if body.max_rounds is not None else 3,
+        business_id=body.business_id,  # v0.7+ 业务归属
     )
     session.add(g)
     await session.flush()

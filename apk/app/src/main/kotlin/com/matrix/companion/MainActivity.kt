@@ -1,11 +1,16 @@
 package com.matrix.companion
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.matrix.companion.databinding.ActivityMainBinding
 import com.matrix.companion.net.DeviceRegistrar
@@ -47,6 +52,18 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.startServiceBtn.setOnClickListener {
+            // Refuse to start the service if media access is missing —
+            // publish-with-image would just UPLOAD_FAILED downstream and
+            // the operator would have to re-pair to retry.
+            if (!hasMediaPermission()) {
+                Toast.makeText(
+                    this,
+                    "需要先授予图片读取权限，否则发布带图会失败",
+                    Toast.LENGTH_LONG,
+                ).show()
+                requestMediaPermission()
+                return@setOnClickListener
+            }
             CompanionService.start(this)
             WatchdogService.start(this)
             Toast.makeText(this, "已启动", Toast.LENGTH_SHORT).show()
@@ -98,8 +115,17 @@ class MainActivity : AppCompatActivity() {
     private suspend fun runPair(code: String) {
         val outcome = registrar.pair(code)
         refreshStatus()
-        outcome.onSuccess { Logx.i("Pair OK") }
-            .onFailure { Logx.e("Pair failed: ${it.message}") }
+        outcome.onSuccess {
+            Logx.i("Pair OK")
+            Toast.makeText(this@MainActivity, "配对成功！", Toast.LENGTH_SHORT).show()
+        }.onFailure { err ->
+            Logx.e("Pair failed: ${err.message}")
+            Toast.makeText(
+                this@MainActivity,
+                "配对失败：${err.message ?: "未知错误"}",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
     }
 
     private fun App.deviceId(): String =
@@ -108,4 +134,38 @@ class MainActivity : AppCompatActivity() {
 
     private fun App.tailnetIp(): String? =
         try { com.matrix.companion.net.TailscaleClient.peekIp() } catch (_: Throwable) { null }
+
+    // ----- Media permission helpers (Phase 1 image upload) -----
+
+    /**
+     * The permission name changed across Android versions:
+     * - API 33+ (Android 13+): READ_MEDIA_IMAGES — scoped media access.
+     * - API 29–32: READ_EXTERNAL_STORAGE — broad storage read.
+     * - API ≤28: same READ_EXTERNAL_STORAGE works, scoped to legacy mode.
+     */
+    private val mediaPermissionName: String
+        get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_IMAGES
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+
+    private fun hasMediaPermission(): Boolean = ContextCompat.checkSelfPermission(
+        this, mediaPermissionName,
+    ) == PackageManager.PERMISSION_GRANTED
+
+    private val mediaPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            Logx.i("media_permission.granted")
+        } else {
+            Logx.w("media_permission.denied — publish-with-image will fail")
+            Toast.makeText(this, "未授予图片权限", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun requestMediaPermission() {
+        mediaPermissionLauncher.launch(mediaPermissionName)
+    }
 }

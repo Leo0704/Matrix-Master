@@ -28,6 +28,7 @@ class NotificationItem(BaseModel):
     payload: dict = Field(default_factory=dict)
     read_at: Optional[datetime] = None
     created_at: datetime
+    business_id: Optional[uuid.UUID] = None  # v0.7+ 业务归属（015/017 加列）
 
 
 class NotificationListResponse(BaseModel):

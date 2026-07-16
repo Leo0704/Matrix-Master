@@ -2,7 +2,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api-client';
 import type { AgentRun } from '@/types/api';
 
-export function useAgentRuns(params?: { status?: string; limit?: number }) {
+export function useAgentRuns(params?: {
+  status?: string;
+  limit?: number;
+  /** v0.7+ 业务过滤 */
+  business_id?: string;
+}) {
   return useQuery<{ items: AgentRun[] }>({
     queryKey: ['agent-runs', params],
     queryFn: () => apiClient.get<{ items: AgentRun[] }>('/agent/runs', { params }),

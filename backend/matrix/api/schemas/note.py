@@ -35,6 +35,7 @@ class Note(BaseModel):
     scheduled_collect_at: Optional[datetime] = None
     collected_at: Optional[datetime] = None
     collected_run_id: Optional[uuid.UUID] = None
+    business_id: uuid.UUID  # v0.7+ 业务模型重构：已发布笔记不可丢
 
 
 class NoteCreate(BaseModel):
@@ -45,6 +46,7 @@ class NoteCreate(BaseModel):
     tags: list[str] = Field(default_factory=list)
     status: NoteStatus = "draft"
     scheduled_at: Optional[datetime] = None
+    business_id: Optional[uuid.UUID] = None  # 可选：缺则从 account_id 或 goal_id 推断
 
 
 class NoteUpdate(BaseModel):

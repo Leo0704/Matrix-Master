@@ -2,7 +2,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api-client';
 import type { Device, DeviceRegisterRequest } from '@/types/api';
 
-export function useDevices(params?: { status?: string; tag?: string }) {
+export function useDevices(params?: {
+  status?: string;
+  tag?: string;
+  /** v0.7+ 业务过滤 */
+  business_id?: string;
+}) {
   return useQuery<{ items: Device[] }>({
     queryKey: ['devices', params],
     queryFn: () =>

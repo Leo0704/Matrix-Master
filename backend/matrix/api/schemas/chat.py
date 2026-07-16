@@ -48,6 +48,7 @@ class ChatRequest(BaseModel):
     message: str
     history: list[ChatHistoryMessage] = Field(default_factory=list)
     session_id: Optional[uuid.UUID] = None  # 保留字段；当前后端无状态
+    business_id: uuid.UUID  # v0.7+ 业务模型重构：必填；缺则 Pydantic 自动 422
 
 
 class ChatAction(BaseModel):
