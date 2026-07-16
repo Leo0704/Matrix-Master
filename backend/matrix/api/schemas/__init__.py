@@ -26,7 +26,13 @@ from matrix.api.schemas.analytics import (
     AccountContentStats,
     AccountContentStatsResponse,
 )
-from matrix.api.schemas.chat import ChatAction, ChatHistoryMessage, ChatRequest, ChatResponse
+from matrix.api.schemas.chat import (
+    ChatAction,
+    ChatActionType,
+    ChatHistoryMessage,
+    ChatRequest,
+    ChatResponse,
+)
 from matrix.api.schemas.goal import (
     Goal,
     GoalCreate,
@@ -90,6 +96,7 @@ __all__ = [
     "AlertResolveResponse",
     "AlertSeverity",
     "ChatAction",
+    "ChatActionType",
     "ChatHistoryMessage",
     "ChatRequest",
     "ChatResponse",

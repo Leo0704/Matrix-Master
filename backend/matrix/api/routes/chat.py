@@ -1,31 +1,37 @@
-"""自然语言指令 (chat) 端点。
+"""运营小助手 chat 路由（v0.7+ 重定位）。
 
-真 LLM 多轮对话 + 主题识别：
-- 接收前端传来的完整消息历史（localStorage 自管）
-- 拼 prompt 调 LLM，让 LLM 输出 JSON {reply, theme_confirmed, theme}
-- theme_confirmed=true 时建 Goal（target=ThemeTarget 结构化 dict） + AgentRun（payload 含 brief）
-- theme_confirmed=false 时仅返回 reply
-- 暂停关键词短路保留
+替代 v0.7 之前的"主题识别 + 建目标"路径；现在 chat 只做运维/查询/调参辅助。
+建目标走 POST /goals 手动表单。
+
+支持 5 类 intent（dispatch 到 matrix.agent.chat_tools）：
+  - ask_data / browse_kb / chitchat：只读，无需确认
+  - diagnose：只读（含二次 LLM 归因，第 3 期）
+  - preview_change / apply_change：写操作，走 confirmation_token 两阶段
+
+确认机制：进程内 _CONFIRMATION_STORE dict（10 分钟 TTL，单 worker dev 够用）。
+多 worker 部署要换 Redis/DB —— TODO。
 """
 from __future__ import annotations
 
 import json
 import re
-from typing import Any
+import time
+import uuid
+from datetime import date
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from matrix.agent.chat_tools import (
+    CHAT_BATCH_LIMIT,
+    CHAT_TOOL_DISPATCH,
+    TOOL_REQUIRED_ARGS,
+    _resolve_goal_filter,
+)
 from matrix.agent.prompts import CHAT_SYSTEM, CHAT_USER
 from matrix.api.deps import get_db
-from matrix.api.schemas import (
-    ChatAction,
-    ChatHistoryMessage,
-    ChatRequest,
-    ChatResponse,
-)
-from matrix.db.models import AgentRun, Goal as GoalORM
+from matrix.api.schemas import ChatAction, ChatHistoryMessage, ChatRequest, ChatResponse
 from matrix.llm.errors import LLMError
 from matrix.llm.retry import retry_with_backoff
 from matrix.llm.router import get_default_client
@@ -36,8 +42,51 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-# 暂停关键词：与 LLM 短路，避免无意义 token 消耗
-_PAUSE_PATTERNS = [r"暂停", r"停下", r"停止", r"pause", r"stop"]
+
+# ---------------------------------------------------------------------------
+# Confirmation token 存储（进程内，10 分钟 TTL）
+# TODO: 多 worker 部署需换 Redis 或 DB 表
+# ---------------------------------------------------------------------------
+
+_CONFIRMATION_STORE: dict[str, dict[str, Any]] = {}
+_CONFIRMATION_TTL_SEC = 600  # 10 分钟
+
+
+def _make_token() -> str:
+    """生成 UUID token，存 args 到 store。"""
+    token = str(uuid.uuid4())
+    return token
+
+
+def _store_token(token: str, args: dict[str, Any]) -> None:
+    _CONFIRMATION_STORE[token] = {
+        "args": args,
+        "expires_at": time.time() + _CONFIRMATION_TTL_SEC,
+    }
+    _lazy_cleanup()
+
+
+def _consume_token(token: str) -> Optional[dict[str, Any]]:
+    """校验 + 取出（消费即删除，避免重复执行）。"""
+    entry = _CONFIRMATION_STORE.pop(token, None)
+    if entry is None:
+        return None
+    if entry["expires_at"] < time.time():
+        return None  # 已过期
+    return entry["args"]
+
+
+def _lazy_cleanup() -> None:
+    """清理过期 token（写入时懒触发）。"""
+    now = time.time()
+    expired = [t for t, e in _CONFIRMATION_STORE.items() if e["expires_at"] < now]
+    for t in expired:
+        _CONFIRMATION_STORE.pop(t, None)
+
+
+# ---------------------------------------------------------------------------
+# LLM 调用 + JSON 解析（保留 v0.7 之前的容错逻辑）
+# ---------------------------------------------------------------------------
 
 
 def _format_history(history: list[ChatHistoryMessage]) -> str:
@@ -52,13 +101,11 @@ def _format_history(history: list[ChatHistoryMessage]) -> str:
 
 
 def _parse_llm_json(raw: str) -> dict[str, Any]:
-    """从 LLM 文本中尽力解析 JSON。容错：剥 markdown 围栏、剥前后缀、找首个 {..}。"""
+    """从 LLM 文本中尽力解析 JSON。容错：剥 markdown 围栏、找首个 {...}。"""
     text = raw.strip()
-    # 剥 ```json ... ``` 围栏
     fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if fence:
         text = fence.group(1)
-    # 取第一个 {...} 段
     start = text.find("{")
     end = text.rfind("}")
     if start == -1 or end == -1 or end <= start:
@@ -73,12 +120,17 @@ async def _call_llm(prompt: str, system: str) -> str:
     result = await client.complete(
         prompt,
         model=settings.matrix_llm_model or "MiniMax-M3",
-        max_tokens=512,
+        max_tokens=800,
         temperature=0.3,
         system=system,
         call_type="decision",
     )
     return result.text
+
+
+# ---------------------------------------------------------------------------
+# Chat 路由主函数
+# ---------------------------------------------------------------------------
 
 
 @router.post("", response_model=ChatResponse)
@@ -87,108 +139,171 @@ async def chat(
     session: AsyncSession = Depends(get_db),
 ) -> ChatResponse:
     message = body.message.strip()
+
+    # 1) /confirm <token> 短路 —— 用户在前端确认 preview_change 后调用
+    if message.startswith("/confirm "):
+        token = message[len("/confirm ") :].strip()
+        cached_args = _consume_token(token)
+        if cached_args is None:
+            return ChatResponse(
+                reply="确认令牌无效或已过期，请重新发起指令。",
+                action=ChatAction(
+                    type="parse_error", payload={"reason": "token_invalid"}
+                ),
+                error_hint="令牌 10 分钟内有效；重新发起预览即可拿到新令牌。",
+            )
+        tool = CHAT_TOOL_DISPATCH["apply_change"]
+        try:
+            result = await tool(session, {**cached_args, "confirmation_token": token})
+        except Exception as e:
+            logger.exception("chat.apply_change.error", token=token)
+            return ChatResponse(
+                reply=f"执行失败：{type(e).__name__}: {e}",
+                action=ChatAction(type="llm_error", payload={"intent": "apply_change"}),
+                error_hint="工具执行异常，可重试。",
+            )
+        return ChatResponse(
+            reply=result.get("reply") or "已执行。",
+            action=ChatAction(
+                type="apply_change",
+                payload=result.get("payload", {}),
+            ),
+        )
+
+    # 2) /cancel <token> 短路 —— 用户取消预览
+    if message.startswith("/cancel "):
+        token = message[len("/cancel ") :].strip()
+        _consume_token(token)
+        return ChatResponse(
+            reply="已取消，未执行任何操作。",
+            action=ChatAction(type="noop", payload={"cancelled_token": token}),
+        )
+
+    # 3) 空消息
     if not message:
         return ChatResponse(
             reply="收到空消息，请输入指令。",
             action=ChatAction(type="noop", payload={}),
         )
 
-    # 暂停关键词短路
-    lower = message.lower()
-    if any(p in lower for p in _PAUSE_PATTERNS):
-        stmt = select(AgentRun).where(AgentRun.status == "running")
-        runs = (await session.execute(stmt)).scalars().all()
-        cancelled = 0
-        for r in runs:
-            r.status = "cancelled"
-            cancelled += 1
-        await session.flush()
-        return ChatResponse(
-            reply=f"已请求暂停 {cancelled} 个运行中的 Agent run。",
-            action=ChatAction(type="pause_all", payload={"cancelled": cancelled}),
-        )
-
-    # 真 LLM 多轮对话
+    # 4) 调 LLM
     history_text = _format_history(body.history)
-    prompt = CHAT_USER.format(history=history_text, message=message)
-
+    prompt = CHAT_USER.format(
+        history=history_text,
+        message=message,
+        today_date=date.today().isoformat(),
+    )
     try:
         raw = await _call_llm(prompt, CHAT_SYSTEM)
     except LLMError as e:
         logger.warning("chat.llm.call_failed", error=e)
         return ChatResponse(
-            reply="主题识别暂不可用，请稍后重试。",
+            reply="运营小助手暂不可用，请稍后重试。",
             action=ChatAction(type="llm_error", payload={"error": str(e)}),
+            error_hint="LLM 服务异常，可能是额度或网络问题。",
         )
 
-    # 解析 LLM JSON 输出，容错
+    # 5) 解析 JSON
     try:
         parsed = _parse_llm_json(raw)
     except (json.JSONDecodeError, ValueError) as e:
-        logger.warning(
-            "chat.llm.non_json_response",
-            raw=raw[:200],
-            error=e,
-        )
+        logger.warning("chat.llm.parse_error", raw=raw[:200], error=e)
         return ChatResponse(
             reply=raw[:500] or "请再说一次。",
             action=ChatAction(type="parse_error", payload={}),
+            error_hint="模型返回的不是 JSON，试试换种说法。",
         )
 
     reply_text = str(parsed.get("reply", "")).strip()
-    theme_confirmed = bool(parsed.get("theme_confirmed"))
-    theme_payload = parsed.get("theme") or {}
-    if not isinstance(theme_payload, dict):
-        theme_payload = {}
+    intent = str(parsed.get("intent", "unknown")).strip().lower()
+    args = parsed.get("args") or {}
+    if not isinstance(args, dict):
+        args = {}
 
-    if not theme_confirmed:
+    # 6) chitchat 短路
+    if intent == "chitchat":
         return ChatResponse(
-            reply=reply_text or "请补充一下主题细节。",
-            theme_confirmed=False,
-            theme_payload=theme_payload or None,
+            reply=reply_text,
+            action=ChatAction(type="chitchat", payload={}),
         )
 
-    # 主题已明确：建 Goal + AgentRun
-    goal_type = str(theme_payload.get("goal_type") or "generic")
-    g = GoalORM(
-        type=goal_type,
-        target=theme_payload,  # JSONB 存 ThemeTarget 结构化对象
-        status="active",
-    )
-    session.add(g)
-    await session.flush()
+    # 7) unknown_intent 兜底
+    if intent not in CHAT_TOOL_DISPATCH:
+        return ChatResponse(
+            reply=reply_text or "我不确定你要做什么。",
+            action=ChatAction(type="unknown_intent", payload={"raw_intent": intent}),
+            error_hint=(
+                f"未知意图 '{intent}'。可问：「现在有几个 goal 在跑？」"
+                "「把 max_rounds=3 的 goal 改成 5」「看看这周 KB 新写了哪些 strategy_card」"
+            ),
+        )
 
-    run = AgentRun(
-        goal_id=g.id,
-        current_state="IDLE",
-        payload={
-            "brief": theme_payload,
-            "goal_text": message,
-            "entry": "RESEARCH",
-        },
-        status="running",
-    )
-    session.add(run)
-    await session.flush()
+    # 8) 必填参数检查
+    tool = CHAT_TOOL_DISPATCH[intent]
+    required = TOOL_REQUIRED_ARGS.get(intent, [])
+    missing = [k for k in required if not args.get(k)]
+    if missing:
+        return ChatResponse(
+            reply=f"需要补充：{', '.join(missing)}。",
+            action=ChatAction(
+                type="missing_args",
+                payload={"missing": missing, "intent": intent},
+            ),
+            error_hint="参数不全，没法执行。",
+        )
 
-    logger.info(
-        "chat -> goal created via LLM",
-        goal_id=str(g.id),
-        run_id=str(run.id),
-        type=goal_type,
-        theme=theme_payload.get("theme"),
-    )
+    # 9) 批量上限检查（仅对 preview_change：先 dry-run 匹配数量）
+    if intent == "preview_change":
+        filter_args = args.get("filter") or {}
+        if isinstance(filter_args, dict):
+            matched = await _resolve_goal_filter(session, filter_args)
+            if len(matched) > CHAT_BATCH_LIMIT:
+                return ChatResponse(
+                    reply=(
+                        f"匹配到 {len(matched)} 个 goal，"
+                        f"超过单次上限 {CHAT_BATCH_LIMIT}。请缩小范围（如指定 theme_keyword）。"
+                    ),
+                    action=ChatAction(
+                        type="batch_too_large",
+                        payload={
+                            "matched": len(matched),
+                            "limit": CHAT_BATCH_LIMIT,
+                        },
+                    ),
+                    error_hint="批量操作有上限，避免误伤。",
+                )
 
+    # 10) dispatch 到工具
+    try:
+        result = await tool(session, args)
+    except Exception as e:
+        logger.exception("chat.tool.error", intent=intent)
+        return ChatResponse(
+            reply=f"执行 {intent} 失败：{type(e).__name__}: {e}",
+            action=ChatAction(type="llm_error", payload={"intent": intent, "error": str(e)}),
+            error_hint="工具执行异常，可重试或换种问法。",
+        )
+
+    payload = result.get("payload", {})
+    requires_confirmation = bool(result.get("requires_confirmation"))
+
+    # 11) 写操作需要 confirmation
+    if requires_confirmation:
+        token = _make_token()
+        _store_token(token, args)
+        return ChatResponse(
+            reply=reply_text or f"准备好执行，请确认。",
+            action=ChatAction(
+                type="preview_change",
+                payload=payload,
+                needs_confirmation=True,
+                confirmation_token=token,
+            ),
+            confirmation_token=token,
+        )
+
+    # 12) 只读 / 已确认
     return ChatResponse(
-        reply=reply_text or f"主题已确定：{theme_payload.get('theme', '')}",
-        theme_confirmed=True,
-        theme_payload=theme_payload,
-        action=ChatAction(
-            type="create_goal",
-            payload={
-                "goal_id": str(g.id),
-                "run_id": str(run.id),
-                "goal_type": goal_type,
-            },
-        ),
+        reply=reply_text,
+        action=ChatAction(type=intent, payload=payload),
     )

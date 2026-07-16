@@ -702,38 +702,44 @@ async def test_cancel_agent_run_not_found(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_chat_publish_note(
+async def test_chat_unknown_intent_for_create_goal(
     client: AsyncClient, mock_llm, fake_session: FakeAsyncSession
 ) -> None:
-    # mock LLM 返回 theme_confirmed=true → 走 create_goal 路径
+    """v0.7+：chat 不再支持建目标。LLM 输出 create_goal intent 应被识别为 unknown_intent
+    并引导用户去 /goals 手动表单。"""
     mock_llm(
-        '{"reply": "好的，这就安排", '
-        '"theme_confirmed": true, '
-        '"theme": {"theme": "夏日穿搭", "audience": "大学生", '
-        '"product_category": "穿搭", "goal_type": "publish_note"}}'
+        '{"reply": "建目标请去 /goals 页面", '
+        '"intent": "create_goal", '
+        '"args": {}}'
     )
-    r = await client.post("/api/v1/chat", json={"message": "发一条笔记"})
+    r = await client.post("/api/v1/chat", json={"message": "建一个夏季女鞋 goal"})
     assert r.status_code == 200
     body = r.json()
     assert "reply" in body
-    assert body["action"]["type"] == "create_goal"
-    assert body["action"]["payload"]["goal_type"] == "publish_note"
+    assert body["action"]["type"] == "unknown_intent"
+    assert body["action"]["payload"]["raw_intent"] == "create_goal"
+    assert "/goals" in body["action"]["payload"]["raw_intent"] or "建目标" in body["reply"]
 
 
 @pytest.mark.asyncio
-async def test_chat_pause(
+async def test_chat_pause_no_longer_keyword_short_circuit(
     client: AsyncClient, mock_llm, fake_session: FakeAsyncSession
 ) -> None:
-    # 先塞一条 running run，再发暂停
-    fake_session.seed(_mk_run(status="running"))
+    """v0.7+：暂停不再是关键词短路（chat.py 删了 _PAUSE_PATTERNS）。
+    LLM 必须先输出 intent（让 chat_tools 走 preview_change 路径）才执行写操作。"""
+    # LLM 返回 chitchat（"暂停" 不是特殊 token）→ 走 chitchat，不写库
+    mock_llm('{"reply": "你是要暂停某个 goal 吗？请告诉我具体是哪个。", "intent": "chitchat", "args": {}}')
+    seeded_run = _mk_run(status="running")
+    fake_session.seed(seeded_run)
     await fake_session.flush()
-    r1 = await client.post("/api/v1/chat", json={"message": "发一条笔记"})
-    assert r1.status_code == 200
-    r2 = await client.post("/api/v1/chat", json={"message": "暂停"})
-    assert r2.status_code == 200
-    body = r2.json()
-    assert body["action"]["type"] == "pause_all"
-    assert body["action"]["payload"]["cancelled"] >= 1
+    r = await client.post("/api/v1/chat", json={"message": "暂停"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["action"]["type"] == "chitchat"
+    # 验证 DB 没被改：seeded 的 run 仍在 store 里且 status=running
+    stored = fake_session._db.store.get((AgentRun, seeded_run.id))
+    assert stored is not None
+    assert stored.status == "running"
 
 
 @pytest.mark.asyncio

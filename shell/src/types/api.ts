@@ -327,16 +327,43 @@ export interface ChatRequest {
   session_id?: string;
 }
 
+/** 与后端 matrix.api.schemas.chat.ChatActionType 一一对应。
+ *  前端按 type 分支渲染（ask_data → 表格，preview_change → 确认弹窗，等）。
+ */
+export type ChatActionKind =
+  // === 正常场景 ===
+  | 'ask_data'
+  | 'diagnose'
+  | 'preview_change'
+  | 'apply_change'
+  | 'browse_kb'
+  | 'chitchat'
+  // === 控制类 ===
+  | 'noop'
+  // === 错误兜底 ===
+  | 'llm_error'
+  | 'parse_error'
+  | 'unknown_intent'
+  | 'missing_args'
+  | 'batch_too_large'
+  | 'partial_success';
+
 export interface ChatAction {
-  type: string;
+  type: ChatActionKind;
   payload?: Record<string, unknown>;
+  /** 仅 preview_change 为 true；前端必须显示"确认/取消"按钮 */
+  needs_confirmation?: boolean;
+  /** 后端生成的 UUID；前端用 `/confirm <token>` 触发 apply_change */
+  confirmation_token?: string;
 }
 
 export interface ChatResponse {
   reply: string;
-  theme_confirmed?: boolean;
-  theme_payload?: ThemeTarget | Record<string, unknown> | null;
   action?: ChatAction;
+  /** 透传 ChatAction.confirmation_token */
+  confirmation_token?: string;
+  /** 错误类的可读补充，UI 直接展示 */
+  error_hint?: string;
 }
 
 // ---------- List envelopes ----------
