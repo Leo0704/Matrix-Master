@@ -7,6 +7,8 @@ import type {
   KbSearchRequest,
   KbSearchHit,
   KbType,
+  ViralIngestRequest,
+  ViralIngestResponse,
 } from '@/types/api';
 
 export interface KbListParams {
@@ -36,6 +38,15 @@ export function useCreateKbDocument() {
   return useMutation({
     mutationFn: (body: KbDocumentCreate) =>
       apiClient.post<KbDocument>('/kb/documents', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['kb-documents'] }),
+  });
+}
+
+export function useIngestViral() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: ViralIngestRequest) =>
+      apiClient.post<ViralIngestResponse>('/kb/ingest-viral', body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['kb-documents'] }),
   });
 }

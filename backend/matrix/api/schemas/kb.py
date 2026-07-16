@@ -12,7 +12,8 @@ from pydantic import BaseModel, Field
 
 
 KbType = Literal[
-    "brand", "persona", "rule", "topic", "history", "template", "product"
+    "brand", "persona", "rule", "topic", "history", "template", "product",
+    "strategy_card",
 ]
 
 
@@ -84,6 +85,17 @@ class KbPublishResponse(BaseModel):
     is_published: bool
 
 
+class ViralIngestRequest(BaseModel):
+    raw_text: str = Field(..., min_length=1, description="粘贴的爆款原文")
+    title: Optional[str] = None
+    metrics: Optional[dict[str, int]] = None
+
+
+class ViralIngestResponse(BaseModel):
+    history: KbDocument
+    strategy_card_pending: bool = False
+
+
 __all__ = [
     "KbType",
     "KbDocument",
@@ -95,4 +107,6 @@ __all__ = [
     "KbSearchResponse",
     "KbPublishRequest",
     "KbPublishResponse",
+    "ViralIngestRequest",
+    "ViralIngestResponse",
 ]

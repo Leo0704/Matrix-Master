@@ -10,6 +10,7 @@ import {
 } from '@/hooks/use-kb';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { RuleForm } from '@/components/kb/rule-form';
+import { ViralIngestForm } from '@/components/kb/viral-ingest-form';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
@@ -74,6 +75,7 @@ export function KB() {
           <TabsTrigger value="persona">人设</TabsTrigger>
           <TabsTrigger value="rule">规则</TabsTrigger>
           <TabsTrigger value="history">历史爆款</TabsTrigger>
+          <TabsTrigger value="strategy_card">套路卡</TabsTrigger>
         </TabsList>
 
         <TabsContent value="brand" className="space-y-4">
@@ -87,6 +89,9 @@ export function KB() {
         </TabsContent>
         <TabsContent value="history" className="space-y-4">
           <TypeTab ktype="history" label="历史爆款" />
+        </TabsContent>
+        <TabsContent value="strategy_card" className="space-y-4">
+          <StrategyCardTab />
         </TabsContent>
       </Tabs>
     </div>
@@ -301,6 +306,7 @@ function TypeTab({ ktype, label }: { ktype: 'brand' | 'persona' | 'history'; lab
   const { data, isLoading, error, refetch } = useKbDocuments({ type: ktype });
   const deleteMut = useDeleteKbDocument();
   const [open, setOpen] = useState(false);
+  const [pasteOpen, setPasteOpen] = useState(false);
 
   const items = data?.items ?? [];
 
@@ -318,20 +324,43 @@ function TypeTab({ ktype, label }: { ktype: 'brand' | 'persona' | 'history'; lab
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">{label}：{TYPE_HINTS[ktype]}</p>
-        <Dialog open={open} onOpenChange={setOpen}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="mr-1 h-4 w-4" /> 上传{label}
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>上传{label}</DialogTitle>
-              <DialogDescription>支持 .md / .txt 文件。提交后自动分段理解 + 立即生效。</DialogDescription>
-            </DialogHeader>
-            <TypeForm ktype={ktype} onCancel={() => setOpen(false)} />
-          </DialogContent>
-        </Dialog>
+        <div className="flex items-center gap-2">
+          {ktype === 'history' && (
+            <Dialog open={pasteOpen} onOpenChange={setPasteOpen}>
+              <DialogTrigger asChild>
+                <Button variant="outline">
+                  <Plus className="mr-1 h-4 w-4" /> 粘贴爆款文案
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>粘贴爆款文案</DialogTitle>
+                  <DialogDescription>
+                    把别人的小红书爆款正文整段粘进来，AI 自动拆解「为什么火」并入库。同时会生成一张待发布的「套路卡」。
+                  </DialogDescription>
+                </DialogHeader>
+                <ViralIngestForm
+                  onDone={() => setPasteOpen(false)}
+                  onCancel={() => setPasteOpen(false)}
+                />
+              </DialogContent>
+            </Dialog>
+          )}
+          <Dialog open={open} onOpenChange={setOpen}>
+            <DialogTrigger asChild>
+              <Button>
+                <Plus className="mr-1 h-4 w-4" /> 上传{label}
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>上传{label}</DialogTitle>
+                <DialogDescription>支持 .md / .txt 文件。提交后自动分段理解 + 立即生效。</DialogDescription>
+              </DialogHeader>
+              <TypeForm ktype={ktype} onCancel={() => setOpen(false)} />
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
       {isLoading && <LoadingBlock />}
@@ -443,5 +472,121 @@ function TypeForm({ ktype, onCancel }: {
         </Button>
       </div>
     </div>
+  );
+}
+
+
+// ---------- 套路卡：AI 从爆款提炼的可复用套路，草稿需人工发布 ----------
+
+/** 尝试把 strategy_card 的 JSON content 解析成 lessons 列表；失败则原样返回。 */
+function parseLessons(content: string): string[] {
+  try {
+    const obj = JSON.parse(content);
+    const lessons = obj?.lessons;
+    if (Array.isArray(lessons)) return lessons.map((x) => String(x));
+  } catch {
+    /* 老格式或非 JSON：降级为整段文本 */
+  }
+  return content ? [content] : [];
+}
+
+function StrategyCardTab() {
+  const { data, isLoading, error, refetch } = useKbDocuments({ type: 'strategy_card' });
+  const publishMut = usePublishKbDocument();
+  const deleteMut = useDeleteKbDocument();
+
+  const items = data?.items ?? [];
+
+  async function handlePublish(doc: KbDocument) {
+    try {
+      await publishMut.mutateAsync({ id: doc.id, reviewer: 'operator' });
+      toast({ title: '已发布', description: 'AI 写新笔记时会参考它' });
+    } catch (e) {
+      toast({ title: '发布失败', description: (e as Error).message, variant: 'destructive' });
+    }
+  }
+
+  async function handleDelete(doc: KbDocument) {
+    if (!confirm(`确认删除「${doc.title || doc.id.slice(0, 8)}」？`)) return;
+    try {
+      await deleteMut.mutateAsync(doc.id);
+      toast({ title: '已删除' });
+    } catch (e) {
+      toast({ title: '删除失败', description: (e as Error).message, variant: 'destructive' });
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        套路卡：AI 从爆款里提炼的可复用套路。粘贴爆款文案时自动生成，<b>默认草稿</b>，点「发布」后 AI 写新笔记时才会参考。
+      </p>
+
+      {isLoading && <LoadingBlock />}
+      {error && <ErrorState error={error} onRetry={() => refetch()} />}
+      {!isLoading && items.length === 0 && (
+        <EmptyState title="还没有套路卡" description="去「历史爆款」tab 粘贴一篇爆款文案，AI 会自动提炼" />
+      )}
+
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {items.map((d) => (
+          <StrategyCardCard
+            key={d.id}
+            doc={d}
+            onPublish={() => handlePublish(d)}
+            onDelete={() => handleDelete(d)}
+            publishing={publishMut.isPending}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StrategyCardCard({
+  doc,
+  onPublish,
+  onDelete,
+  publishing,
+}: {
+  doc: KbDocument;
+  onPublish: () => void;
+  onDelete: () => void;
+  publishing: boolean;
+}) {
+  const lessons = useMemo(() => parseLessons(doc.content ?? ''), [doc.content]);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center justify-between text-base">
+          <span className="truncate">{doc.title || '(无标题)'}</span>
+          {doc.is_published ? (
+            <Badge variant="default" className="bg-emerald-500/20 text-emerald-700">
+              <CheckCircle2 className="mr-1 h-3 w-3" /> 已发布
+            </Badge>
+          ) : (
+            <Badge variant="muted">草稿</Badge>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        <ul className="list-disc space-y-1 pl-4 text-muted-foreground">
+          {lessons.slice(0, 6).map((l, i) => (
+            <li key={i} className="line-clamp-2">{l}</li>
+          ))}
+        </ul>
+        <div className="flex items-center justify-end gap-1 pt-1">
+          {!doc.is_published && (
+            <Button variant="ghost" size="sm" onClick={onPublish} disabled={publishing}>
+              发布
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={onDelete} className="text-destructive">
+            <Trash2 className="h-3 w-3" />
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

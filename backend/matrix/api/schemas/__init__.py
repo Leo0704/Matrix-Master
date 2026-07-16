@@ -56,6 +56,8 @@ from matrix.api.schemas.kb import (
     KbSearchRequest,
     KbSearchResponse,
     KbType,
+    ViralIngestRequest,
+    ViralIngestResponse,
 )
 from matrix.api.schemas.note import Note, NoteCreate, NoteListResponse, NoteUpdate
 from matrix.api.schemas.notification import (
@@ -123,6 +125,8 @@ __all__ = [
     "KbSearchRequest",
     "KbSearchResponse",
     "KbType",
+    "ViralIngestRequest",
+    "ViralIngestResponse",
     "Note",
     "NoteCreate",
     "NoteListResponse",

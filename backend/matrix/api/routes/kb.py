@@ -33,6 +33,8 @@ from matrix.api.schemas import (
     KbSearchHit,
     KbSearchRequest,
     KbSearchResponse,
+    ViralIngestRequest,
+    ViralIngestResponse,
 )
 from matrix.db.models import KbDocument as KbDocumentORM
 from matrix.kb._singleton import get_embedder
@@ -171,6 +173,53 @@ async def create_document(
         published=body.is_published,
     )
     return _to_schema(doc)
+
+
+@router.post(
+    "/ingest-viral",
+    response_model=ViralIngestResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def ingest_viral(
+    body: ViralIngestRequest, session: AsyncSession = Depends(get_db)
+) -> ViralIngestResponse:
+    """粘贴一篇爆款原文 → LLM 拆解 → 写 KB。
+
+    存一条 ``history``（直接发布，供 AI 检索参考）+ 可选一张 ``strategy_card``
+    （草稿，人工发布后 draft 才召回）。
+    """
+    if not body.raw_text or not body.raw_text.strip():
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "raw_text must be non-empty"
+        )
+
+    try:
+        embedder = await _get_embedder()
+    except Exception as exc:
+        logger.exception("kb.ingest_viral.embedder_unavailable")
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            f"embedding service unavailable: {exc}",
+        ) from exc
+
+    from matrix.agent.ingest_viral import ingest_viral_text_to_kb
+
+    history_doc, card_pending = await ingest_viral_text_to_kb(
+        session,
+        embedder,
+        raw_text=body.raw_text,
+        title=body.title,
+        metrics=body.metrics,
+    )
+    await session.commit()
+    logger.info(
+        "kb.api.ingest_viral",
+        doc_id=history_doc.id,
+        strategy_card_pending=card_pending,
+    )
+    return ViralIngestResponse(
+        history=_to_schema(history_doc), strategy_card_pending=card_pending
+    )
 
 
 @router.post(

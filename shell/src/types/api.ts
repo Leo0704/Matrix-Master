@@ -390,7 +390,8 @@ export type KbType =
   | 'brand'
   | 'persona'
   | 'rule'
-  | 'history';
+  | 'history'
+  | 'strategy_card';
 
 export interface KbDocument {
   id: string;
@@ -439,4 +440,15 @@ export interface KbSearchHit {
   score: number;
   sources: string[];
   metadata: Record<string, unknown>;
+}
+
+export interface ViralIngestRequest {
+  raw_text: string;
+  title?: string;
+  metrics?: Record<string, number>;
+}
+
+export interface ViralIngestResponse {
+  history: KbDocument;
+  strategy_card_pending: boolean;
 }
