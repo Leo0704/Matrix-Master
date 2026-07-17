@@ -113,32 +113,43 @@ async def db_note_writer(record: dict[str, Any]) -> Any:
     from matrix.db.session import get_session
 
     payload = dict(record)
-    # INSERT ... ON CONFLICT (id) DO UPDATE：幂等，DRAFT/PUBLISH 多次调用安全
-    stmt = pg_insert(Note).values(**payload)
-    update_cols = {
-        c: stmt.excluded[c]
-        for c in (
-            "account_id",
-            # v0.7+ 第 2 期：goal_id/run_id 加入 upsert 白名单，让
-            # DRAFT→PUBLISH 多次写时 goal/run 关联保持一致
-            "goal_id",
-            "run_id",
-            "title",
-            "content",
-            "images",
-            "tags",
-            "status",
-            "platform_note_id",
-            "platform_url",
-            "published_at",
-            # Phase 1：让 publish_node 排 24h 延时采集时写入 scheduled_collect_at
-            "scheduled_collect_at",
-        )
-        if c in payload
-    }
-    stmt = stmt.on_conflict_do_update(index_elements=[Note.id], set_=update_cols)
+    # 可更新的白名单列（account_id/goal_id/run_id/title/content/images/tags/status/
+    # platform_note_id/platform_url/published_at/scheduled_collect_at）。
+    _UPSERT_COLS = (
+        "account_id",
+        # v0.7+ 第 2 期：goal_id/run_id 加入 upsert 白名单，让
+        # DRAFT→PUBLISH 多次写时 goal/run 关联保持一致
+        "goal_id",
+        "run_id",
+        "title",
+        "content",
+        "images",
+        "tags",
+        "status",
+        "platform_note_id",
+        "platform_url",
+        "published_at",
+        # Phase 1：让 publish_node 排 24h 延时采集时写入 scheduled_collect_at
+        "scheduled_collect_at",
+    )
     async with get_session() as session:
-        await session.execute(stmt)
+        # mark_failed 等部分写只传 id/goal_id/run_id/business_id/status，
+        # 缺 title/content（NOT NULL）。若走 INSERT...ON CONFLICT，
+        # asyncpg 在 bind 阶段就报 NotNullViolation（即使行存在该走 UPDATE
+        # 分支）。故缺 title 时走纯 UPDATE（不 INSERT），其余走幂等 upsert。
+        if "title" not in payload:
+            from sqlalchemy import update as sa_update
+            up_cols = {c: payload[c] for c in _UPSERT_COLS if c in payload}
+            await session.execute(
+                sa_update(Note).where(Note.id == payload["id"]).values(**up_cols)
+            )
+        else:
+            stmt = pg_insert(Note).values(**payload)
+            update_cols = {
+                c: stmt.excluded[c] for c in _UPSERT_COLS if c in payload
+            }
+            stmt = stmt.on_conflict_do_update(index_elements=[Note.id], set_=update_cols)
+            await session.execute(stmt)
         # 读回拿 server-default id（caller 传了 id 就直接用）
         row = (
             await session.execute(select(Note).where(Note.id == payload["id"]))

@@ -110,12 +110,35 @@ class CandidateTopic(TypedDict, total=False):
 
 
 class AgentState(TypedDict, total=False):
-    """状态机 state。langgraph 节点返回 dict 仅做 partial update。"""
+    """状态机 state。langgraph 节点返回 dict 仅做 partial update。
+
+    v0.7+ 修漏写：``business_id`` / ``note_id`` / ``entry`` / ``goal_text`` /
+    ``goal_type`` / ``preassigned_slot`` / ``round_number`` 必须在 schema 里——
+    LangGraph 的 ``StateGraph(Schema)`` 会把**不在 schema 的输入 key 过滤掉**
+    （实测：节点能读到输入的非 schema key，但节点返回的非 schema key 不会被
+    merge 进 graph state，下一跳节点收不到）。之前 ``start_run`` 注入了
+    ``business_id`` 到 state，但 ``AgentState`` 没声明该字段，导致 RESEARCH→DRAFT
+    跨节点时 business_id 被丢弃，DRAFT/PUBLISH 落 ``notes`` 时 business_id=None
+    → NOT NULL 违规 → 整条 run 失败。
+    """
 
     # 关联
     run_id: UUID
     goal_id: UUID | None
     plan_id: UUID | None
+    # v0.7+ 业务归属：orchestrator 注入 payload，start_run 透传 state，
+    # DRAFT/PUBLISH 落 notes、ANALYZE 写 KB 都从这里取（notes.business_id NOT NULL）
+    business_id: str
+    # v0.7+ 独立复盘 run（entry="ANALYZE"）：复盘对象笔记 id
+    note_id: str
+    # 入口标识（START→RESEARCH/ANALYZE 路由用；route_idle 读）
+    entry: str
+    # 主题文本（RESEARCH/DRAFT 拼 prompt 用；brief 优先）
+    goal_text: str
+    goal_type: str
+    # v0.7+ 预分配 slot（orchestrator._prepare_round 写入；SCHEDULE 复用）
+    preassigned_slot: dict[str, Any]
+    round_number: int
 
     # 当前节点（由 langgraph 自动维护；冗余便于读 checkpoint）
     current_state: str

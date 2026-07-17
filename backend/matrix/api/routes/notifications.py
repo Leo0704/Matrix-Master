@@ -46,7 +46,9 @@ def _to_schema(n: NotificationORM) -> NotificationItem:
         payload=n.payload or {},
         read_at=n.read_at,
         created_at=n.created_at,
-        business_id=n.business_id,  # v0.7+ 业务归属
+        # v0.7+ 业务归属：notifications 表当前无 business_id 列（未加 migration），
+        # 用 getattr 安全访问避免 AttributeError；待后续 migration 加列后改成 n.business_id。
+        business_id=getattr(n, "business_id", None),
     )
 
 
