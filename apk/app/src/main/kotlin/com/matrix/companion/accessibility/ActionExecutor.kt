@@ -7,6 +7,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.util.Log
 
 /**
  * High-level actions on top of [AccessibilityDriver]. The handlers
@@ -30,7 +31,8 @@ class ActionExecutor(
         // Wait up to 5 s for the app to take focus.
         val ok = withTimeoutOrNull(5_000) {
             while (true) {
-                val pkg = (driver.rootNode()?.packageName ?: "") .toString()
+                val pkg = (driver.rootNode()?.packageName ?: "").toString()
+                Log.d("MatrixExec", "openApp: polling pkg=$pkg want=$packageName")
                 if (pkg == packageName) return@withTimeoutOrNull true
                 delay(150)
             }

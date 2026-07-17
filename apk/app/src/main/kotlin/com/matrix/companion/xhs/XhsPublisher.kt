@@ -73,10 +73,26 @@ class XhsPublisher(
         }
         Jitter.sleep(800L)
 
-        // ---- Step 2: tap "发布" / "发布笔记" ----
+        // ---- Step 2: tap "+" publish tab → then "发布笔记" ----
+        // On modern XHS the bottom bar has a centered "+" button that opens
+        // a type-selector (发布笔记 / 发布视频 …). We must tap it first;
+        // BTN_CREATE_NOTE (text="发布笔记") only appears on that selector.
+        when (val r = actions.tap(XhsSelectors.TAB_PUBLISH)) {
+            is ApiResult.Ok -> Unit
+            is ApiResult.Err -> return err("tap publish-tab", r)
+        }
+        Jitter.sleep(800L)
+        // On some XHS builds the "+" goes straight to the note editor
+        // (skipping the type selector). Try BTN_CREATE_NOTE; if not found,
+        // assume we're already on the editor and continue.
         when (val r = actions.tap(XhsSelectors.BTN_CREATE_NOTE)) {
             is ApiResult.Ok -> Unit
-            is ApiResult.Err -> return err("tap create-note", r)
+            is ApiResult.Err -> {
+                if (r.code != ErrorCode.SELECTOR_NOT_FOUND) {
+                    return err("tap create-note", r)
+                }
+                // Selector not found → "+" went straight to editor.
+            }
         }
         Jitter.sleep(600L)
 

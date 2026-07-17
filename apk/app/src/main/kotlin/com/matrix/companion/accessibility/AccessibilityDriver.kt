@@ -11,10 +11,12 @@ import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import com.matrix.companion.util.ApiResult
 import com.matrix.companion.util.ErrorCode
 import com.matrix.companion.util.Jitter
 import com.matrix.companion.util.Logx
+import android.util.Log
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.ByteArrayOutputStream
@@ -43,7 +45,44 @@ class AccessibilityDriver(private val serviceRef: () -> AccessibilityService?) {
         return if (lastEventAt == 0L) Long.MAX_VALUE else (now - lastEventAt) / 1000L
     }
 
-    fun rootNode(): AccessibilityNodeInfo? = serviceRef()?.rootInActiveWindow
+    /**
+     * Get the root node of the currently *foreground* app's window.
+     *
+     * On stock Android, [AccessibilityService.getRootInActiveWindow] returns
+     * the active window's root. However, on HyperOS / MIUI (and some other
+     * OEM ROMs), `rootInActiveWindow` reliably returns the *accessibility
+     * service's own* window rather than the foreground app — making every
+     * selector lookup, openApp focus check, and /device/status `app` field
+     * report our own package instead of the real foreground app.
+     *
+     * Fix: try `rootInActiveWindow` first; if it belongs to us (or is null),
+     * fall back to [getWindows] and pick the topmost TYPE_APPLICATION window
+     * whose root belongs to a different package.
+     */
+    fun rootNode(): AccessibilityNodeInfo? {
+        val service = serviceRef() ?: return null
+        val ownPkg = service.packageName?.toString()
+        // 1) Fast path — works on most stock Android.
+        val root = service.rootInActiveWindow
+        if (root != null && root.packageName?.toString() != ownPkg) {
+            Log.d(TAG, "rootNode: rootInActiveWindow pkg=${root.packageName} (non-own, fast path)")
+            return root
+        }
+        // 2) HyperOS / MIUI fallback.
+        root?.recycle()
+        val windows = service.windows
+        val winPkgs = windows.joinToString(",") { "${it.type}:${it.layer}:${it.root?.packageName}" }
+        Log.d(TAG, "rootNode: rootInActiveWindow was own/null; windows=[${winPkgs}] ownPkg=$ownPkg")
+        return windows
+            .filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+            .maxByOrNull { it.layer }
+            ?.root
+            ?.takeIf { it.packageName?.toString() != ownPkg }
+    }
+
+    companion object {
+        private const val TAG = "MatrixDriver"
+    }
 
     fun findFirst(selector: Selector): UiNode? {
         val root = rootNode() ?: return null
@@ -128,9 +167,7 @@ class AccessibilityDriver(private val serviceRef: () -> AccessibilityService?) {
      *   snapshot) so the parent chain is still available.
      */
     suspend fun tapBySelector(selector: Selector): ApiResult<Unit> {
-        val service = serviceRef()
-            ?: return ApiResult.Err(ErrorCode.DEVICE_OFFLINE, "accessibility not bound", retryable = false)
-        val root = service.rootInActiveWindow
+        val root = rootNode()
             ?: return ApiResult.Err(ErrorCode.DEVICE_OFFLINE, "no active window", retryable = true)
         val matched = walkForTap(root, selector)
         if (matched == null) {

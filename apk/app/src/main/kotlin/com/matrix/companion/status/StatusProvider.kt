@@ -25,14 +25,12 @@ class StatusProvider(private val context: Context) {
     )
 
     fun foregroundApp(): String? {
+        // Android 5.0+ deprecated getRunningTasks — it only returns the
+        // caller's own app. Use the accessibility driver's rootNode()
+        // which traverses getWindows() on HyperOS where rootInActiveWindow
+        // is broken and returns our own window.
         return try {
-            val am = Class.forName("android.app.ActivityManager")
-            val getTasks = am.getMethod("getRunningTasks", Int::class.javaPrimitiveType)
-            @Suppress("UNCHECKED_CAST")
-            val tasks = getTasks.invoke(context.getSystemService(Context.ACTIVITY_SERVICE), 1)
-                as? List<*>
-            (tasks?.firstOrNull() as? android.app.ActivityManager.RunningTaskInfo)?.topActivity
-                ?.packageName
+            App.instance.driver.rootNode()?.packageName?.toString()
         } catch (_: Throwable) { null }
     }
 

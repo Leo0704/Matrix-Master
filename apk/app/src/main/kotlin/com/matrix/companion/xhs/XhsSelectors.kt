@@ -27,33 +27,60 @@ object XhsSelectors {
     const val PACKAGE = "com.xingin.xhs"
 
     // Tab bar (bottom).
-    val TAB_HOME = Selector.fromResourceId("com.xingin.xhs:id/tab_home", Selector.Text("首页"))
-    val TAB_DISCOVER = Selector.fromResourceId("com.xingin.xhs:id/tab_discover", Selector.Text("发现"))
-    val TAB_PUBLISH = Selector.fromResourceId("com.xingin.xhs:id/tab_publish", Selector.Text("发布"))
-    val TAB_MESSAGE = Selector.fromResourceId("com.xingin.xhs:id/tab_msg", Selector.Text("消息"))
-    val TAB_PROFILE = Selector.fromResourceId("com.xingin.xhs:id/tab_profile", Selector.Text("我"))
+    // XHS obfuscates resource-IDs to 0_resource_name_obfuscated, so
+    // ContentDesc is the most reliable fallback.
+    val TAB_HOME = Selector.fromResourceId(
+        "com.xingin.xhs:id/tab_home",
+        Selector.Text("首页"),
+        Selector.ContentDesc("首页"),
+    )
+    val TAB_DISCOVER = Selector.fromResourceId(
+        "com.xingin.xhs:id/tab_discover",
+        Selector.Text("发现"),
+        Selector.ContentDesc("发现"),
+    )
+    val TAB_PUBLISH = Selector.fromResourceId(
+        "com.xingin.xhs:id/tab_publish",
+        Selector.Text("发布"),
+        Selector.ContentDesc("发布"),
+    )
+    val TAB_MESSAGE = Selector.fromResourceId(
+        "com.xingin.xhs:id/tab_msg",
+        Selector.Text("消息"),
+        Selector.ContentDesc("消息"),
+    )
+    val TAB_PROFILE = Selector.fromResourceId(
+        "com.xingin.xhs:id/tab_profile",
+        Selector.Text("我"),
+        Selector.ContentDesc("我"),
+    )
 
     // Publish flow.
     val BTN_CREATE_NOTE = Selector.fromResourceId(
         "com.xingin.xhs:id/btn_create_note",
         Selector.Text("发布笔记"),
+        Selector.ContentDesc("发布笔记"),
     )
     val BTN_NEXT_STEP = Selector.fromResourceId(
         "com.xingin.xhs:id/btn_next",
         Selector.Text("下一步"),
+        Selector.ContentDesc("下一步"),
     )
     val BTN_PUBLISH_FINAL = Selector.fromResourceId(
         "com.xingin.xhs:id/btn_publish",
         Selector.Text("发布"),
         Selector.Text("发布笔记"),
+        Selector.ContentDesc("发布"),
     )
     val EDIT_TITLE = Selector.fromResourceId(
         "com.xingin.xhs:id/edit_title",
         Selector.Text("填写标题会有更多赞哦"),
+        Selector.ContentDesc("填写标题会有更多赞哦"),
     )
     val EDIT_CONTENT = Selector.fromResourceId(
         "com.xingin.xhs:id/edit_content",
         Selector.Text("输入正文"),
+        Selector.ContentDesc("输入正文"),
     )
     val BTN_ADD_IMAGE = Selector.fromResourceId(
         "com.xingin.xhs:id/btn_add_pic",
