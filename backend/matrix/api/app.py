@@ -163,7 +163,10 @@ def create_app(
                     scanner,
                     config=WatchdogConfig(
                         poll_interval_sec=30.0,
-                        stuck_threshold_sec=600,
+                        # v0.7+ 修误杀：判定已改为"最近 checkpoint 新鲜度"；
+                        # stagger 15min/台 × N 台 + APK 发布耗时，1h 留足余量
+                        # （旧值 600s 会让第 2 台起正常 sleep 等发布的 run 被误判）
+                        stuck_threshold_sec=3600,
                         dry_run=False,  # worker 失败重试耗尽后由 watchdog 兜底标 timeout
                     ),
                 )
