@@ -70,8 +70,11 @@ class DeviceRegistrar(private val context: Context) {
     @Serializable
     data class PairResponse(
         // P2-1 real-device test fix: master returns flat
-        // `{key_id, hmac_key, pair_code}` (DevicePairResponse schema), not
+        // `{device_id, key_id, hmac_key, pair_code}` (DevicePairResponse schema), not
         // the old envelope `{ok, data: {hmac_secret}, error}`. Align here.
+        // device_id: 配对码反查出的真实设备行 UUID；配对成功后 APK 必须采纳它
+        // 覆盖本地随机生成的 device_id，否则后续心跳发的 id 查不到行。
+        val device_id: String = "",
         val key_id: String = "",
         val hmac_key: String = "",
         val pair_code: String? = null,
@@ -135,6 +138,11 @@ class DeviceRegistrar(private val context: Context) {
             val isOk = httpResp.status.value in 200..299
             if (isOk) {
                 val resp: PairResponse = httpResp.body()
+                // 采纳服务端 device_id（配对码反查出的真实设备行 UUID），覆盖本地
+                // 随机生成的那个——后续心跳 / HMAC 签名都用这个 id 才对得上。
+                if (resp.device_id.isNotBlank()) {
+                    adoptDeviceId(resp.device_id)
+                }
                 val secretB64 = resp.hmac_key
                 if (secretB64.isBlank()) {
                     throw IllegalStateException(
@@ -171,6 +179,19 @@ class DeviceRegistrar(private val context: Context) {
         val fresh = UUID.randomUUID().toString()
         prefs.edit().putString(KEY_DEVICE_ID, fresh).apply()
         return fresh
+    }
+
+    /**
+     * 配对成功后由主控回传的真实 device_id（服务端 device 行的 UUID）。
+     * 覆盖本地随机生成的 device_id，使后续心跳 / HMAC 签名与服务端 device 行对齐。
+     */
+    fun adoptDeviceId(serverDeviceId: String) {
+        val prefs = context.getSharedPreferences("matrix_companion_meta", Context.MODE_PRIVATE)
+        val current = prefs.getString(KEY_DEVICE_ID, null)
+        if (current != serverDeviceId) {
+            prefs.edit().putString(KEY_DEVICE_ID, serverDeviceId).apply()
+            Logx.i("adopted server device_id=$serverDeviceId (was=$current)")
+        }
     }
 
     companion object {

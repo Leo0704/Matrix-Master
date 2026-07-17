@@ -66,6 +66,11 @@ class DevicePairRequest(BaseModel):
 
 
 class DevicePairResponse(BaseModel):
+    # 配对码反查出的真实 device_id（v0.7+ 端到端修复）：APK 本地生成的
+    # device_id 与服务端 device 行的 UUID 不是一个体系，历史上导致心跳
+    # 发的 device_id 查不到行 → 404/secret not provisioned。pair 成功后
+    # APK 必须采纳此 device_id 覆盖本地那个，后续心跳 / 签名才对得上。
+    device_id: uuid.UUID = Field(..., description="配对成功的设备行 UUID；APK 应采纳并覆盖本地 device_id")
     key_id: str = Field(..., description="主控签发的密钥 ID")
     hmac_key: str = Field(..., description="base64 编码的 HMAC 密钥")
     # P2-1 测试期：admin 触发生成配对码的 endpoint 需要把配对码回在响应里

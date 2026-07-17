@@ -20,6 +20,10 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from matrix import __version__
+# 设备侧路由（heartbeat / login_state 等）。自带 prefix=/api/v1/devices，
+# 必须在 devices_routes 之后 include 以让 UI 侧 pair/list 优先匹配。
+from matrix.device import device_router
+
 from matrix.api.routes import (
     accounts as accounts_routes,
     agent_runs as agent_runs_routes,
@@ -397,6 +401,12 @@ def create_app(
     API_PREFIX = "/api/v1"
     app.include_router(health_routes.router, prefix=API_PREFIX)
     app.include_router(devices_routes.router, prefix=API_PREFIX)
+    # 设备侧路由（heartbeat / login_state / register 等）。该 router 自带
+    # prefix="/api/v1/devices"，故此处不再传 prefix 以免路径重复。
+    # 必须在 devices_routes 之后挂载：两者均有 `GET ""`/`GET /{id}`/`POST /{id}/pair`，
+    # Starlette 按注册顺序首匹配，devices_routes 在前 → 其（已修复的）pair/list/get
+    # 优先生效；device_router 仅贡献独有的 heartbeat/login_state/register。
+    app.include_router(device_router)
     app.include_router(accounts_routes.router, prefix=API_PREFIX)
     app.include_router(businesses_routes.router, prefix=API_PREFIX)  # v0.7+ 业务模型重构
     app.include_router(personas_routes.router, prefix=API_PREFIX)

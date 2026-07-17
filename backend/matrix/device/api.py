@@ -15,7 +15,20 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from matrix.db.models import Device
-from matrix.db.session import get_session
+from matrix.db.session import get_session_factory
+
+
+async def get_session():
+    """与 matrix.api.deps.get_db 等价的本地副本。直接定义而非 import 是为避免
+    ``device → api.deps → api.app → device`` 的循环 import（uvicorn 以
+    ``matrix.api.app`` 为入口时顺序碰巧不炸，但独立 import / 测试会崩）。"""
+    session = get_session_factory()()
+    try:
+        yield session
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
 from matrix.device.hmac import (
     verify_signature,
 )

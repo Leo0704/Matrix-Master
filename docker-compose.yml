@@ -122,6 +122,10 @@ services:
       DATABASE_URL: postgresql+asyncpg://matrix:matrix_dev@postgres:5432/matrix
       PYTHONPATH: /app/backend
       PATH: /app/.venv/bin:$PATH
+      # dev：macOS Docker Desktop 容器无法直连手机 WiFi IP，经 adb forward +
+      # host.docker.internal 才可达 APK HttpServer(8765)。需宿主保持
+      # `adb forward tcp:8765 tcp:8765`。
+      MATRIX_DEV_APK_HOST: host.docker.internal
     volumes:
       # 开发态：源码改动立即生效，uvicorn --reload 自动重启
       - ./backend:/app/backend

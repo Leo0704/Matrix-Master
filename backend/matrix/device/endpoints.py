@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import os
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -46,7 +47,11 @@ class DeviceEndpointResolver:
             if not secret:
                 raise RuntimeError(f"device {device_id} HMAC secret is empty")
 
-            return ApkEndpoint(base_url=f"http://{device.tailnet_ip}:{self._port}", hmac_key=secret)
+            # dev 环境（macOS Docker Desktop）下容器无法直连手机 WiFi IP；
+            # 经 adb forward + host.docker.internal 才可达。设环境变量
+            # MATRIX_DEV_APK_HOST=host.docker.internal 即覆盖 tailnet_ip。
+            host = os.environ.get("MATRIX_DEV_APK_HOST") or device.tailnet_ip
+            return ApkEndpoint(base_url=f"http://{host}:{self._port}", hmac_key=secret)
 
 
 __all__ = ["ApkEndpoint", "DeviceEndpointResolver"]

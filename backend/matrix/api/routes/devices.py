@@ -109,18 +109,18 @@ def _purge_expired(
     return {c: v for c, v in codes.items() if v[1] > now}
 
 
-# In-process cache; loaded on first access, persisted on every mutation.
-_pair_codes_cache: Optional[dict[str, tuple[uuid.UUID, float, Optional[float]]]] = None
+# 注：不再保留进程内缓存。历史上 _pair_codes_cache 只在首次访问时 load
+# 一次文件、之后永不重读，而 _purge_expired 返回的是 copy，导致
+# _issue_pair_code/_claim_pair_code 在 copy 上改、写文件，但缓存本身
+# 从不刷新 → 新生成的码在同进程里"看不见"→ 配对永远 invalid。
+# 文件是唯一可信源（Docker bind mount 下 host=container 同一文件），
+# 每次读盘成本可忽略（配对低频）。
 
 
 def _codes() -> dict[str, tuple[uuid.UUID, float, Optional[float]]]:
-    global _pair_codes_cache
-    if _pair_codes_cache is None:
-        loaded = _load_pair_codes()
-        _pair_codes_cache = {
-            c: (uuid.UUID(d), e, cons) for c, (d, e, cons) in loaded.items()
-        }
-    return _pair_codes_cache
+    """每次都从磁盘重读——文件是唯一可信源。"""
+    loaded = _load_pair_codes()
+    return {c: (uuid.UUID(d), e, cons) for c, (d, e, cons) in loaded.items()}
 
 
 def _to_schema(
@@ -307,6 +307,7 @@ async def issue_pair_code_endpoint(
     code = _issue_pair_code(device_id)
     logger.info("admin.issue_pair_code", device_id=str(device_id), code=code)
     return DevicePairResponse(
+        device_id=device_id,
         key_id=f"admin-issued-{code}",
         hmac_key="",  # 不下发 secret，等 pair 时真发
         pair_code=code,
@@ -315,11 +316,12 @@ async def issue_pair_code_endpoint(
 
 @router.get("/{device_id}/_debug_pair_codes", response_model=dict)
 async def debug_pair_codes(device_id: uuid.UUID) -> dict:
-    """P2-1 测试期：返回 uvicorn 进程内 _pair_codes_cache 的内容 + 文件内容。
+    """P2-1 测试期：返回当前磁盘上的配对码内容（_codes 现为每次重读磁盘）。
 
-    用 docker exec 看不到 uvicorn 进程内变量，需要这个 endpoint。
+    历史：曾返回 uvicorn 进程内 _pair_codes_cache，但该缓存从不刷新
+    导致新生成的码在同进程里不可见；现已移除进程内缓存、以文件为唯一源。
     """
-    cache = _codes()  # ensure loaded
+    cache = _codes()
     purged = _purge_expired(cache)
     return {
         "device_id": str(device_id),
@@ -468,6 +470,7 @@ async def pair_device(
         logger.warning(f"pair_codes finalize failed (code auto-revives later): {e}")
 
     return DevicePairResponse(
+        device_id=real_device_id,
         key_id=issued.key_id,
         hmac_key=secret_value["secret"],
     )

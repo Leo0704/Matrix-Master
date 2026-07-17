@@ -26,7 +26,7 @@ import kotlinx.serialization.json.Json
 import java.util.UUID
 
 /**
- * Periodic POST to master's /api/v1/devices/heartbeat. On miss the master
+ * Periodic POST to master's /api/v1/devices/{id}/heartbeat. On miss the master
  * flags the device offline and (per threat-model.md §4) will refuse further
  * signed requests after grace window.
  *
@@ -88,7 +88,7 @@ class Heartbeat(
         for (delayMs in backoffsMs) {
             if (delayMs > 0L) delay(delayMs)
             val response = try {
-                sendOnce(body)
+                sendOnce(deviceId, body)
             } catch (t: Throwable) {
                 Logx.w("heartbeat.send_failed: ${t.javaClass.simpleName}: ${t.message}")
                 null
@@ -104,13 +104,13 @@ class Heartbeat(
         return null
     }
 
-    private suspend fun sendOnce(body: ByteArray): HttpResponse? {
+    private suspend fun sendOnce(deviceId: String, body: ByteArray): HttpResponse? {
         return try {
             val timestamp = (System.currentTimeMillis() / 1000L).toString()
             val requestId = UUID.randomUUID().toString()
             val signature = signer.sign(body, timestamp, requestId)
 
-            client.post("$masterUrl/api/v1/devices/heartbeat") {
+            client.post("$masterUrl/api/v1/devices/$deviceId/heartbeat") {
                 contentType(ContentType.Application.Json)
                 headers {
                     append(HmacAuth.HEADER_TIMESTAMP, timestamp)
