@@ -9,11 +9,12 @@
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from matrix.agent.watcher import (
     AgentRunWatchdog,
@@ -61,7 +62,7 @@ class TestWatchdogConfig:
     def test_defaults(self):
         cfg = WatchdogConfig()
         assert cfg.poll_interval_sec == 30.0
-        assert cfg.stuck_threshold_sec == 1800
+        assert cfg.stuck_threshold_sec == 3600
         # 生产默认 dry_run=False：作为 worker 失败重试耗尽后的兜底标 timeout
         assert cfg.dry_run is False
 
@@ -188,29 +189,144 @@ async def _sleep_small() -> None:
 
 
 class TestAgentRunScannerDBIntegration:
-    """DB 路径测试：依赖 PG（INET/JSONB 不兼容 sqlite 的）。
+    """DB 路径测试：依赖 docker-compose 里的 PostgreSQL。
 
-    当前 dev 环境无 PG → skip。产线 asyncpg 测应该走 docker-compose。
-    等 Phase 4 把 docker-compose 跑起来后这些测试自动激活。
+    测试约定：
+    - 用 ``DATABASE_URL`` 环境变量判断是否有 PG；无则 skip。
+    - 每个测试自建 engine + session factory，写入后立即 commit，
+      保证 ``AgentRunScanner`` 内部新建的 session 能读到数据。
     """
 
     @pytest.fixture(autouse=True)
     def _require_pg(self):
-        # 简单 gate：有 PG URL 环境变量才跑
-        pg_url = os.environ.get("MATRIX_TEST_DATABASE_URL", "")
+        pg_url = os.environ.get("DATABASE_URL", "")
         if not pg_url.startswith(("postgres", "postgresql")):
-            pytest.skip("requires MATRIX_TEST_DATABASE_URL=postgres://...")
+            pytest.skip("requires DATABASE_URL=postgres://...")
+
+    @pytest.fixture
+    async def _session_factory(self, engine):
+        """返回基于测试 engine 的 session maker（测试负责 commit）。"""
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        return sm
 
     @pytest.mark.asyncio
-    async def test_find_stuck_picks_old_running_only(self):
-        # 占位：配上 PG 后跑真测
-        pytest.skip("PG test infra not bootstrapped yet")
-        ...
+    async def test_find_stuck_picks_old_running_only(
+        self, engine, _session_factory
+    ):
+        from matrix.agent.watcher import AgentRunScanner
+        from matrix.db.models import AgentCheckpoint, AgentRun, Business
+
+        now = datetime.now(timezone.utc)
+        threshold = 600
+        cutoff = now - timedelta(seconds=threshold)
+
+        scanner = AgentRunScanner(_session_factory)
+
+        async with _session_factory() as session:
+            business = Business(
+                name="测试业务",
+                slug=f"test-{uuid4().hex[:8]}",
+                status="active",
+            )
+            session.add(business)
+            await session.flush()
+            business_id = business.id
+
+            # 场景 1：老 run + 新鲜 checkpoint → 不判 stuck
+            run_fresh = AgentRun(
+                status="running",
+                business_id=business_id,
+                started_at=now - timedelta(hours=2),
+            )
+            session.add(run_fresh)
+            await session.flush()
+            session.add(
+                AgentCheckpoint(
+                    run_id=run_fresh.id,
+                    ts=now - timedelta(seconds=30),  # 在阈值内
+                    from_state="IDLE",
+                    to_state="PUBLISH",
+                )
+            )
+
+            # 场景 2：老 run + checkpoint 停更 → 判 stuck
+            run_stale_cp = AgentRun(
+                status="running",
+                business_id=business_id,
+                started_at=now - timedelta(hours=2),
+            )
+            session.add(run_stale_cp)
+            await session.flush()
+            session.add(
+                AgentCheckpoint(
+                    run_id=run_stale_cp.id,
+                    ts=cutoff - timedelta(seconds=60),  # 超过阈值
+                    from_state="IDLE",
+                    to_state="PUBLISH",
+                )
+            )
+
+            # 场景 3：老 run + 无 checkpoint → 按 started_at 判 stuck
+            run_no_cp = AgentRun(
+                status="running",
+                business_id=business_id,
+                started_at=cutoff - timedelta(seconds=60),
+            )
+            session.add(run_no_cp)
+
+            # 对照：年轻 run + 无 checkpoint → 不判 stuck
+            run_young = AgentRun(
+                status="running",
+                business_id=business_id,
+                started_at=now - timedelta(seconds=30),
+            )
+            session.add(run_young)
+
+            await session.commit()
+
+        stuck = await scanner.find_stuck_runs(now, threshold)
+        stuck_ids = set(stuck)
+
+        assert run_fresh.id not in stuck_ids
+        assert run_stale_cp.id in stuck_ids
+        assert run_no_cp.id in stuck_ids
+        assert run_young.id not in stuck_ids
 
     @pytest.mark.asyncio
-    async def test_mark_timeout_updates_status_and_ended_at(self):
-        pytest.skip("PG test infra not bootstrapped yet")
-        ...
+    async def test_mark_timeout_updates_status_and_ended_at(
+        self, engine, _session_factory
+    ):
+        from matrix.agent.watcher import AgentRunScanner
+        from matrix.db.models import AgentRun, Business
+
+        now = datetime.now(timezone.utc)
+
+        scanner = AgentRunScanner(_session_factory)
+
+        async with _session_factory() as session:
+            business = Business(
+                name="测试业务",
+                slug=f"test-{uuid4().hex[:8]}",
+                status="active",
+            )
+            session.add(business)
+            await session.flush()
+
+            run = AgentRun(
+                status="running",
+                business_id=business.id,
+                started_at=now - timedelta(hours=1),
+            )
+            session.add(run)
+            await session.commit()
+            run_id = run.id
+
+        await scanner.mark_timeout(run_id, now, "test timeout")
+
+        async with _session_factory() as session:
+            refreshed = await session.get(AgentRun, run_id)
+            assert refreshed.status == "timeout"
+            assert refreshed.ended_at == now
 
 
 # 提前 import os 给 gate 用

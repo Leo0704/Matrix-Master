@@ -40,10 +40,11 @@ class WatchdogConfig:
     """watchdog 阈值集合（产线可在 app_config 调）。"""
 
     poll_interval_sec: float = 30.0
-    # 30 min：v0.7+ round-level stagger 最长可能让 run 阻塞 N×15min 等排期
-    # （N 设备 15min 错开，最坏 N-1 次等待 → 4 台 = 60 min；5 台 = 60 min）。
-    # 留 30 min 余量给 PUBLISH 实际执行时间。
-    stuck_threshold_sec: int = 1800
+    # 1h：v0.7+ round-level stagger 最长可能让 run 阻塞 N×15min 等排期
+    # （N 设备 15min 错开，最坏 20 台 → 300min；加上 LLM 耗时）。
+    # 以最近一次 checkpoint 的新鲜度作为判定依据后，1h 仍保留足够余量，
+    # 避免正常 sleep 等发布的 run 被误判为卡死。
+    stuck_threshold_sec: int = 3600
     dry_run: bool = False  # 默认开启真实标 timeout，作为 worker 失败重试耗尽后的兜底
 
 
@@ -66,11 +67,11 @@ class AgentRunScanner:
     """DB 默认扫描器（基于 SQLAlchemy AsyncSession）。
 
     判定逻辑：``status='running' AND ended_at IS NULL AND
-    started_at < now - threshold_sec``
+    COALESCE(最近 checkpoint 的 ts, started_at) < now - threshold_sec``
 
-    用 ``started_at`` 而非 ``updated_at`` 是因为中间状态切换不写
-    ``updated_at``（避免给所有 node 加 IO），started_at 是
-    "从这一刻起就没结论" 的可靠下界。
+    用``最近 checkpoint 的 ts``而非``started_at``是因为活着的 run 每次状态
+    转移都会写 ``agent_checkpoints``；只有 checkpoint 停更的 run 才是真正
+    卡死。没有 checkpoint 的老 run 才退回 ``started_at`` 兜底。
     """
 
     def __init__(self, session_factory: Any) -> None:
@@ -79,18 +80,36 @@ class AgentRunScanner:
     async def find_stuck_runs(
         self, now: datetime, threshold_sec: int
     ) -> list[Any]:
-        from sqlalchemy import select
+        from sqlalchemy import func, select
 
-        from matrix.db.models import AgentRun
+        from matrix.db.models import AgentCheckpoint, AgentRun
 
         cutoff_dt = now - timedelta(seconds=threshold_sec)
+        # 子查询：每个 run 最近一次 checkpoint 的时间
+        last_checkpoint = (
+            select(
+                AgentCheckpoint.run_id,
+                func.max(AgentCheckpoint.ts).label("last_ts"),
+            )
+            .group_by(AgentCheckpoint.run_id)
+            .subquery()
+        )
         try:
             async with self._session_factory() as session:
                 stmt = (
                     select(AgentRun.id)
+                    .outerjoin(
+                        last_checkpoint,
+                        AgentRun.id == last_checkpoint.c.run_id,
+                    )
                     .where(AgentRun.status == "running")
                     .where(AgentRun.ended_at.is_(None))
-                    .where(AgentRun.started_at < cutoff_dt)
+                    .where(
+                        func.coalesce(
+                            last_checkpoint.c.last_ts, AgentRun.started_at
+                        )
+                        < cutoff_dt
+                    )
                 )
                 result = await session.execute(stmt)
                 return [row[0] for row in result.all()]

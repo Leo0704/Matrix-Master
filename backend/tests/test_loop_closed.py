@@ -47,7 +47,7 @@ class _FakeRoundAllocator:
         self.allocate_calls: list[dict] = []
         self.count_calls = 0
 
-    async def count_active_devices(self) -> int:
+    async def count_active_devices(self, *, business_id=None) -> int:
         self.count_calls += 1
         return len(self._slots)
 
@@ -59,6 +59,7 @@ class _FakeRoundAllocator:
         base_time: datetime | None = None,
         stagger_minutes: int = 15,
         persona_config: dict | None = None,
+        business_id=None,
     ) -> list[ChosenSlot]:
         self.allocate_calls.append(
             {
@@ -67,12 +68,13 @@ class _FakeRoundAllocator:
                 "base_time": base_time,
                 "stagger_minutes": stagger_minutes,
                 "persona_config": persona_config,
+                "business_id": business_id,
             }
         )
         return self._slots[:n]
 
     async def is_slot_valid(
-        self, *, device_id, account_id, now: datetime | None = None
+        self, *, device_id, account_id, business_id=None, now: datetime | None = None
     ) -> bool:
         return any(
             s.device_id == device_id and s.account_id == account_id
@@ -107,19 +109,17 @@ async def test_closed_loop_runs_end_to_end():
     run_id = await rm.create_run(goal_text="发一篇夏日穿搭笔记", entry="RESEARCH")
     state = await rm.start_run(run_id)
 
-    # 1) 收敛到终态（ANALYZE → IDLE），无错误
-    assert state["current_state"] in ("ANALYZE", "IDLE")
+    # 1) 收敛到终态 IDLE（v0.7+ 主链不再走 COLLECT→ANALYZE），无错误
+    assert state["current_state"] == "IDLE"
     assert state.get("last_error") is None
 
-    # 2) 闭环确实驱动了设备：发布 + 回采都被调用，且发布内容来自生成的草稿
+    # 2) 闭环确实驱动了设备发布，且发布内容来自生成的草稿
     assert device.publish_calls, "闭环必须调用设备发布"
     assert device.publish_calls[0]["title"] == "夏日清爽穿搭分享"
     assert device.publish_calls[0]["content"]
-    assert device.collect_calls, "闭环必须调用设备回采"
 
-    # 3) 回采指标已写回 state
-    metrics = state.get("note_metrics") or {}
-    assert "views" in metrics and metrics["views"] >= 0
+    # 3) v0.7+ 主链不再即时回采，collect 不应被调用（真复盘由 24h 后独立 ANALYZE run 完成）
+    assert not device.collect_calls
 
     # 4) run 记录为成功
     status = await rm.get_run_status(run_id)

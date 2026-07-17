@@ -45,6 +45,7 @@ class AgentRepository(Protocol):
         started_at: datetime,
         current_state: str,
         status: str,
+        business_id: UUID | None = None,
     ) -> None: ...
 
     async def write_checkpoint(

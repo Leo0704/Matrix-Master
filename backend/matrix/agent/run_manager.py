@@ -61,10 +61,16 @@ class RunManager:
         entry: str = State.RESEARCH.value,
         brief: dict[str, Any] | None = None,
         interact_plan: list[dict[str, Any]] | None = None,
+        business_id: UUID | None = None,
+        note_id: UUID | None = None,
+        round_number: int | None = None,
     ) -> UUID:
         """创建一条 run，返回 run_id。
 
         v0.6 新增 ``interact_plan``：发后流量互推目标列表。
+        v0.7+ 新增 ``business_id``（业务归属列，修漏写）、``note_id`` +
+        ``round_number``（entry="ANALYZE" 的独立复盘 run 用：复盘对象笔记 +
+        所属轮次，随 payload 下发由 start_run 注入 state）。
         """
         run_id = uuid4()
         payload: dict[str, Any] = {
@@ -76,6 +82,12 @@ class RunManager:
             payload["brief"] = brief
         if interact_plan:
             payload["interact_plan"] = interact_plan
+        if business_id is not None:
+            payload["business_id"] = str(business_id)
+        if note_id is not None:
+            payload["note_id"] = str(note_id)
+        if round_number is not None:
+            payload["round_number"] = round_number
         await self.repo.create_run(
             run_id=run_id,
             goal_id=goal_id,
@@ -83,6 +95,7 @@ class RunManager:
             started_at=_utcnow(),
             current_state=State.IDLE.value,
             status=RunStatus.RUNNING.value,
+            business_id=business_id,
         )
         # 起点 checkpoint
         await self.repo.write_checkpoint(
@@ -134,6 +147,17 @@ class RunManager:
         learnings_text = payload.get("learnings_text")
         if isinstance(learnings_text, str) and learnings_text:
             state["learnings_text"] = learnings_text
+        # v0.7+ 业务归属：注入 state，DRAFT/PUBLISH 落 notes、ANALYZE 写 KB 用
+        business_id = payload.get("business_id")
+        if isinstance(business_id, str) and business_id:
+            state["business_id"] = business_id
+        # v0.7+ 独立复盘 run（entry="ANALYZE"）：复盘对象笔记 + 所属轮次
+        note_id = payload.get("note_id")
+        if isinstance(note_id, str) and note_id:
+            state["note_id"] = note_id
+        round_number = payload.get("round_number")
+        if isinstance(round_number, int):
+            state["round_number"] = round_number
 
         try:
             result = await self.sm.ainvoke(state)

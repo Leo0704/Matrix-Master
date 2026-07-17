@@ -64,9 +64,20 @@ async def _validate_preassigned(
             "message": f"preassigned slot missing/invalid id: {exc}",
         }
 
+    # v0.7+ 业务归属：预分配时必须带业务（orchestrator._build_run_payload 写入），
+    # 二次校验连业务一起查——否则多业务并存时 slot 归属不明，存在串号风险
+    try:
+        business_id = UUID(str(preassigned["business_id"]))
+    except (KeyError, ValueError, TypeError) as exc:
+        return None, {
+            "code": "NO_PREASSIGNED_SLOT_INVALID",
+            "message": f"preassigned slot missing/invalid business_id: {exc}",
+        }
+
     valid = await services.round_allocator.is_slot_valid(
         device_id=device_id,
         account_id=account_id,
+        business_id=business_id,
         now=now,
     )
     if not valid:
@@ -133,8 +144,12 @@ async def schedule_node(state: AgentState, *, now: datetime | None = None) -> di
         }
 
     try:
+        # v0.7+ 业务隔离：降级路径也把业务带给 slot_picker（有则过滤，无则全池）
+        draft_with_business = dict(state.get("draft") or {})
+        if state.get("business_id"):
+            draft_with_business.setdefault("business_id", state["business_id"])
         chosen = await services.scheduler.choose_slot(
-            draft=state.get("draft") or {},
+            draft=draft_with_business,
             persona_config=persona_config,
             now=now,
         )

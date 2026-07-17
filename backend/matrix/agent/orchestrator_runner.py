@@ -44,12 +44,18 @@ class GoalOrchestratorWorker:
 
     async def _scan_once(self) -> None:
         async with self._session_factory() as session:
+            # v0.7+ 业务隔离：archived 业务的 goal 不进主循环（三层防御之一；
+            # 之前不过滤，归档业务的 active goal 照样被推进发布，归档形同虚设）
+            from matrix.db.models import Business
+
             stmt = (
                 select(Goal)
+                .join(Business, Business.id == Goal.business_id)
                 .where(
                     Goal.deleted_at.is_(None),
                     Goal.status == "active",
                     Goal.phase != "DONE",
+                    Business.status == "active",
                 )
                 .order_by(Goal.created_at.asc())
                 .limit(20)

@@ -43,6 +43,9 @@ class DefaultSlotPicker:
         :param now: 当前时间（用于判断 ``auto_suspend_until``）
         """
         current = now or datetime.now(timezone.utc)
+        # v0.7+ 业务隔离：draft 带 business_id 时只挑本业务组合（schedule 节点注入）；
+        # 不带（手动 create_run 等无 goal 场景）保持全池旧行为
+        business_id = draft.get("business_id")
         async with self._session_factory() as session:
             stmt = (
                 select(Account.id, Device.id)
@@ -57,6 +60,11 @@ class DefaultSlotPicker:
                     Device.deleted_at.is_(None),
                 )
             )
+            if business_id:
+                stmt = stmt.where(
+                    Account.business_id == business_id,
+                    Device.business_id == business_id,
+                )
             rows = (await session.execute(stmt)).all()
 
         if not rows:

@@ -312,12 +312,16 @@ def route_after_publish(state: AgentState, cfg: GuardConfig) -> State:
         return State.ALERT
     if can_publish_to_interact(state, cfg):
         return State.INTERACT
-    return State.COLLECT
+    # v0.7+ 时序修复：发布成功后直接回 IDLE 收工。
+    # 之前去 COLLECT 拿"发布即时数据"（≈0）喂 ANALYZE 写复盘——假数据污染 KB；
+    # 真复盘由 24h collect task 落表后触发的独立 ANALYZE run 完成。
+    return State.IDLE
 
 
 def route_after_interact(state: AgentState, cfg: GuardConfig) -> State:
     if interact_to_collect(state, cfg):
-        return State.COLLECT
+        # v0.7+：互动完成即收工（同 route_after_publish，不再去 COLLECT）
+        return State.IDLE
     return State.ALERT
 
 

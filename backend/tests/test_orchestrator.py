@@ -55,6 +55,7 @@ def _make_goal(
     g.learning_summary = None
     g.target_likes = target_likes
     g.notes_per_round = notes_per_round
+    g.business_id = uuid.uuid4()  # v0.7+ 业务归属（生产 Goal 必有；调度层要过滤）
     # mutable state
     g._session = MagicMock()
     return g
@@ -79,14 +80,14 @@ class TestShouldContinue:
     def test_deadline_reached(self):
         past = datetime.now(timezone.utc) - timedelta(hours=1)
         g = _make_goal(deadline=past, current_round=1, max_rounds=3)
-        cont, reason = _should_continue(g, {"total_likes": 0})
+        cont, reason, _kpi_met = _should_continue(g, {"total_likes": 0})
         assert cont is False
         assert "deadline" in reason
 
     def test_kpi_achieved(self):
         future = datetime.now(timezone.utc) + timedelta(days=1)
         g = _make_goal(deadline=future, current_round=1, max_rounds=3)
-        cont, reason = _should_continue(g, {"total_likes": DEFAULT_KPI_LIKES_TARGET})
+        cont, reason, _kpi_met = _should_continue(g, {"total_likes": DEFAULT_KPI_LIKES_TARGET})
         assert cont is False
         assert "KPI" in reason
 
@@ -95,24 +96,24 @@ class TestShouldContinue:
         future = datetime.now(timezone.utc) + timedelta(days=1)
         g = _make_goal(deadline=future, current_round=1, max_rounds=3, target_likes=100)
         # 50 < 100 → 续跑
-        cont, _ = _should_continue(g, {"total_likes": 50})
+        cont, *_ = _should_continue(g, {"total_likes": 50})
         assert cont is True
         # 150 >= 100 → 收工
-        cont, reason = _should_continue(g, {"total_likes": 150})
+        cont, reason, _kpi_met = _should_continue(g, {"total_likes": 150})
         assert cont is False
         assert "100" in reason  # 阈值写进 reason
 
     def test_max_rounds_reached(self):
         future = datetime.now(timezone.utc) + timedelta(days=1)
         g = _make_goal(deadline=future, current_round=3, max_rounds=3)
-        cont, reason = _should_continue(g, {"total_likes": 0})
+        cont, reason, _kpi_met = _should_continue(g, {"total_likes": 0})
         assert cont is False
         assert "max_rounds" in reason
 
     def test_continue(self):
         future = datetime.now(timezone.utc) + timedelta(days=1)
         g = _make_goal(deadline=future, current_round=1, max_rounds=3)
-        cont, reason = _should_continue(g, {"total_likes": 10})
+        cont, reason, _kpi_met = _should_continue(g, {"total_likes": 10})
         assert cont is True
         assert "continue" in reason
 
@@ -131,7 +132,7 @@ class TestShouldContinue:
                 "conversion": {"rate": 0.0},
             },
         }
-        cont, reason = _should_continue(g, kpi_with_dim)
+        cont, reason, _kpi_met = _should_continue(g, kpi_with_dim)
         # dimensions 显示 likes=600 ≥ 500 → 应该收工（而不是因为 total_likes=0 续跑）
         assert cont is False, f"expected stop but got continue: {reason!r}"
         assert "likes" in reason or "stop" in reason
@@ -151,7 +152,7 @@ class TestShouldContinue:
         }
         # 老 _should_continue：total_likes=0 < 500 → 续跑
         # 新逻辑：dimensions 里 likes 0 < 500 → 续跑（多维也帮不了）
-        cont, _ = _should_continue(g, kpi)
+        cont, *_ = _should_continue(g, kpi)
         assert cont is True
 
     def test_multi_dim_short_continues(self):
@@ -166,7 +167,7 @@ class TestShouldContinue:
                 "conversion": {"rate": 0.001},
             },
         }
-        cont, _ = _should_continue(g, kpi)
+        cont, *_ = _should_continue(g, kpi)
         # dimensions 不达标 → 不走 stop 分支 → 落到"还能再跑一轮"分支
         assert cont is True
 
@@ -175,9 +176,9 @@ class TestShouldContinue:
         future = datetime.now(timezone.utc) + timedelta(days=1)
         g = _make_goal(deadline=future, current_round=1, max_rounds=3, target_likes=100)
         # 老格式：只有 total_likes
-        cont, _ = _should_continue(g, {"total_likes": 50})
+        cont, *_ = _should_continue(g, {"total_likes": 50})
         assert cont is True
-        cont, _ = _should_continue(g, {"total_likes": 150})
+        cont, *_ = _should_continue(g, {"total_likes": 150})
         assert cont is False
 
 
@@ -395,7 +396,8 @@ class TestAdvanceGoal:
         result = await advance_goal(session, g)
         assert result.phase_after == PHASE_DONE
         assert g.phase == PHASE_DONE
-        assert g.status == "achieved"
+        # v0.7+ achieved 语义修复：KPI 未达标跑满轮数 → failed（不再无条件 achieved）
+        assert g.status == "failed"
 
 
 # ---------------------------------------------------------------------------

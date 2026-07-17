@@ -123,6 +123,8 @@ async def publish_node(state: AgentState) -> dict[str, Any]:
                         # 会更新已有的 DRAFT 行（DRAFT 已写过 goal_id/run_id，PUBLISH 这里再覆盖一遍保持一致）
                         "goal_id": state.get("goal_id"),
                         "run_id": state.get("run_id"),
+                        # v0.7+ 业务归属（修漏写：notes.business_id 是 NOT NULL）
+                        "business_id": state.get("business_id"),
                         "title": str(draft.get("title", "")),
                         "content": str(draft.get("content", "")),
                         "images": list(draft.get("images") or []),
@@ -176,6 +178,24 @@ async def publish_node(state: AgentState) -> dict[str, Any]:
                     )
                 except Exception:
                     logger.exception("publish.notifier failed")
+    else:
+        # v0.7+ 修状态悬空：发布失败把 notes 标 failed——之前"失败不动 notes"，
+        # 465 条发布失败的笔记永远停在 draft，前端没法区分"没发成"和"没轮到发"。
+        note_writer = getattr(services, "note_writer", None)
+        note_id = _as_uuid(draft.get("note_id"))
+        if note_writer is not None and note_id is not None:
+            try:
+                await note_writer(
+                    {
+                        "id": note_id,
+                        "goal_id": state.get("goal_id"),
+                        "run_id": state.get("run_id"),
+                        "business_id": state.get("business_id"),
+                        "status": "failed",
+                    }
+                )
+            except Exception:
+                logger.exception("publish.note_writer.mark_failed failed")
 
     return {
         "publish_result": publish_result,

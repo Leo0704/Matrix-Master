@@ -1,4 +1,10 @@
-"""ANALYZE 节点：复盘 + 写历史到 KB + 提炼经验卡。"""
+"""ANALYZE 节点：复盘 + 写历史到 KB + 提炼经验卡。
+
+v0.7+ 时序修复：本节点不再吃 COLLECT 的"发布即时数据"（基本全是 0）。
+独立复盘 run（entry="ANALYZE"，由 24h collect task 落表后触发）带 ``note_id``
+时，直接从 DB 读 notes 行 + 最新 note_metrics（真 24h 数据）；
+老路径（state 自带 draft/note_metrics）保留兼容。
+"""
 
 from __future__ import annotations
 
@@ -6,6 +12,7 @@ import json
 
 from matrix.monitoring.logging import get_logger
 from typing import Any
+from uuid import UUID
 
 from .. import prompts
 from .._services import get_services, llm_complete
@@ -16,14 +23,80 @@ from ._util import format_brief, join_chunks, parse_json_response
 logger = get_logger(__name__)
 
 
+async def _load_note_from_db(note_id: Any) -> tuple[dict[str, Any], dict[str, int]]:
+    """按 note_id 从 DB 读笔记内容 + 最新一条 metrics（24h 真数据）。
+
+    返回 (draft_like, metrics)；任一步失败返回 ({}, {})，调用方回退 state 数据。
+    """
+    try:
+        from sqlalchemy import select
+
+        from matrix.db.models import Note, NoteMetric
+        from matrix.db.session import get_session
+
+        async with get_session() as session:
+            note = await session.get(Note, UUID(str(note_id)))
+            if note is None:
+                return {}, {}
+            draft_like = {
+                "title": note.title or "",
+                "content": note.content or "",
+                "tags": list(note.tags or []),
+            }
+            metric = (
+                await session.execute(
+                    select(NoteMetric)
+                    .where(NoteMetric.note_id == note.id)
+                    .order_by(NoteMetric.ts.desc())
+                    .limit(1)
+                )
+            ).scalars().first()
+            if metric is None:
+                return draft_like, {}
+            metrics = {
+                k: int(getattr(metric, k) or 0)
+                for k in ("views", "likes", "collects", "comments", "follows_gained")
+            }
+            return draft_like, metrics
+    except Exception:
+        logger.exception("analyze.load_note_from_db failed", note_id=str(note_id))
+        return {}, {}
+
+
+def _as_business_uuid(value: Any) -> UUID | None:
+    """state['business_id']（str）→ UUID；非法/缺失 → None（kb 层可空兜底）。"""
+    if value is None:
+        return None
+    try:
+        return UUID(str(value))
+    except (ValueError, TypeError):
+        return None
+
+
 async def analyze_node(state: AgentState) -> dict[str, Any]:
     """调 LLM 出复盘文本 + strategy_updates；通过 ``kb_writer.upsert_document``
     把这次笔记作为一条 ``type=history`` 文档写入 KB，并把 strategy_updates
     提炼成一条 ``type=strategy_card`` 文档（draft 节点下次写稿时优先召回）。
+
+    v0.7+ 两处修复：
+    - business_id 随 KB 文档落库（修漏写：kb_documents.business_id 是 NOT NULL）
+    - is_published=True：检索层只查已发布（retrieval.py），默认 False 等于
+      写了张 AI 永远看不到的死卡，飞轮断掉。
     """
     services = get_services()
     draft = state.get("draft") or {}
     metrics = state.get("note_metrics") or {}
+
+    # v0.7+ 独立复盘 run：DB 真数据覆盖 state 占位（state 里 draft 可能是空的）
+    note_id = state.get("note_id") or draft.get("note_id")
+    if note_id:
+        db_draft, db_metrics = await _load_note_from_db(note_id)
+        if db_draft:
+            draft = db_draft
+        if db_metrics:
+            metrics = db_metrics
+
+    business_id = _as_business_uuid(state.get("business_id"))
 
     persona_style = ""
     rules = ""
@@ -84,6 +157,8 @@ async def analyze_node(state: AgentState) -> dict[str, Any]:
             ref_id=None,
             title=str(draft.get("title", ""))[:256] or None,
             content=content,
+            business_id=business_id,  # v0.7+ 业务归属（修漏写）
+            is_published=True,  # v0.7+ 修死卡：检索只查已发布，False=AI 看不到
             metadata={
                 "metrics": metrics,
                 "tags": draft.get("tags") or [],
@@ -109,6 +184,8 @@ async def analyze_node(state: AgentState) -> dict[str, Any]:
                 ref_id=None,
                 title=strategy_updates[0][:256],
                 content=card_content,
+                business_id=business_id,  # v0.7+ 业务归属（修漏写）
+                is_published=True,  # v0.7+ 修死卡：检索只查已发布
                 metadata={
                     "lessons": strategy_updates,
                     "metrics": metrics,

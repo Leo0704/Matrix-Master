@@ -135,6 +135,8 @@ async def draft_node(state: AgentState) -> dict[str, Any]:
                     # v0.7+ 第 2 期：透传 goal_id/run_id，让 _gather_round_kpi 走直查
                     "goal_id": state.get("goal_id"),
                     "run_id": state.get("run_id"),
+                    # v0.7+ 业务归属（修漏写：notes.business_id 是 NOT NULL）
+                    "business_id": state.get("business_id"),
                     "title": draft["title"],
                     "content": draft["content"],
                     "images": draft["images"],

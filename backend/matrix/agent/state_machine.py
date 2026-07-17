@@ -208,23 +208,24 @@ class StateMachine:
             },
         )
 
-        # PUBLISH → INTERACT | COLLECT | ALERT（v0.6：发后互动）
+        # PUBLISH → INTERACT | IDLE | ALERT（v0.6：发后互动；
+        # v0.7+ 时序修复：成功即收工，复盘由 24h 采集触发的独立 ANALYZE run 做）
         g.add_conditional_edges(
             State.PUBLISH.value,
             lambda s: route_after_publish(s, cfg),
             {
                 State.INTERACT.value: State.INTERACT.value,
-                State.COLLECT.value: State.COLLECT.value,
+                State.IDLE.value: State.IDLE.value,
                 State.ALERT.value: State.ALERT.value,
             },
         )
 
-        # INTERACT → COLLECT | ALERT
+        # INTERACT → IDLE | ALERT（v0.7+：互动完成即收工）
         g.add_conditional_edges(
             State.INTERACT.value,
             lambda s: route_after_interact(s, cfg),
             {
-                State.COLLECT.value: State.COLLECT.value,
+                State.IDLE.value: State.IDLE.value,
                 State.ALERT.value: State.ALERT.value,
             },
         )

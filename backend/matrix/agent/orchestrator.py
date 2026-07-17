@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from sqlalchemy import func, select
@@ -136,8 +136,15 @@ async def _allocate_round_slots(
         return [], 0
     if services.round_allocator is None:
         return [], 0
+    # v0.7+ 业务隔离：goal 无业务归属时无从过滤，直接降级（兜底；正常 goal 必有）
+    goal_biz = _goal_business_id(goal)
+    if goal_biz is None:
+        logger.warning("orchestrator.allocate_no_business", goal_id=str(goal.id))
+        return [], 0
     try:
-        active = await services.round_allocator.count_active_devices()
+        active = await services.round_allocator.count_active_devices(
+            business_id=goal_biz
+        )
     except Exception:
         logger.exception(
             "orchestrator.count_active_devices failed", goal_id=str(goal.id)
@@ -156,6 +163,7 @@ async def _allocate_round_slots(
             n=n,
             stagger_minutes=DEFAULT_STAGGER_MINUTES,
             persona_config=persona_cfg,
+            business_id=goal_biz,
         )
         return slots, n
     except TimeOutOfWindowError as exc:
@@ -180,6 +188,7 @@ def _build_run_payload(
     slot,
     *,
     learnings_text: str = "",
+    interact_plan: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """构造 AgentRun.payload；slot 为 None 时不带 preassigned_slot（旧随机路径）。"""
     brief = dict(target)
@@ -191,9 +200,16 @@ def _build_run_payload(
         "goal_text": (brief.get("theme") or target.get("theme", ""))[:200],
         "goal_type": goal.type,
         "round_number": round_number,
+        # v0.7+ 业务归属：随 payload 下发，run_manager 注入 state，
+        # DRAFT/PUBLISH 落 notes、ANALYZE 写 KB 都从这里取（修 business_id 漏写）
+        # getattr 防御：测试用 SimpleNamespace 造 goal 时可能无此属性
+        "business_id": str(_goal_business_id(goal)) if _goal_business_id(goal) else None,
     }
     if learnings_text:
         payload["learnings_text"] = learnings_text
+    # v0.7+ 发后互推：本轮每条 run 带"本业务其他账号近期已发布笔记"的点赞计划
+    if interact_plan:
+        payload["interact_plan"] = interact_plan
     if slot is not None:
         payload["preassigned_slot"] = {
             "device_id": str(slot.device_id),
@@ -201,8 +217,51 @@ def _build_run_payload(
             "scheduled_at": slot.scheduled_at.isoformat() if slot.scheduled_at else None,
             "style_hint": slot.style_hint,
             "reason": slot.reason,
+            # v0.7+ 业务归属：SCHEDULE 节点二次校验时传给 is_slot_valid
+            "business_id": str(_goal_business_id(goal)) if _goal_business_id(goal) else None,
         }
     return payload
+
+
+def _goal_business_id(goal: Any) -> uuid.UUID | None:
+    """取 goal.business_id；测试用 SimpleNamespace 缺属性时返回 None。"""
+    return getattr(goal, "business_id", None)
+
+
+async def _build_interact_plan(
+    session: AsyncSession,
+    goal: Goal,
+    *,
+    exclude_account_id: uuid.UUID | None,
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    """给一条 run 生成"发后互推"点赞计划（修 orchestrator 从不传 interact_plan）。
+
+    互推对象：本业务内**其他账号**最近发布成功的笔记（按发布时间倒序取前 N 条）。
+    只发 ``like``——评论内容由 INTERACT 节点调 LLM 现场生成，plan 里不预置；
+    首期保守不自动评论（风险高于点赞），需要时再加 ``comment`` 项。
+    查不到候选（首轮/单账号业务）→ 返回 []，INTERACT 节点自然跳过。
+    """
+    goal_biz = _goal_business_id(goal)
+    if goal_biz is None:
+        return []
+    stmt = (
+        select(Note.platform_note_id)
+        .where(
+            Note.business_id == goal_biz,
+            Note.status == "published",
+            Note.platform_note_id.is_not(None),
+            Note.deleted_at.is_(None),
+        )
+        .order_by(Note.published_at.desc())
+        .limit(limit * 3)  # 多拉一点，排除本账号后再截断
+    )
+    if exclude_account_id is not None:
+        stmt = stmt.where(
+            (Note.account_id.is_(None)) | (Note.account_id != exclude_account_id)
+        )
+    rows = (await session.execute(stmt)).scalars().all()
+    return [{"note_id": str(pid), "kind": "like"} for pid in rows[:limit] if pid]
 
 
 async def _prepare_round(
@@ -233,18 +292,27 @@ async def _prepare_round(
 
     # 主路径：拉 N 个 slot
     slots, _n = await _allocate_round_slots(session, goal)
+    goal_biz = _goal_business_id(goal)
 
     created = 0
     if slots:
         # 每台设备 1 个 run，同主题 + style_hint 轮换 + 时间错开
         for slot in slots:
-            payload = _build_run_payload(goal, target, round_number, slot, learnings_text=learnings_text)
+            # v0.7+ 发后互推：给本条 run 的账号配"本业务他人笔记"点赞计划
+            plan = await _build_interact_plan(
+                session, goal, exclude_account_id=slot.account_id
+            )
+            payload = _build_run_payload(
+                goal, target, round_number, slot,
+                learnings_text=learnings_text, interact_plan=plan,
+            )
             run = AgentRun(
                 goal_id=goal.id,
                 current_state="IDLE",
                 payload=payload,
                 round_number=round_number,
                 status="running",
+                business_id=goal_biz,  # v0.7+ 业务归属（修漏写）
             )
             session.add(run)
             created += 1
@@ -259,6 +327,7 @@ async def _prepare_round(
                 payload=payload,
                 round_number=round_number,
                 status="running",
+                business_id=goal_biz,  # v0.7+ 业务归属（修漏写）
             )
             session.add(run)
             created += 1
@@ -298,8 +367,41 @@ async def _check_runs_done(
 
 
 # ---------------------------------------------------------------------------
-# MONITORING：拉 KPI 写到 goal_rounds
+# MONITORING：等 24h 采集齐 → 拉 KPI 写到 goal_rounds
 # ---------------------------------------------------------------------------
+
+
+# 采集宽限：scheduled_collect_at 过后 6h 仍没采到 → 放弃等（按 0 计，不永卡）
+COLLECT_GRACE = timedelta(hours=6)
+
+
+async def _check_collect_done(
+    session: AsyncSession, goal_id: uuid.UUID, round_number: int
+) -> bool:
+    """本轮 published notes 的 24h 数据是否都采回来了（或已过宽限期）。
+
+    v0.7+ 修时序断裂：之前 MONITORING 在 run 一结束就结算 KPI——此时 24h
+    collect task 还没执行，note_metrics 是空表，KPI 永远全 0，DECIDING 永远
+    走"未达标再干一轮"。现在：有 published note 还在采集窗口内 → 继续等；
+    全部 collected / 超宽限（APK 挂了按 0 计）→ 放行结算。
+    """
+    runs_stmt = select(AgentRun.id).where(
+        AgentRun.goal_id == goal_id, AgentRun.round_number == round_number
+    )
+    run_ids = (await session.execute(runs_stmt)).scalars().all()
+    if not run_ids:
+        return True
+    grace_deadline = _utcnow() - COLLECT_GRACE
+    pending_stmt = select(func.count(Note.id)).where(
+        Note.run_id.in_(run_ids),
+        Note.status == "published",
+        Note.collected_at.is_(None),
+        # 只等挂了采集闹钟且闹钟+宽限还没过的；没挂闹钟的异常行不永卡
+        Note.scheduled_collect_at.is_not(None),
+        Note.scheduled_collect_at > grace_deadline,
+    )
+    pending = (await session.execute(pending_stmt)).scalar() or 0
+    return pending == 0
 
 
 async def _gather_round_kpi(
@@ -498,9 +600,9 @@ async def _summarize_round(
                 code="KB_REVIEW_PENDING",
                 severity="info",
                 message=(
-                    f"Goal 第 {round_number} 轮复盘完成，"
-                    f"已写入 {len(kb_docs)} 篇 KB（默认未发布，AI 看不到）。"
-                    f"去知识库 review 后才能让下一轮拆任务时 LLM 参考。"
+                    f"Goal 第 {round_number} 轮复盘完成，已写入 {len(kb_docs)} 篇 KB。"
+                    f"爆款模板（strategy_card）已自动发布，下一轮写稿即可召回；"
+                    f"避坑规则（rule）未发布，需人工 review 后才生效。"
                 ),
                 subject_id=str(goal.id),
                 resolved=False,
@@ -534,42 +636,43 @@ async def _summarize_round(
 
 def _should_continue(
     goal: Goal, kpi: dict[str, Any]
-) -> tuple[bool, str]:
-    """判断是否续跑。返回 (should_continue, reason)。
+) -> tuple[bool, str, bool]:
+    """判断是否续跑。返回 (should_continue, reason, kpi_met)。
 
-    Phase 2a #4 真正接入：多维 KPI 取代单 likes 阈值。
-    优先看 ``kpi['dimensions']``（新格式），缺失时回退 ``kpi['total_likes']``
-    单字段（向后兼容老 kpi_summary）。
+    v0.7+ 修 achieved 语义：kpi_met（KPI 是否达标）独立计算并随返回透出，
+    DECIDING 收工时按它分 achieved/failed——之前收工无条件标 achieved，
+    KPI 全 0、run 全灭的 goal 也显示"目标达成"。
     """
-    # 1) deadline 到了 → 收工
-    if goal.deadline is not None and _utcnow() >= goal.deadline:
-        return False, f"deadline reached: {goal.deadline.isoformat()}"
-    # 2) 多维 KPI 达成 → 收工
     target_likes = (
         getattr(goal, "target_likes", DEFAULT_KPI_LIKES_TARGET)
         or DEFAULT_KPI_LIKES_TARGET
     )
     from .kpi import should_continue as _should_continue_kpi
 
+    # 先算 kpi_met（达标是独立事实，跟 deadline/轮数无关）
     dimensions = kpi.get("dimensions") if isinstance(kpi, dict) else None
     if dimensions:
-        # 三维判断（likes / views / engagement 任一达标即收工）
-        cont, reason = _should_continue_kpi(
+        # 三维判断（likes / views / engagement 任一达标即达标）
+        cont_kpi, kpi_reason = _should_continue_kpi(
             dimensions, target_likes=target_likes
         )
-        if not cont:
-            return False, reason
+        kpi_met = not cont_kpi
     else:
         # 老 kpi_summary 格式兜底：只看 likes
-        if kpi.get("total_likes", 0) >= target_likes:
-            return False, (
-                f"KPI achieved: {kpi.get('total_likes')}/{target_likes} likes"
-            )
+        kpi_met = kpi.get("total_likes", 0) >= target_likes
+        kpi_reason = f"likes {kpi.get('total_likes', 0)}/{target_likes}"
+
+    # 1) deadline 到了 → 收工
+    if goal.deadline is not None and _utcnow() >= goal.deadline:
+        return False, f"deadline reached: {goal.deadline.isoformat()}", kpi_met
+    # 2) KPI 达成 → 收工
+    if kpi_met:
+        return False, f"KPI achieved: {kpi_reason}", True
     # 3) 跑满 max_rounds → 收工
     if goal.current_round >= goal.max_rounds:
-        return False, f"max_rounds reached: {goal.max_rounds}"
+        return False, f"max_rounds reached: {goal.max_rounds}", False
     # 4) 否则续跑
-    return True, f"continue: round {goal.current_round + 1}/{goal.max_rounds}"
+    return True, f"continue: round {goal.current_round + 1}/{goal.max_rounds}", False
 
 
 # ---------------------------------------------------------------------------
@@ -675,6 +778,18 @@ async def advance_goal(
         )
 
     if goal.phase == PHASE_MONITORING:
+        # v0.7+ 修时序：先等本轮 published notes 的 24h 采集落表（含 6h 宽限），
+        # 否则 note_metrics 是空表，KPI 全 0、总结与决策全部基于空气。
+        collect_done = await _check_collect_done(session, goal.id, goal.current_round)
+        if not collect_done:
+            return OrchestratorResult(
+                goal_id=goal.id,
+                phase_before=phase_before,
+                phase_after=phase_before,
+                round_number=goal.current_round,
+                notes_created_this_round=0,
+                action="monitoring: waiting 24h collect",
+            )
         kpi = await _gather_round_kpi(session, goal.id, goal.current_round)
         await _write_round_kpi(session, goal.id, goal.current_round, kpi)
         await _set_phase(session, goal, PHASE_SUMMARIZING)
@@ -720,7 +835,7 @@ async def advance_goal(
     if goal.phase == PHASE_DECIDING:
         # 直接从 goal_rounds.kpi_summary 读
         kpi = await _load_round_kpi(session, goal.id, goal.current_round)
-        cont, reason = _should_continue(goal, kpi)
+        cont, reason, kpi_met = _should_continue(goal, kpi)
         if cont:
             goal.current_round += 1
             goal.learning_summary = (
@@ -749,9 +864,9 @@ async def advance_goal(
                 action=f"continue: {reason}",
             )
         else:
-            # 收工
+            # 收工：KPI 达标才算 achieved；未达标（跑满轮数/deadline 到）标 failed
             await _set_phase(session, goal, PHASE_DONE)
-            goal.status = "achieved"
+            goal.status = "achieved" if kpi_met else "failed"
             goal.updated_at = _utcnow()
             goal.learning_summary = (
                 (goal.learning_summary or "") + f"\n[收工] {reason}"

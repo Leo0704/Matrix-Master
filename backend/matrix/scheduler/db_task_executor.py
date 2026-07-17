@@ -193,7 +193,66 @@ class DeviceTaskExecutor:
 
         # Phase 1 P1-1：通知"数据采集完成"
         await self._notify_collected(task, platform_note_id, metrics)
+
+        # v0.7+ 时序修复：24h 真数据落表后，spawn 一条独立 ANALYZE run 做复盘。
+        # 之前 ANALYZE 在主链里吃 COLLECT 的"发布即时数据"（≈0）写复盘——假数据
+        # 直接污染 KB 经验卡；现在复盘在真数据落表后进行，AgentRunWorker 会认领。
+        await self._spawn_analyze_run(task, note_uuid)
         return True
+
+    async def _spawn_analyze_run(self, task: TaskLike, note_uuid: Any) -> None:
+        """采集落表后 spawn 独立复盘 run（entry="ANALYZE"）。
+
+        goal_id/run_id/note_id 都来自 collect task 的 payload（publish 入队时塞的）；
+        business_id 优先取 goal、兜底取原 run；round_number 取原 run 的轮次。
+        任何失败只记日志——数据已落表，复盘可手动补，不挡采集主流程。
+        """
+        payload = task.payload or {}
+        goal_id_str = payload.get("goal_id")
+        if not goal_id_str or self._session_factory is None:
+            return
+        try:
+            from uuid import UUID as _UUID
+
+            from matrix.db.models import AgentRun, Goal
+
+            goal_uuid = _UUID(str(goal_id_str))
+            business_id = None
+            round_number = None
+            async with self._session_factory() as session:
+                goal = await session.get(Goal, goal_uuid)
+                if goal is not None:
+                    business_id = goal.business_id
+                run_id_str = payload.get("run_id")
+                if run_id_str:
+                    try:
+                        src_run = await session.get(AgentRun, _UUID(str(run_id_str)))
+                    except (ValueError, TypeError):
+                        src_run = None
+                    if src_run is not None:
+                        round_number = src_run.round_number
+                        if business_id is None:
+                            business_id = src_run.business_id
+
+            from matrix.agent.run_manager import create_run as _agent_create_run
+
+            await _agent_create_run(
+                goal_id=goal_uuid,
+                goal_type="analyze",
+                entry="ANALYZE",
+                note_id=note_uuid,
+                business_id=business_id,
+                round_number=round_number,
+            )
+            logger.info(
+                "executor.analyze_run_spawned",
+                note_id=str(note_uuid),
+                goal_id=str(goal_uuid),
+            )
+        except Exception:
+            logger.exception(
+                "executor.spawn_analyze_run failed", note_id=str(note_uuid)
+            )
 
     async def _do_interact(self, task: TaskLike, action: str) -> bool:
         if self._interactor is None:

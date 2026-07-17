@@ -65,6 +65,7 @@ class DefaultRoundSlotAllocator:
         base_time: datetime | None = None,
         stagger_minutes: int = 15,
         persona_config: dict | None = None,
+        business_id: UUID,
     ) -> list[ChosenSlot]:
         """挑 N 个可用 (device, account) 组合，按 i 索引错开时间和风格。
 
@@ -73,6 +74,8 @@ class DefaultRoundSlotAllocator:
         :param base_time: 起始时间；默认 ``datetime.now(UTC)``
         :param stagger_minutes: 每台设备间隔分钟数
         :param persona_config: persona 活跃窗配置（透传给 ``is_in_active_window``）
+        :param business_id: 业务归属（v0.7+ 必填：只挑本业务的账号/设备，
+            否则多业务并存时 A 业务的稿会排到 B 业务的账号上发布——串号事故）
         :returns: 长度 = ``min(找到的设备数, n)`` 的 ``ChosenSlot`` 列表
         :raises TimeOutOfWindowError: 任一 slot 落在活跃窗外
         """
@@ -97,8 +100,10 @@ class DefaultRoundSlotAllocator:
                     Account.risk_score < RISK_SCORE_MAX,
                     (Account.auto_suspend_until.is_(None))
                     | (Account.auto_suspend_until < current),
+                    Account.business_id == business_id,  # v0.7+ 业务隔离
                     Device.status == "active",
                     Device.deleted_at.is_(None),
+                    Device.business_id == business_id,  # v0.7+ 业务隔离
                 )
             )
             rows = (await session.execute(stmt)).all()
@@ -141,8 +146,8 @@ class DefaultRoundSlotAllocator:
         )
         return slots
 
-    async def count_active_devices(self) -> int:
-        """拉当前 active device 计数（不分配，仅用于 orchestrator 决定 n）。"""
+    async def count_active_devices(self, *, business_id: UUID) -> int:
+        """拉本业务当前 active device 计数（不分配，仅用于 orchestrator 决定 n）。"""
         async with self._session_factory() as session:
             stmt = (
                 select(Account.id, Device.id)
@@ -153,8 +158,10 @@ class DefaultRoundSlotAllocator:
                     Account.risk_score < RISK_SCORE_MAX,
                     (Account.auto_suspend_until.is_(None))
                     | (Account.auto_suspend_until < datetime.now(timezone.utc)),
+                    Account.business_id == business_id,  # v0.7+ 业务隔离
                     Device.status == "active",
                     Device.deleted_at.is_(None),
+                    Device.business_id == business_id,  # v0.7+ 业务隔离
                 )
             )
             rows = (await session.execute(stmt)).all()
@@ -165,12 +172,13 @@ class DefaultRoundSlotAllocator:
         *,
         device_id: UUID,
         account_id: UUID,
+        business_id: UUID,
         now: datetime | None = None,
     ) -> bool:
         """校验预分配 slot 的 device+account 是否仍 active（SCHEDULE 节点二次确认用）。
 
-        任一字段不满足（设备 inactive / 账号 inactive / 风险分高 / 暂停中 / 软删除）
-        → 返回 False；调用方应报 NO_AVAILABLE_SLOT。
+        任一字段不满足（设备 inactive / 账号 inactive / 风险分高 / 暂停中 / 软删除 /
+        **不属于本业务**）→ 返回 False；调用方应报 NO_AVAILABLE_SLOT。
         """
         current = now or datetime.now(timezone.utc)
         async with self._session_factory() as session:
@@ -184,9 +192,11 @@ class DefaultRoundSlotAllocator:
                     Account.risk_score < RISK_SCORE_MAX,
                     (Account.auto_suspend_until.is_(None))
                     | (Account.auto_suspend_until < current),
+                    Account.business_id == business_id,  # v0.7+ 业务隔离
                     Device.id == device_id,
                     Device.status == "active",
                     Device.deleted_at.is_(None),
+                    Device.business_id == business_id,  # v0.7+ 业务隔离
                 )
             )
             row = (await session.execute(stmt)).first()

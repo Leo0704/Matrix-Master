@@ -100,6 +100,7 @@ class DefaultAgentRepository:
         started_at: datetime,
         current_state: str,
         status: str,
+        business_id: UUID | None = None,
     ) -> None:
         async with self._session() as session:  # type: AsyncSession
             row = AgentRunModel(
@@ -109,6 +110,7 @@ class DefaultAgentRepository:
                 payload=payload,
                 status=status,
                 started_at=started_at,
+                business_id=business_id,  # v0.7+ 业务归属（修漏写）
             )
             session.add(row)
             await db_write_cp(

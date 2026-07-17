@@ -36,6 +36,7 @@ class GoalSnapshot:
     theme: str
     audience: str | None
     runs: list[dict[str, Any]]  # [{run_id, note_id, title, content, tags, status, views, likes, collects, comments}]
+    business_id: uuid.UUID | None = None  # v0.7+ 业务归属（KB 写入落列用）
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +246,7 @@ async def _load_goal_snapshot(session: AsyncSession, goal_id: uuid.UUID) -> Goal
         theme=theme,
         audience=audience,
         runs=items,
+        business_id=goal.business_id,  # v0.7+ 业务归属（修漏写）
     )
 
 
@@ -353,6 +355,7 @@ async def summarize_goal_to_kb(
             content=card.to_json(),  # 强类型 JSON
             title=f"爆款模板 · {snapshot.theme[:40]}",
             ref_id=goal_id,
+            business_id=snapshot.business_id,  # v0.7+ 业务归属（修漏写）
             metadata={
                 "goal_id": str(goal_id),
                 "source": "goal_summarize",
@@ -377,6 +380,7 @@ async def summarize_goal_to_kb(
             content=body,
             title=f"避坑规则 · {snapshot.theme[:40]}",
             ref_id=goal_id,
+            business_id=snapshot.business_id,  # v0.7+ 业务归属（修漏写）
             metadata={
                 "goal_id": str(goal_id),
                 "source": "goal_summarize",

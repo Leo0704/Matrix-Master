@@ -33,11 +33,16 @@ class AccountUpdate(BaseModel):
 
     device_id 传新设备 ID = 换绑（受 1:1 唯一约束，重复会 409）。
     解绑请走独立 ``POST /accounts/{id}/unbind-device`` 端点（语义清晰）。
+
+    status 支持人工激活/停用账号：
+    pending→active、active→suspended、suspended→active、任意非 banned→disabled。
+    banned 状态由平台风险信号驱动，不允许 API 直改。
     """
 
     handle: Optional[str] = None
     persona_id: Optional[uuid.UUID] = None
     device_id: Optional[uuid.UUID] = None
+    status: Optional[AccountStatus] = None
 
 
 class AccountListResponse(BaseModel):

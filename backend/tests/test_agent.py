@@ -166,6 +166,8 @@ class FakeKBWriter:
         title: str | None,
         content: str,
         metadata: dict[str, Any] | None = None,
+        business_id: UUID | None = None,
+        is_published: bool = False,
     ) -> UUID:
         self.calls.append(
             {
@@ -269,6 +271,7 @@ class InMemoryAgentRepository:
         started_at: datetime,
         current_state: str,
         status: str,
+        business_id: UUID | None = None,
     ) -> None:
         if run_id in self._runs:
             raise ValueError(f"run exists: {run_id}")
@@ -473,7 +476,8 @@ class TestGuards:
         assert route_after_schedule({"slot": {"device_id": "d", "account_id": "a"}}, cfg) == State.DISPATCH
         assert route_after_dispatch({"created_task_ids": []}, cfg) == State.ALERT
         assert route_after_dispatch({"created_task_ids": ["x"]}, cfg) == State.PUBLISH
-        assert route_after_publish({"publish_result": {"ok": True}}, cfg) == State.COLLECT
+        # v0.7+ 时序修复：发布成功即回 IDLE 收工；复盘由独立 ANALYZE run 完成
+        assert route_after_publish({"publish_result": {"ok": True}}, cfg) == State.IDLE
         assert route_after_publish({"publish_result": {"ok": False}}, cfg) == State.ALERT
         assert route_after_collect({"note_metrics": {"views": 1}}, cfg) == State.ANALYZE
         assert route_after_collect({"note_metrics": {"likes": 1}}, cfg) == State.ANALYZE
@@ -761,6 +765,7 @@ class TestNodes:
             "scheduled_at": scheduled_at,
             "style_hint": "故事化",
             "reason": "round_allocator.match",
+            "business_id": str(uuid4()),  # v0.7+ 业务归属（schedule 二次校验必传）
         }
         # 即便注入 scheduler / round_allocator，schedule_node 也不应调 choose_slot
         scheduler = SimpleNamespace(choose_slot=AsyncMock())
@@ -791,6 +796,7 @@ class TestNodes:
             "account_id": str(uuid4()),
             "scheduled_at": "2026-07-09T12:00:00+00:00",
             "style_hint": None,
+            "business_id": str(uuid4()),  # v0.7+ 业务归属（schedule 二次校验必传）
         }
         round_allocator = SimpleNamespace(
             is_slot_valid=AsyncMock(return_value=False),  # 模拟已 inactive
@@ -971,8 +977,8 @@ class TestNodes:
         assert rec["published_at"] is not None
 
     @pytest.mark.asyncio
-    async def test_publish_failure_does_not_touch_note(self):
-        """PUBLISH 失败时不动 notes（保留 DRAFT 阶段写的 status='draft'）。"""
+    async def test_publish_failure_marks_note_failed(self):
+        """v0.7+ 修状态悬空：PUBLISH 失败把 notes 标 failed（不再永远停 draft）。"""
         publisher = FakeDevicePublisher(ok=False, error_code="RISK_BLOCKED")
         captured: list[dict] = []
 
@@ -994,7 +1000,8 @@ class TestNodes:
             }
         )
         assert result["publish_result"]["ok"] is False
-        assert captured == []  # 没写 notes
+        assert len(captured) == 1
+        assert captured[0]["status"] == "failed"
 
     @pytest.mark.asyncio
     async def test_publish_failure_routes_to_alert(self):
@@ -1341,7 +1348,10 @@ class TestStateMachine:
         )
         assert result["current_state"] in (State.IDLE.value, State.ANALYZE.value)
         assert len(publisher.calls) == 1
-        assert any(c["doc_type"] == "history" for c in writer.calls)
+        # v0.7+ 时序修复：主链发布成功即收工（IDLE），不再跑 ANALYZE 写 KB；
+        # 复盘由 24h 采集落表后触发的独立 ANALYZE run 完成
+        assert result["current_state"] == State.IDLE.value
+        assert not any(c["doc_type"] == "history" for c in writer.calls)
 
     @pytest.mark.asyncio
     async def test_research_empty_routes_to_alert(self):

@@ -90,13 +90,15 @@ class GoalStuckScanner:
             async with self._session_factory() as session:
                 stmt = text(
                     """
-                    SELECT id FROM goals
-                     WHERE status = 'active'
-                       AND phase = 'PENDING'
-                       AND deleted_at IS NULL
-                       AND created_at < :cutoff
-                       AND phase_updated_at IS NULL
-                     ORDER BY created_at ASC
+                    SELECT g.id FROM goals g
+                     JOIN businesses b ON b.id = g.business_id
+                     WHERE g.status = 'active'
+                       AND g.phase = 'PENDING'
+                       AND g.deleted_at IS NULL
+                       AND g.created_at < :cutoff
+                       AND g.phase_updated_at IS NULL
+                       AND b.status = 'active'
+                     ORDER BY g.created_at ASC
                      LIMIT 20
                     """
                 )

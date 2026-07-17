@@ -106,6 +106,39 @@ async def create_account(
     return _to_schema(a)
 
 
+def _validate_status_transition(from_status: str, to_status: str) -> None:
+    """校验账号状态转移是否允许，非法时抛 409 CONFLICT。
+
+    允许规则：
+    - pending → active
+    - active → suspended
+    - suspended → active
+    - 任意非 banned 状态 → disabled
+    - 同状态视为幂等，直接允许
+    - banned 状态（进入或离开）不允许 API 直改
+    """
+    if from_status == to_status:
+        return
+    if from_status == "banned" or to_status == "banned":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "banned status cannot be changed via API",
+        )
+    allowed = {
+        ("pending", "active"),
+        ("active", "suspended"),
+        ("suspended", "active"),
+        ("pending", "disabled"),
+        ("active", "disabled"),
+        ("suspended", "disabled"),
+    }
+    if (from_status, to_status) not in allowed:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"invalid status transition from '{from_status}' to '{to_status}'",
+        )
+
+
 @router.get("/{account_id}", response_model=Account)
 async def get_account(
     account_id: uuid.UUID,
@@ -155,5 +188,8 @@ async def update_account(
         if device is None or device.deleted_at is not None:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "device not found")
         a.device_id = body.device_id
+    if body.status is not None and body.status != a.status:
+        _validate_status_transition(a.status, body.status)
+        a.status = body.status
     await session.flush()
     return _to_schema(a)

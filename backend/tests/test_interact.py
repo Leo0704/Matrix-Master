@@ -289,8 +289,8 @@ async def test_state_machine_publish_routes_to_interact_when_plan_set():
 
 
 @pytest.mark.asyncio
-async def test_state_machine_publish_routes_to_collect_when_no_plan():
-    """PUBLISH 成功 + 无 interact_plan → 直接 COLLECT。"""
+async def test_state_machine_publish_routes_to_idle_when_no_plan():
+    """PUBLISH 成功 + 无 interact_plan → 直接 IDLE 收工。"""
     from matrix.agent.guards import route_after_publish
 
     cfg = GuardConfig()
@@ -298,12 +298,12 @@ async def test_state_machine_publish_routes_to_collect_when_no_plan():
         "publish_result": {"ok": True, "platform_note_id": "abc"},
         "interact_plan": [],
     }
-    assert route_after_publish(state, cfg) == State.COLLECT
+    assert route_after_publish(state, cfg) == State.IDLE
 
 
 @pytest.mark.asyncio
-async def test_state_machine_publish_to_collect_when_switch_off():
-    """enable_post_publish_interact=False → 即使有 plan 也走 COLLECT。"""
+async def test_state_machine_publish_to_idle_when_switch_off():
+    """enable_post_publish_interact=False → 即使有 plan 也走 IDLE 收工。"""
     from matrix.agent.guards import route_after_publish
 
     cfg = GuardConfig(enable_post_publish_interact=False)
@@ -311,7 +311,7 @@ async def test_state_machine_publish_to_collect_when_switch_off():
         "publish_result": {"ok": True, "platform_note_id": "abc"},
         "interact_plan": [{"note_id": "n1", "kind": "like"}],
     }
-    assert route_after_publish(state, cfg) == State.COLLECT
+    assert route_after_publish(state, cfg) == State.IDLE
 
 
 @pytest.mark.asyncio
@@ -329,7 +329,7 @@ async def test_state_machine_compiles_with_interact():
 
 @pytest.mark.asyncio
 async def test_publish_then_interact_runs_end_to_end():
-    """完整闭环：goal 带 2 comment + 1 like → RESEARCH→...→PUBLISH→INTERACT→COLLECT→ANALYZE→IDLE。"""
+    """完整主链：goal 带 2 comment + 1 like → RESEARCH→...→PUBLISH→INTERACT→IDLE 收工。"""
     llm = FakeLLM(
         mapping={
             "你是选题研究员": '{"selected":[{"title":"夏日穿搭","rationale":"应季"}]}',
@@ -377,15 +377,13 @@ async def test_publish_then_interact_runs_end_to_end():
     )
     state = await rm.start_run(run_id)
 
-    # 走到 ANALYZE 或 IDLE（终态）
-    assert state["current_state"] in (State.ANALYZE.value, State.IDLE.value)
+    # 走到 IDLE（v0.7+ 主链不再走 COLLECT→ANALYZE）
+    assert state["current_state"] == State.IDLE.value
     # interact_results 反映 3 个 plan
     results = state.get("interact_results") or {}
     assert results["succeeded"] == 3
     assert results["failed"] == 0
     # 设备被调了 publish + 3 interact（calls 列表包含所有）
-    actions = [c.get("action") or c.get("action") for c in interactor.calls]
-    # publish + 3 interact = 4
     assert len(interactor.calls) == 4
     # writer 收到 3 条 success 记录
     assert len(sink) == 3
