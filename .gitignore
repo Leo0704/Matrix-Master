@@ -39,6 +39,8 @@ secrets/
 # Local matrix data
 .matrix/
 *.log
+# 设备配对码运行时缓存（每次配对生成，不入库）
+backend/.pair_codes.json
 
 # Build artifacts
 *.app
