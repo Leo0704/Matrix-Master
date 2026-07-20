@@ -77,7 +77,7 @@ class XhsPublisher(
         // On modern XHS the bottom bar has a centered "+" button that opens
         // a type-selector (发布笔记 / 发布视频 …). We must tap it first;
         // BTN_CREATE_NOTE (text="发布笔记") only appears on that selector.
-        when (val r = actions.tap(XhsSelectors.TAB_PUBLISH)) {
+        when (val r = actions.tapWhenReady(XhsSelectors.TAB_PUBLISH)) {
             is ApiResult.Ok -> Unit
             is ApiResult.Err -> return err("tap publish-tab", r)
         }
@@ -85,7 +85,7 @@ class XhsPublisher(
         // On some XHS builds the "+" goes straight to the note editor
         // (skipping the type selector). Try BTN_CREATE_NOTE; if not found,
         // assume we're already on the editor and continue.
-        when (val r = actions.tap(XhsSelectors.BTN_CREATE_NOTE)) {
+        when (val r = actions.tapWhenReady(XhsSelectors.BTN_CREATE_NOTE)) {
             is ApiResult.Ok -> Unit
             is ApiResult.Err -> {
                 if (r.code != ErrorCode.SELECTOR_NOT_FOUND) {
@@ -97,7 +97,7 @@ class XhsPublisher(
         Jitter.sleep(600L)
 
         // ---- Step 3: title ----
-        when (val r = actions.tap(XhsSelectors.EDIT_TITLE)) {
+        when (val r = actions.tapWhenReady(XhsSelectors.EDIT_TITLE)) {
             is ApiResult.Ok -> Unit
             is ApiResult.Err -> return err("tap title", r)
         }
@@ -109,7 +109,7 @@ class XhsPublisher(
         Jitter.sleep(300L)
 
         // ---- Step 4: content (content + space-padded tags) ----
-        when (val r = actions.tap(XhsSelectors.EDIT_CONTENT)) {
+        when (val r = actions.tapWhenReady(XhsSelectors.EDIT_CONTENT)) {
             is ApiResult.Ok -> Unit
             is ApiResult.Err -> return err("tap content", r)
         }
@@ -134,7 +134,7 @@ class XhsPublisher(
                 is ApiResult.Err -> return err("download images", r)
             }
             // Trigger the picker.
-            when (val r = actions.tap(XhsSelectors.BTN_ADD_IMAGE)) {
+            when (val r = actions.tapWhenReady(XhsSelectors.BTN_ADD_IMAGE)) {
                 is ApiResult.Ok -> Unit
                 is ApiResult.Err -> return err("tap add-image", r)
             }
@@ -148,7 +148,7 @@ class XhsPublisher(
         }
 
         // ---- Step 6: tap publish button ----
-        when (val r = actions.tap(XhsSelectors.BTN_PUBLISH_FINAL)) {
+        when (val r = actions.tapWhenReady(XhsSelectors.BTN_PUBLISH_FINAL)) {
             is ApiResult.Ok -> Unit
             is ApiResult.Err -> return err("tap publish", r)
         }

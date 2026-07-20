@@ -62,7 +62,13 @@ const SCENARIOS: Scenario[] = [
   },
 ];
 
-export function GoalForm({ onCreated }: { onCreated?: () => void }) {
+export function GoalForm({
+  onCreated,
+  hasActiveGoal,
+}: {
+  onCreated?: () => void;
+  hasActiveGoal?: boolean;
+}) {
   const activeBusinessId = useActiveBusinessId();
   const [scenario, setScenario] = useState<Scenario['id'] | null>(null);
   const [text, setText] = useState('');
@@ -126,7 +132,15 @@ export function GoalForm({ onCreated }: { onCreated?: () => void }) {
 
   return (
     <div className="space-y-4">
-      {/* 3 个场景卡 */}
+      {hasActiveGoal && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          <p className="font-medium">当前业务已有进行中的目标</p>
+          <p className="text-xs opacity-90">
+            需等现有目标完成，或先取消/归档后，才能创建新目标。
+          </p>
+        </div>
+      )}
+
       <div>
         <Label className="mb-2 block">选个场景</Label>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
@@ -222,7 +236,7 @@ export function GoalForm({ onCreated }: { onCreated?: () => void }) {
 
       <Button
         onClick={submit}
-        disabled={isPending || text.length < 2}
+        disabled={hasActiveGoal || isPending || text.length < 2}
         className="w-full"
       >
         {isPending ? '提交中…' : '创建目标'}

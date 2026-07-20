@@ -51,11 +51,15 @@ class DeviceUpdate(BaseModel):
     tags: Optional[list[str]] = None
 
 
-class DeviceUnbindResponse(BaseModel):
-    """解绑设备返回：被解绑的账号 handle（如果有）。"""
+class DeviceRetireResponse(BaseModel):
+    """退役设备返回：被解绑的账号 handle（如果有）。"""
 
     device_id: uuid.UUID
     unbound_account_handle: Optional[str] = None
+
+
+# 兼容旧名（部分历史代码/文档可能仍引用）
+DeviceUnbindResponse = DeviceRetireResponse
 
 
 class DevicePairRequest(BaseModel):

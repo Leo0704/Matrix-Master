@@ -12,6 +12,7 @@ import { ErrorState } from '@/components/common/error-state';
 import { StatusBadge } from '@/components/common/status-badge';
 import { formatDate, formatRelative } from '@/lib/format';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { DeviceRetireButton } from './device-retire-button';
 
 export function DeviceDetailDrawer({
   id,
@@ -75,6 +76,19 @@ export function DeviceDetailDrawer({
                   </CardContent>
                 </Card>
               )}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-sm">危险操作</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <DeviceRetireButton
+                    deviceId={data.id}
+                    deviceNickname={data.nickname}
+                    variant="outline"
+                    size="default"
+                  />
+                </CardContent>
+              </Card>
             </div>
           )}
         </div>

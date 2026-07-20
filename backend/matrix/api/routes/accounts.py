@@ -159,7 +159,7 @@ async def update_account(
     """改账号属性（局部更新）。
 
     换绑 device_id 时受 1:1 唯一约束保护（DB 抛 IntegrityError → 转 409）。
-    解绑请走独立 ``POST /devices/{id}/unbind`` 端点（语义清晰）。
+    设备退役（同时解绑账号）请走独立 ``POST /devices/{id}/retire`` 端点（语义清晰）。
     """
     a = await session.get(AccountORM, account_id)
     if a is None or a.deleted_at is not None:

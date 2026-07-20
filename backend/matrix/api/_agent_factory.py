@@ -177,4 +177,7 @@ async def build_runtime_services(
         llm_rate_limiter=llm_rate_limiter,
         round_allocator=round_allocator,  # 第 1 期：注入 DefaultRoundSlotAllocator
     )
+    # 默认 1024 对"返回 3 个选题 + 长 rationale / 800 字正文 + JSON 外壳"太短，
+    # 输出截断 → json_parse_fail → 整条 run 进 ALERT（E2E 实测复现）。提到 4096。
+    services.max_tokens = 4096
     return services

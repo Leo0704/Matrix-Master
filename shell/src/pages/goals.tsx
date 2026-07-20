@@ -11,6 +11,7 @@ import { EmptyState } from '@/components/common/empty-state';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatDate, formatRelative } from '@/lib/format';
+import { useActiveBusinessId } from '@/stores/ui-store';
 import {
   Dialog,
   DialogContent,
@@ -21,10 +22,16 @@ import {
 } from '@/components/ui/dialog';
 
 export function Goals() {
-  const { data, isLoading, error, refetch } = useGoals();
+  const activeBusinessId = useActiveBusinessId();
+  const { data, isLoading, error, refetch } = useGoals(
+    activeBusinessId ? { business_id: activeBusinessId } : undefined,
+  );
   const [open, setOpen] = useState(false);
 
   const items = data?.items ?? [];
+  const hasActiveGoal = items.some(
+    (g) => g.status === 'active' && g.phase !== 'DONE',
+  );
 
   return (
     <div className="space-y-4">
@@ -34,7 +41,14 @@ export function Goals() {
         actions={
           <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
-              <Button>
+              <Button
+                disabled={hasActiveGoal}
+                title={
+                  hasActiveGoal
+                    ? '当前业务已有进行中的目标，需先完成或取消'
+                    : undefined
+                }
+              >
                 <Plus className="mr-1 h-4 w-4" /> 新建目标
               </Button>
             </DialogTrigger>
@@ -45,7 +59,10 @@ export function Goals() {
                   用自然语言描述目标；AI 会自动检索知识库并启动新 run。
                 </DialogDescription>
               </DialogHeader>
-              <GoalForm onCreated={() => setOpen(false)} />
+              <GoalForm
+                onCreated={() => setOpen(false)}
+                hasActiveGoal={hasActiveGoal}
+              />
             </DialogContent>
           </Dialog>
         }

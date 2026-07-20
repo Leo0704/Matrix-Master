@@ -26,7 +26,7 @@ from matrix.api.schemas import (
     DevicePairRequest,
     DevicePairResponse,
     DeviceRegisterRequest,
-    DeviceUnbindResponse,
+    DeviceRetireResponse,
     DeviceUpdate,
 )
 from matrix.db.models import Account, AppConfig, Device as DeviceORM
@@ -512,17 +512,18 @@ async def update_device(
     return _to_schema(d, int(cnt), handle)
 
 
-@router.post("/{device_id}/unbind", response_model=DeviceUnbindResponse)
-async def unbind_device(
+@router.post("/{device_id}/retire", response_model=DeviceRetireResponse)
+async def retire_device(
     device_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-) -> DeviceUnbindResponse:
-    """设备退役：清空绑到这台设备上的 active 账号的 device_id + 标 disabled。
+) -> DeviceRetireResponse:
+    """退役设备：这台手机不再参与运营。
 
-    业务语义：**设备 = 手机**。"解绑"实际上就是"设备坏了 / 不要了"，
-    所以一次性做两件事：
+    业务语义：**设备 = 手机**。"退役"表示"设备坏了 / 不要了 / 永久下线"，
+    会做三件事：
       - 把绑在这台设备上的账号 device_id 清 NULL（账号数据不丢）
       - 把设备 status 改成 'disabled'，从设备列表自动消失（list 默认排除）
+      - 撤销该设备所有 HMAC 密钥，防止退役后还能冒充心跳/登录态上报
 
     注意：notes 仍挂在账号下，账号历史完整；只是这台手机不再参与运营。
     """
@@ -544,9 +545,14 @@ async def unbind_device(
         if unbound_handle is None:
             unbound_handle = acc.handle
         acc.device_id = None
+
+    # 撤销 HMAC 密钥：退役设备不应再能调用任何需 HMAC 鉴权的接口
+    km = KeyManager(session)
+    await km.revoke_all(device_id)
+    d.hmac_key_id = None
     d.status = "disabled"
     await session.flush()
-    return DeviceUnbindResponse(
+    return DeviceRetireResponse(
         device_id=device_id,
         unbound_account_handle=unbound_handle,
     )

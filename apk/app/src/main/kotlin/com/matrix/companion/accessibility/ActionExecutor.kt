@@ -45,6 +45,24 @@ class ActionExecutor(
 
     suspend fun tap(selector: Selector): ApiResult<Unit> = driver.tapBySelector(selector)
 
+    /**
+     * Wait up to [timeoutMs] for [selector] to appear, then tap it.
+     *
+     * openApp 只是"App 到前台"，首帧渲染 + 无障碍树填充还要几百 ms~几秒
+     * （小红书冷启动尤其慢）。裸 [tap] 在树未就绪时直接 SELECTOR_NOT_FOUND，
+     * E2E 实测 800ms Jitter 不够。等不到才报 SELECTOR_NOT_FOUND（retryable，
+     * 页面慢和选择器失效是两回事，前者重试能好）。
+     */
+    suspend fun tapWhenReady(selector: Selector, timeoutMs: Long = 5000L): ApiResult<Unit> {
+        driver.waitFor(selector, timeoutMs = timeoutMs)
+            ?: return ApiResult.Err(
+                ErrorCode.SELECTOR_NOT_FOUND,
+                "node not ready in ${timeoutMs}ms: $selector",
+                retryable = true,
+            )
+        return driver.tapBySelector(selector)
+    }
+
     suspend fun input(text: String): ApiResult<Unit> = driver.inputText(text)
 
     suspend fun swipe(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMs: Long = 300L) =

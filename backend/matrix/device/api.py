@@ -139,6 +139,11 @@ async def verify_hmac(
     device = await session.get(Device, device_id)
     if device is None or device.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="device not found")
+    if device.status == "disabled":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="device is retired",
+        )
     if device.hmac_key_id is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="device has no active HMAC key")
 

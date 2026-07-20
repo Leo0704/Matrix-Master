@@ -18,7 +18,8 @@ from matrix.api.schemas.device import (
     DevicePairRequest,
     DevicePairResponse,
     DeviceRegisterRequest,
-    DeviceUnbindResponse,
+    DeviceRetireResponse,
+    DeviceUnbindResponse,  # 兼容旧名
     DeviceUpdate,
 )
 from matrix.api.schemas.agent_run import AgentRun, AgentRunListResponse
@@ -121,7 +122,8 @@ __all__ = [
     "DevicePairRequest",
     "DevicePairResponse",
     "DeviceRegisterRequest",
-    "DeviceUnbindResponse",
+    "DeviceRetireResponse",
+    "DeviceUnbindResponse",  # 兼容旧名
     "DeviceUpdate",
     "ErrorDetail",
     "ErrorResponse",

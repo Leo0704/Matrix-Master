@@ -5,6 +5,8 @@ import type { Device, DeviceRegisterRequest } from '@/types/api';
 export function useDevices(params?: {
   status?: string;
   tag?: string;
+  /** 默认 false；传 true 时包含已退役（status=disabled）设备 */
+  include_disabled?: boolean;
   /** v0.7+ 业务过滤 */
   business_id?: string;
 }) {
@@ -49,13 +51,13 @@ export function useUpdateDevice() {
   });
 }
 
-/** 解绑设备：把绑到这台设备上的账号 device_id 清空（设备坏了换新机场景） */
-export function useUnbindDevice() {
+/** 退役设备：设备永久下线，清账号绑定 + 撤销 HMAC 密钥 */
+export function useRetireDevice() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) =>
       apiClient.post<{ device_id: string; unbound_account_handle: string | null }>(
-        `/devices/${id}/unbind`,
+        `/devices/${id}/retire`,
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['devices'] });

@@ -3,6 +3,9 @@
 创建目标后由 ``GoalOrchestratorWorker`` 推进 phase=PENDING → PREPARING → ... → DONE；
 具体的 AgentRun（每篇笔记一条）由 orchestrator 的 ``_prepare_round`` 创建，
 不再由本路由塞"启动种子"。
+
+v0.7 业务内单一 active goal：一个业务同时只能有一个未结束（status='active' 且 phase != 'DONE'）
+的目标，防止多目标抢设备/账号/日额度。
 """
 from __future__ import annotations
 
@@ -65,6 +68,33 @@ def _round_to_schema(r: GoalRoundORM) -> GoalRound:
     )
 
 
+async def _has_active_goal(
+    session: AsyncSession,
+    business_id: uuid.UUID,
+    *,
+    exclude_goal_id: uuid.UUID | None = None,
+) -> bool:
+    """查询业务内是否已有未结束的 active goal。
+
+    未结束定义：status='active' 且 phase != 'DONE'。
+    achieved/failed/cancelled 均为已结束，不会阻塞新 goal。
+    """
+    stmt = (
+        select(GoalORM.id)
+        .where(
+            GoalORM.business_id == business_id,
+            GoalORM.status == "active",
+            GoalORM.phase != "DONE",
+            GoalORM.deleted_at.is_(None),
+        )
+        .limit(1)
+    )
+    if exclude_goal_id is not None:
+        stmt = stmt.where(GoalORM.id != exclude_goal_id)
+    row = (await session.execute(stmt)).scalar_one_or_none()
+    return row is not None
+
+
 @router.get("", response_model=GoalListResponse)
 async def list_goals(
     business_id: Optional[uuid.UUID] = Query(None, description="v0.7+ 业务过滤"),
@@ -121,6 +151,13 @@ async def update_goal(
     if body.max_rounds is not None:
         g.max_rounds = body.max_rounds
     if body.status is not None:
+        # v0.7 业务内单一 active goal：重新激活时检查是否已有其他 active goal
+        if body.status == "active" and g.status != "active":
+            if await _has_active_goal(session, g.business_id, exclude_goal_id=g.id):
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "business already has an active goal; wait for it to finish or cancel it",
+                )
         g.status = body.status  # type: ignore[arg-type]
     await session.flush()
     return _to_schema(g)
@@ -175,6 +212,13 @@ async def create_goal(
 ) -> Goal:
     # v0.7+ 业务模型重构：业务上下文校验（存在 + active）
     await resolve_active_business(session, body.business_id)
+
+    # v0.7 业务内单一 active goal：防止多目标抢设备/账号/日额度
+    if await _has_active_goal(session, body.business_id):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "business already has an active goal; wait for it to finish or cancel it",
+        )
 
     # target 接受 ThemeTarget 结构或 dict；统一存为 dict 给 JSONB
     target_dict = body.target if isinstance(body.target, dict) else dict(body.target or {})
