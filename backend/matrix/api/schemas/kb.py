@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 KbType = Literal[
     "brand", "persona", "rule", "topic", "history", "template", "product",
-    "strategy_card",
+    "strategy_card", "image_asset",
 ]
 
 

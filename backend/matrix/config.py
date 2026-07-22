@@ -41,6 +41,7 @@ class Settings(BaseSettings):
 
     # ===== LLM providers（按需选填，未填的 provider 不可用）=====
     openai_api_key: Optional[str] = None
+    openai_base_url: Optional[str] = None  # OpenAI 兼容端点（硅基流动等）
     embedding_base_url: Optional[str] = None  # embedder 自定义 base_url（硅基流动等）
     anthropic_api_key: Optional[str] = None
     dashscope_api_key: Optional[str] = None

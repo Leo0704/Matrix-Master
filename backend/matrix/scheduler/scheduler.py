@@ -99,6 +99,11 @@ class Scheduler:
         self._stop_event.set()
 
     async def _dispatch(self, task: TaskLike) -> None:
+        # v0.7 Phase 6：device_publish 由手机主动拉取，调度器不碰。
+        if task.action == "device_publish":
+            logger.debug("scheduler.skip_pull_action", task_id=task.id, action=task.action)
+            return
+
         await self.writer.mark_running(task)
         try:
             ok = await self.executor.execute(task)

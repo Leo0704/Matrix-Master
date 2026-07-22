@@ -59,6 +59,13 @@ class XhsNoteOpener(
     }
 
     private suspend fun openViaDeepLink(noteId: String): ApiResult<Unit> {
+        // 2026 版 XHS（9.38+ 实测）：xhsdiscover:// 静默落到首页不再跳详情；
+        // 但 https explore 链接会打开内置 WebView，页面有「打开 APP 查看」按钮，
+        // 点了才进原生详情页。优先走这条；按钮没出现再退回老 scheme。
+        val httpsResult = openViaHttpsWebView(noteId)
+        if (httpsResult is ApiResult.Ok) return httpsResult
+        Logx.w("xhs.openNote: https webview path failed (${httpsResult}), trying xhsdiscover://")
+
         val uri = Uri.parse("$DEEP_LINK_SCHEME$noteId")
         val intent = Intent(Intent.ACTION_VIEW, uri).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -66,11 +73,7 @@ class XhsNoteOpener(
         }
         return try {
             appContext.startActivity(intent)
-            // Give XHS a moment to dispatch the intent and start the
-            // detail activity; the waitFor below will detect readiness.
             Jitter.sleep(500L)
-            // Probe: wait for any "笔记详情页 indicator" — note that we
-            // share-detail-page-like controls (like / comment buttons).
             val landed = driver.waitFor(XhsSelectors.NOTE_DETAIL_LIKE_BTN, timeoutMs = 8_000L) != null
             if (landed) ApiResult.Ok(Unit)
             else ApiResult.Err(
@@ -87,6 +90,52 @@ class XhsNoteOpener(
             )
         } catch (e: SecurityException) {
             Logx.w("xhs.openNote: SecurityException on startActivity: ${e.message}")
+            ApiResult.Err(
+                ErrorCode.INTERNAL_ERROR,
+                "startActivity denied: ${e.message}",
+                retryable = false,
+            )
+        }
+    }
+
+    /**
+     * https explore 链接 → XHS 内置 WebView → 点「打开 APP 查看」→ 原生详情页。
+     * （2026-07 在 XHS 9.38.1 / RMX2117 实测验证的路径）
+     */
+    private suspend fun openViaHttpsWebView(noteId: String): ApiResult<Unit> {
+        val uri = Uri.parse("https://www.xiaohongshu.com/explore/$noteId")
+        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            setPackage(XhsSelectors.PACKAGE)
+        }
+        return try {
+            appContext.startActivity(intent)
+            Jitter.sleep(1_500L)
+            val openBtn = driver.waitFor(XhsSelectors.BTN_OPEN_IN_APP, timeoutMs = 8_000L)
+                ?: return ApiResult.Err(
+                    ErrorCode.SELECTOR_NOT_FOUND,
+                    "webview '打开 APP 查看' button not found",
+                    retryable = true,
+                )
+            when (val r = driver.tap(openBtn.centerX, openBtn.centerY)) {
+                is ApiResult.Ok -> Unit
+                is ApiResult.Err -> return r
+            }
+            Jitter.sleep(1_000L)
+            val landed = driver.waitFor(XhsSelectors.NOTE_DETAIL_LIKE_BTN, timeoutMs = 8_000L) != null
+            if (landed) ApiResult.Ok(Unit)
+            else ApiResult.Err(
+                ErrorCode.TIMEOUT,
+                "'打开 APP 查看' tapped but native detail page did not appear",
+                retryable = true,
+            )
+        } catch (e: ActivityNotFoundException) {
+            ApiResult.Err(
+                ErrorCode.APP_NOT_FOUND,
+                "https explore intent not handled: ${e.message}",
+                retryable = false,
+            )
+        } catch (e: SecurityException) {
             ApiResult.Err(
                 ErrorCode.INTERNAL_ERROR,
                 "startActivity denied: ${e.message}",

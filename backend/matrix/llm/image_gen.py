@@ -330,6 +330,83 @@ class MiniMaxImageGenClient(ImageGenClient):
         )
 
 
+class OpenAiCompatibleImageGenClient(ImageGenClient):
+    """OpenAI 兼容 /v1/images/generations（硅基流动、OneAPI 等中转）。"""
+
+    provider = "openai_compatible"
+    DEFAULT_BASE_URL = "https://api.openai.com/v1"
+    DEFAULT_MODEL = "dall-e-3"
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        model: str = DEFAULT_MODEL,
+        **kwargs: Any,
+    ) -> None:
+        settings = get_settings()
+        self._api_key = api_key or settings.openai_api_key or ""
+        self._base_url = (base_url or settings.openai_base_url or self.DEFAULT_BASE_URL).rstrip("/")
+        self._model = model
+
+    async def generate(
+        self,
+        prompt: str,
+        *,
+        n: int = 1,
+        size: str = "1024*1024",
+        style: str | None = None,
+        seed: int | None = None,
+        negative_prompt: str | None = None,
+        timeout: float = 60.0,
+    ) -> ImageGenResult:
+        if not self._api_key:
+            raise ImageGenError("OPENAI_API_KEY not configured")
+
+        # OpenAI 只接受 1024x1024、1792x1024、1024x1792
+        normalized_size = size.replace("*", "x")
+        body: dict[str, Any] = {
+            "model": self._model,
+            "prompt": prompt,
+            "n": n,
+            "size": normalized_size,
+            "response_format": "url",
+        }
+        if style is not None:
+            body["style"] = style
+        if negative_prompt is not None:
+            logger.warning("OpenAI compatible endpoint has no negative_prompt field; ignoring")
+
+        url = f"{self._base_url}/images/generations"
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(url, json=body, headers=headers)
+        except httpx.HTTPError as e:
+            raise ImageGenError(f"OpenAI image gen network error: {e}") from e
+
+        if resp.status_code >= 400:
+            raise ImageGenError(
+                f"OpenAI image gen failed: status={resp.status_code} "
+                f"body={resp.text[:200]}"
+            )
+        data = resp.json()
+        urls = [str(item.get("url", "")) for item in (data.get("data") or []) if item.get("url")]
+        revised = (data.get("data") or [{}])[0].get("revised_prompt")
+        return ImageGenResult(
+            urls=urls,
+            revised_prompt=revised,
+            provider=self.provider,
+            model=self._model,
+            seed=seed,
+            raw=data,
+        )
+
+
 def get_image_gen_client(provider: str | None = None) -> ImageGenClient:
     """按 provider 名取客户端。"""
     p = (provider or get_settings().matrix_image_provider or "in_memory").lower()
@@ -343,9 +420,11 @@ def get_image_gen_client(provider: str | None = None) -> ImageGenClient:
         return DoubaoSeedreamClient()
     if p in ("minimax", "minimax_image_gen"):
         return MiniMaxImageGenClient()
+    if p in ("openai", "openai_compatible"):
+        return OpenAiCompatibleImageGenClient()
     raise ValueError(
         f"unknown image provider: {p!r}; "
-        "expected in_memory|tongyi_wanxiang|zhipu_cogview|doubao_seedream|MiniMax_image_gen"
+        "expected in_memory|tongyi_wanxiang|zhipu_cogview|doubao_seedream|MiniMax_image_gen|openai"
     )
 
 

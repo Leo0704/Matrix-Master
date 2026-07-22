@@ -6,13 +6,7 @@
 from __future__ import annotations
 
 import base64
-import json
-import os
-import secrets
-import tempfile
-import time
 import uuid
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -31,96 +25,20 @@ from matrix.api.schemas import (
 )
 from matrix.db.models import Account, AppConfig, Device as DeviceORM
 from matrix.device.key_manager import KeyManager
+from matrix.device.pair_codes import (
+    PAIR_CODE_TTL_SECONDS as _PAIR_CODE_TTL_SECONDS,
+    claim_pair_code as _claim_pair_code,
+    finalize_pair_code as _finalize_pair_code,
+    issue_pair_code as _issue_pair_code,
+    restore_pair_code as _restore_pair_code,
+    _codes,
+    _purge_expired,
+)
 from matrix.monitoring.logging import get_logger
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/devices", tags=["devices"])
-_PAIR_CODE_TTL_SECONDS = 600
-
-# P2-1（real-device testing 改）：原来 _pair_codes 是进程内 dict，
-# uvicorn 多 worker / 重启 / debug 时会丢；docker exec 跑的临时 Python
-# 进程甚至根本没共享内存。改成 JSON 文件持久化：每次写都原子重命名。
-#
-# 关键：所有时间都用 wall-clock (time.time()) 而不是 monotonic，因为
-# monotonic 是"进程启动后秒数"，跨进程无意义；wall-clock 是绝对时间，
-# 跨进程可比较。
-_PAIR_CODES_PATH = Path(
-    os.environ.get("MATRIX_PAIR_CODES_PATH", "/app/backend/.pair_codes.json")
-)
-
-
-def _load_pair_codes() -> dict[str, tuple[str, float, Optional[float]]]:
-    """Load from disk.
-
-    Returns mapping code → (device_id_str, expires_at_wall, consumed_at_wall|None)。
-    兼容旧版 2-tuple 条目（consumed_at 视作 None）。
-    """
-    if not _PAIR_CODES_PATH.exists():
-        return {}
-    try:
-        raw = json.loads(_PAIR_CODES_PATH.read_text())
-    except (OSError, json.JSONDecodeError):
-        return {}
-    out: dict[str, tuple[str, float, Optional[float]]] = {}
-    for code, v in raw.items():
-        if isinstance(v, list) and len(v) >= 3:
-            cons = v[2]
-            out[code] = (v[0], float(v[1]), float(cons) if cons is not None else None)
-        else:
-            # legacy: [device_id_str, expires_at]
-            out[code] = (v[0], float(v[1]), None)
-    return out
-
-
-def _save_pair_codes(
-    codes: dict[str, tuple[uuid.UUID, float, Optional[float]]],
-) -> None:
-    """Atomic write: write to temp file, then rename."""
-    serializable = {
-        code: (
-            str(device_id),
-            float(expires_at_wall),
-            float(consumed_at) if consumed_at is not None else None,
-        )
-        for code, (device_id, expires_at_wall, consumed_at) in codes.items()
-    }
-    try:
-        _PAIR_CODES_PATH.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(
-            prefix=".pair_codes.", dir=str(_PAIR_CODES_PATH.parent)
-        )
-        try:
-            with os.fdopen(fd, "w") as f:
-                json.dump(serializable, f)
-            os.replace(tmp, _PAIR_CODES_PATH)
-        except Exception:
-            try: os.unlink(tmp)
-            except OSError: pass
-            raise
-    except OSError as e:
-        logger.warning(f"pair_codes persist failed: {e}")
-
-
-def _purge_expired(
-    codes: dict[str, tuple[uuid.UUID, float, Optional[float]]],
-) -> dict[str, tuple[uuid.UUID, float, Optional[float]]]:
-    now = time.time()
-    return {c: v for c, v in codes.items() if v[1] > now}
-
-
-# 注：不再保留进程内缓存。历史上 _pair_codes_cache 只在首次访问时 load
-# 一次文件、之后永不重读，而 _purge_expired 返回的是 copy，导致
-# _issue_pair_code/_claim_pair_code 在 copy 上改、写文件，但缓存本身
-# 从不刷新 → 新生成的码在同进程里"看不见"→ 配对永远 invalid。
-# 文件是唯一可信源（Docker bind mount 下 host=container 同一文件），
-# 每次读盘成本可忽略（配对低频）。
-
-
-def _codes() -> dict[str, tuple[uuid.UUID, float, Optional[float]]]:
-    """每次都从磁盘重读——文件是唯一可信源。"""
-    loaded = _load_pair_codes()
-    return {c: (uuid.UUID(d), e, cons) for c, (d, e, cons) in loaded.items()}
 
 
 def _to_schema(
@@ -144,83 +62,6 @@ def _to_schema(
         pair_code=pair_code,
         business_id=d.business_id,  # v0.7+ 业务归属
     )
-
-
-def _issue_pair_code(device_id: uuid.UUID) -> str:
-    codes = _purge_expired(_codes())
-    expires_at_wall = time.time() + _PAIR_CODE_TTL_SECONDS
-    while True:
-        code = f"{secrets.randbelow(1_000_000):06d}"
-        if code not in codes:
-            codes[code] = (device_id, expires_at_wall, None)
-            _save_pair_codes(codes)
-            return code
-
-
-def _claim_pair_code(pair_code: str) -> Optional[uuid.UUID]:
-    """原子地领用配对码，返回其绑定的真实 device_id（**不删**条目）。
-
-    配对码在 ``_issue_pair_code`` 时已绑定服务端 device 行的 UUID；
-    本函数返回那个 UUID，**不**接受外部 device_id 做匹配。
-
-    历史 bug：旧版 ``_consume_pair_code(device_id, pair_code)`` 要求 URL path
-    里的 device_id 与码绑定的 device_id 一致，但 APK 在
-    ``DeviceRegistrar.deviceId()`` 里本地随机生成 device_id、从不与服务端
-    同步，导致两者永远不等 → 配对永远 404/400。改成由码反查 device_id
-    彻底消除这个不一致。
-
-    原子性策略（修复"码消费了但 key 没下发"的不可恢复态）：
-    - 领用时只标记 ``consumed_at``，**不删**条目；并发请求看到
-      ``consumed_at`` 在 stale 窗口内 → 直接拒绝（一次性防重放）。
-    - DB 事务 commit 成功后由调用方调 :func:`_finalize_pair_code` 删条目。
-    - 任何异常 / 回滚由调用方调 :func:`_restore_pair_code` 清掉
-      ``consumed_at``，码可重试。
-    - 进程崩溃留下的"领用未 finalize"条目，超过
-      ``_CONSUMED_STALE_SECONDS`` 后自动可重新领用。
-
-    返回：码不存在 / 已领用(未 stale) / 过期 → None；码有效 → device_id。
-    """
-    codes = _purge_expired(_codes())
-    entry = codes.get(pair_code)
-    if entry is None:
-        return None
-    expected_device_id, expires_at_wall, consumed_at = entry
-    now = time.time()
-    if expires_at_wall <= now:
-        codes.pop(pair_code, None)
-        _save_pair_codes(codes)
-        return None
-    if consumed_at is not None and (now - consumed_at) < _CONSUMED_STALE_SECONDS:
-        return None
-    # 原子领用：标记 consumed_at 并立即落盘。真正的删除交给
-    # _finalize_pair_code（DB commit 成功后）。
-    codes[pair_code] = (expected_device_id, expires_at_wall, now)
-    _save_pair_codes(codes)
-    return expected_device_id
-
-
-# 领用后若超过此窗口仍未 finalize（进程崩溃 / commit 失败未还原），
-# 下次访问时视作可重新领用，避免码被永久卡死。
-_CONSUMED_STALE_SECONDS = 60
-
-
-def _finalize_pair_code(pair_code: str) -> None:
-    """DB 事务成功 commit 后调用：真正删除配对码条目。"""
-    codes = _codes()
-    if pair_code in codes:
-        codes.pop(pair_code, None)
-        _save_pair_codes(codes)
-
-
-def _restore_pair_code(pair_code: str) -> None:
-    """领用后事务失败时调用：清掉 consumed_at，让码可重新领用。"""
-    codes = _codes()
-    entry = codes.get(pair_code)
-    if entry is None:
-        return
-    device_id, expires_at_wall, _ = entry
-    codes[pair_code] = (device_id, expires_at_wall, None)
-    _save_pair_codes(codes)
 
 
 def _apply_pair_identity(

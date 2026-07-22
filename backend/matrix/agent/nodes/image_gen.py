@@ -121,7 +121,9 @@ async def image_gen_node(state: AgentState) -> dict[str, Any]:
         )
 
     # 3) 写 KB 缓存（best-effort）
-    await _save_image_to_kb(services, topic_hash, prompt, result)
+    await _save_image_to_kb(
+        services, topic_hash, prompt, result, business_id=state.get("business_id")
+    )
 
     new_draft = {**draft, "images": urls}
     return {"draft": new_draft, "last_error": None, "image_cache_hit": False}
@@ -173,13 +175,15 @@ async def _save_image_to_kb(
     topic_hash: str,
     prompt: str,
     result: Any,
+    *,
+    business_id: Any | None = None,
 ) -> None:
     writer = getattr(services, "kb_writer", None)
-    if writer is None:
+    if writer is None or business_id is None:
         return
     try:
         await writer.upsert_document(
-            doc_type="image_asset",
+            type="image_asset",
             ref_id=None,
             title=f"image:{topic_hash}",
             content=prompt,
@@ -190,6 +194,7 @@ async def _save_image_to_kb(
                 "model": result.model,
                 "revised_prompt": result.revised_prompt or "",
             },
+            business_id=business_id,
         )
     except Exception:
         logger.exception("image_gen.kb_write_failed")

@@ -41,6 +41,7 @@ def build_agent_services(
     model: str = "sonnet",
     round_allocator: Any | None = None,
     llm_rate_limiter: Any | None = None,
+    image_generator: Any | None = None,
 ) -> AgentServices:
     """组装 AgentServices。``device_adapter`` 必传（生产路径 = ``ApkHttpClient``）。
 
@@ -87,6 +88,7 @@ def build_agent_services(
         interaction_writer=interaction_writer,
         rate_limiter=rate_limiter,
         llm_rate_limiter=llm_rate_limiter,
+        image_generator=image_generator,
     )
 
 

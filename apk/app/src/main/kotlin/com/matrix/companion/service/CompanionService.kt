@@ -13,6 +13,7 @@ import com.matrix.companion.App
 import com.matrix.companion.MainActivity
 import com.matrix.companion.R
 import com.matrix.companion.net.DeviceRegistrar
+import com.matrix.companion.net.MasterConfig
 import com.matrix.companion.net.TailscaleClient
 import com.matrix.companion.status.Heartbeat
 import com.matrix.companion.util.Logx
@@ -45,17 +46,21 @@ class CompanionService : Service() {
         super.onCreate()
         startForegroundCompat()
         TailscaleClient.refresh()
+        val masterUrl = MasterConfig.get(this)
         heartbeat = Heartbeat(
+            appContext = this,
             provider = App.get(this).statusProvider,
-            masterUrl = DeviceRegistrar.MASTER_DEFAULT,
+            masterUrl = masterUrl,
             secretProvider = App.get(this).hmacSecretStore,
         )
         heartbeat.start(scope) { DeviceRegistrar(this).deviceId() }
 
-        httpServerJob = scope.launch {
-            // Defer so App init completes if we boot from BOOT_COMPLETED.
-            delay(500)
-            HttpServer(App.get(this@CompanionService)).start()
+        if (com.matrix.companion.BuildConfig.ENABLE_HTTP_SERVER) {
+            httpServerJob = scope.launch {
+                // Defer so App init completes if we boot from BOOT_COMPLETED.
+                delay(500)
+                HttpServer(App.get(this@CompanionService)).start()
+            }
         }
 
         Logx.i("CompanionService started")

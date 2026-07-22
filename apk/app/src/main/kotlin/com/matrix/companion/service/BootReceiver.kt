@@ -19,6 +19,7 @@ class BootReceiver : BroadcastReceiver() {
                 Logx.i("BootReceiver: restarting services for ${intent.action}")
                 CompanionService.start(context)
                 WatchdogService.start(context)
+                TaskPollerService.start(context)
             }
         }
     }

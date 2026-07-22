@@ -15,7 +15,9 @@ import androidx.lifecycle.lifecycleScope
 import com.matrix.companion.databinding.ActivityMainBinding
 import com.matrix.companion.net.DeviceRegistrar
 import com.matrix.companion.net.DeviceRegistrar.RegistrationState
+import com.matrix.companion.net.MasterConfig
 import com.matrix.companion.service.CompanionService
+import com.matrix.companion.service.TaskPollerService
 import com.matrix.companion.service.WatchdogService
 import com.matrix.companion.util.Logx
 import kotlinx.coroutines.flow.collectLatest
@@ -84,6 +86,32 @@ class MainActivity : AppCompatActivity() {
 
         observeRegistration()
         refreshStatus()
+        handleIntentExtras(intent)
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        handleIntentExtras(intent)
+    }
+
+    private fun handleIntentExtras(intent: Intent?) {
+        intent?.getStringExtra("master_url")?.let { url ->
+            if (url.startsWith("http://") || url.startsWith("https://")) {
+                MasterConfig.set(this, url)
+                Logx.i("MainActivity.master_url_override: $url")
+            }
+        }
+        intent?.getStringExtra("pair_code")?.let { code ->
+            if (code.length >= 4) {
+                lifecycleScope.launch { runPair(code) }
+            }
+        }
+        if (intent?.getBooleanExtra("start_service", false) == true) {
+            CompanionService.start(this)
+            WatchdogService.start(this)
+            TaskPollerService.start(this)
+            Toast.makeText(this, "已启动", Toast.LENGTH_SHORT).show()
+        }
     }
 
     override fun onResume() {

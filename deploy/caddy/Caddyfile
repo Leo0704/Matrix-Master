@@ -1,0 +1,25 @@
+# 生产环境 Caddy 配置：自动申请 Let's Encrypt 证书，反向代理到后端。
+# 用法：
+#   1. 把 {MATRIX_DOMAIN} 换成你的真实域名（如 matrix.example.com）
+#   2. docker compose --profile prod up -d caddy
+#   3. DNS A 记录指向服务器公网 IP
+
+{$MATRIX_DOMAIN:localhost} {
+    # 自动 HTTPS；Email 用于 Let's Encrypt 账号
+    tls {$TLS_EMAIL:}
+
+    # 健康检查
+    handle /health {
+        reverse_proxy backend:8666
+    }
+
+    # 后端 API
+    handle /api/* {
+        reverse_proxy backend:8666
+    }
+
+    # 前端 dev server（生产若用静态构建，可改成 file_server）
+    handle {
+        reverse_proxy frontend:1420
+    }
+}

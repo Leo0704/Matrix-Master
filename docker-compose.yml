@@ -79,6 +79,24 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: admin
     profiles: ["monitoring"]
 
+  # 生产 HTTPS 入口（需要域名 + DNS 指向本机）
+  caddy:
+    image: caddy:2-alpine
+    container_name: matrix-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      MATRIX_DOMAIN: ${MATRIX_DOMAIN:-localhost}
+      TLS_EMAIL: ${TLS_EMAIL:-}
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    profiles: ["prod"]
+    depends_on:
+      - backend
+
   # 后端测试服务（约定：pytest 必须在容器内跑）
   # 用法：
   #   docker compose run --rm test                          # 跑全部测试
@@ -176,3 +194,5 @@ volumes:
   postgres_data:
   headscale_data:
   frontend_node_modules:
+  caddy_data:
+  caddy_config:

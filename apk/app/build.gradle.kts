@@ -17,6 +17,12 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        val masterUrl = (project.findProperty("matrixMasterUrl") as String?)
+            ?: System.getenv("MATRIX_MASTER_URL")
+            ?: "http://192.168.1.172:8666"
+        buildConfigField("String", "MASTER_URL", "\"$masterUrl\"")
+        buildConfigField("boolean", "ENABLE_HTTP_SERVER", "true")
     }
 
     signingConfigs {

@@ -516,7 +516,7 @@ class _RecorderExecutor(TaskExecutor):
 class TestScheduler:
     @pytest.mark.asyncio
     async def test_dispatches_pending_and_marks_success(self):
-        tasks = [make_task() for _ in range(3)]
+        tasks = [make_task(action="device_collect_metrics") for _ in range(3)]
         loader = _RecorderLoader([tasks])
         writer = _RecorderWriter()
         executor = _RecorderExecutor([True, True, True])
@@ -547,7 +547,7 @@ class TestScheduler:
 
     @pytest.mark.asyncio
     async def test_marks_failed_when_executor_false(self):
-        tasks = [make_task(), make_task()]
+        tasks = [make_task(action="device_collect_metrics"), make_task(action="device_collect_metrics")]
         loader = _RecorderLoader([tasks])
         writer = _RecorderWriter()
         executor = _RecorderExecutor([True, False])
@@ -580,7 +580,7 @@ class TestScheduler:
             async def execute(self, task: TaskLike) -> bool:
                 raise RuntimeError("oops")
 
-        tasks = [make_task()]
+        tasks = [make_task(action="device_collect_metrics")]
         loader = _RecorderLoader([tasks])
         writer = _RecorderWriter()
         rl = _no_jitter_limiter()

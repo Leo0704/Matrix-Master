@@ -148,6 +148,7 @@ async def build_runtime_services(
 
     from matrix.device.adapters import ApkHttpClient
     from matrix.device.endpoints import DeviceEndpointResolver
+    from matrix.llm.image_gen import get_image_gen_client
 
     # v0.7+ 第 2 期：装一个进程级 LLM 限速器；并发上限走环境变量 ``MATRIX_LLM_CONCURRENCY``，
     # 缺省 8（典型 tier-1 Provider 撑得住）。
@@ -176,6 +177,7 @@ async def build_runtime_services(
         notifier=notifier,
         llm_rate_limiter=llm_rate_limiter,
         round_allocator=round_allocator,  # 第 1 期：注入 DefaultRoundSlotAllocator
+        image_generator=get_image_gen_client(),  # v0.7 Phase 3 补接线：IMAGE_GEN 节点此前永远 NO_CLIENT
     )
     # 默认 1024 对"返回 3 个选题 + 长 rationale / 800 字正文 + JSON 外壳"太短，
     # 输出截断 → json_parse_fail → 整条 run 进 ALERT（E2E 实测复现）。提到 4096。

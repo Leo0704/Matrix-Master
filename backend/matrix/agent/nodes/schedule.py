@@ -101,13 +101,10 @@ async def schedule_node(state: AgentState, *, now: datetime | None = None) -> di
     services = get_services()
     now = now or datetime.now(UTC)
 
-    # 取 persona_config（活跃窗黑名单等）
-    persona_config: dict | None = None
-    try:
-        # 集成层可以从 services 里取 persona rows；这里给个默认配置
-        persona_config = services.system_metadata.get("persona_config")
-    except Exception:
-        persona_config = None
+    # 取 persona_config（活跃窗黑名单等）：app_config 优先，system_metadata 兜底
+    from matrix.agent._persona_config import load_persona_config
+
+    persona_config = await load_persona_config(services)
 
     if not is_in_active_window(now, persona_config):
         return {

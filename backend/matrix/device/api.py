@@ -12,9 +12,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from matrix.db.models import Device
+from matrix.db.models import AppConfig, Device, Note, Task
 from matrix.db.session import get_session_factory
 
 
@@ -34,14 +35,16 @@ from matrix.device.hmac import (
 )
 from matrix.device.key_manager import KeyManager
 from matrix.device.login_state import LoginStateMonitor, LoginStateReport
-from matrix.device.pairing import (
-    PairingError,
-    PairingService,
-)
+
 from matrix.device.registry import (
     DeviceHeartbeatData,
     DeviceNotFound,
     DeviceRegistry,
+)
+from matrix.device.pair_codes import (
+    claim_pair_code,
+    finalize_pair_code,
+    restore_pair_code,
 )
 from matrix.device.tailscale_client import TailscaleClient
 
@@ -284,10 +287,9 @@ async def pair_device(
     4. ``complete_pairing`` 签发并下发 HMAC 密钥
     """
     km = KeyManager(session)
-    ts = TailscaleClient(api_url="", api_key="")  # 仅占位
-    pairing = PairingService(session, km, ts)
 
-    expected_device = pairing.validate_code(payload.pair_code)
+    # 优先从持久化文件领用配对码（跨 worker / request 共享）。
+    expected_device = claim_pair_code(payload.pair_code)
     if expected_device is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="invalid or expired pair code"
@@ -296,25 +298,44 @@ async def pair_device(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="pair code does not match device"
         )
-    if not pairing.consume_pair_code(payload.pair_code):
-        # 已被并发消费
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="pair code already consumed"
-        )
+
+    device = await session.get(Device, device_id)
+    if device is None or device.deleted_at is not None:
+        restore_pair_code(payload.pair_code)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="device not found")
 
     try:
-        result = await pairing.complete_pairing(
-            device_id=device_id,
-            pair_code=payload.pair_code,
-        )
-    except PairingError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+        issued = await km.issue_key(device_id)
+    except Exception as e:
+        restore_pair_code(payload.pair_code)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"failed to issue HMAC key: {e}",
+        ) from e
 
+    # 把密钥原文存到 AppConfig，供后续 verify_hmac 读取。
+    import base64
+
+    config_key = f"hmac_secret:{issued.key_id}"
+    session.add(
+        AppConfig(
+            key=config_key,
+            value={"secret": base64.b64encode(issued.secret).decode("ascii")},
+        )
+    )
+
+    finalize_pair_code(payload.pair_code)
+
+    logger.info(
+        "pairing.completed",
+        device_id=str(device_id),
+        key_id=issued.key_id,
+    )
     return PairCreateOut(
-        device_id=result.device_id,
-        key_id=result.key_id,
-        hmac_key=result.hmac_key,
-        sent_via=result.sent_via,
+        device_id=device_id,
+        key_id=issued.key_id,
+        hmac_key=base64.b64encode(issued.secret).decode("ascii"),
+        sent_via="tailscale",
     )
 
 
@@ -364,7 +385,136 @@ async def report_login_state(
 
 
 # ---------------------------------------------------------------------------
+# 任务拉取 / 完成（v0.7 Phase 6：手机主动拉取任务模型）
+# ---------------------------------------------------------------------------
+
+
+class TaskNextResponse(BaseModel):
+    id: UUID
+    action: str
+    payload: dict
+    request_id: str
+
+
+class TaskCompleteIn(BaseModel):
+    ok: bool
+    platform_note_id: Optional[str] = None
+    platform_url: Optional[str] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+@router.post("/{device_id}/tasks/next", response_model=dict)
+async def claim_next_task(
+    device_id: UUID,
+    _auth: Annotated[HmacAuthResult, Depends(verify_hmac)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict:
+    """手机认领下一条待执行任务。
+
+    原子语义：用 CTE + FOR UPDATE SKIP LOCKED 选一条 pending task，
+    同一台设备并发请求不会重复消费同一条任务。
+    """
+    from datetime import UTC, datetime
+
+    now = datetime.now(UTC)
+    stmt = text(
+        """
+        WITH next_task AS (
+            SELECT id FROM tasks
+            WHERE device_id = :device_id
+              AND status = 'pending'
+              AND scheduled_at <= :now
+            ORDER BY scheduled_at ASC
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+        )
+        UPDATE tasks
+        SET status = 'running',
+            attempts = attempts + 1,
+            executed_at = :now
+        FROM next_task
+        WHERE tasks.id = next_task.id
+        RETURNING tasks.id, tasks.action, tasks.payload, tasks.request_id
+        """
+    )
+    result = await session.execute(
+        stmt, {"device_id": str(device_id), "now": now}
+    )
+    row = result.mappings().one_or_none()
+    if row is None:
+        return {"ok": True, "data": None}
+    return {
+        "ok": True,
+        "data": TaskNextResponse(
+            id=row["id"],
+            action=row["action"],
+            payload=dict(row["payload"] or {}),
+            request_id=row["request_id"],
+        ),
+    }
+
+
+@router.post("/{device_id}/tasks/{task_id}/complete", response_model=dict)
+async def complete_task(
+    device_id: UUID,
+    task_id: UUID,
+    body: TaskCompleteIn,
+    _auth: Annotated[HmacAuthResult, Depends(verify_hmac)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict:
+    """手机上报任务执行结果。
+
+    成功后若 action 为 device_publish，会原子地把发布结果写回 notes 表
+    （platform_note_id / platform_url / published_at）。
+    """
+    from datetime import UTC, datetime
+
+    task = await session.get(Task, task_id)
+    if task is None or task.device_id != device_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "task not found")
+    if task.status != "running":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"task is {task.status}, cannot complete",
+        )
+
+    now = datetime.now(UTC)
+    task.status = "success" if body.ok else "failed"
+    task.executed_at = now
+    if not body.ok:
+        task.last_error = {
+            "code": body.error_code or "UNKNOWN",
+            "message": body.error_message or "",
+        }
+
+    if body.ok and task.action == "device_publish":
+        note_id_str = (task.payload or {}).get("note_id")
+        if note_id_str:
+            try:
+                note = await session.get(Note, UUID(str(note_id_str)))
+            except (ValueError, TypeError):
+                note = None
+            if note is not None:
+                note.status = "published"
+                note.platform_note_id = body.platform_note_id
+                note.platform_url = body.platform_url
+                note.published_at = now
+
+    await session.commit()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
 # 辅助：hmac 模块也被 import 用于测试 / 文档；显式 re-export
 # ---------------------------------------------------------------------------
 
-__all__ = ["router", "verify_hmac", "HmacAuthResult", "DeviceRegisterIn", "DeviceOut"]
+__all__ = [
+    "router",
+    "verify_hmac",
+    "HmacAuthResult",
+    "DeviceRegisterIn",
+    "DeviceOut",
+    "claim_next_task",
+    "complete_task",
+]

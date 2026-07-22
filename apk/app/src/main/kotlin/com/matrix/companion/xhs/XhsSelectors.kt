@@ -61,6 +61,17 @@ object XhsSelectors {
         Selector.Text("发布笔记"),
         Selector.ContentDesc("发布笔记"),
     )
+    // 2026 版小红书：点「+」后弹出类型选择底部弹窗（从相册选择 / 写文字 / 相机）
+    val BTN_PICK_FROM_ALBUM = Selector.fromResourceId(
+        "com.xingin.xhs:id/tv_pick_from_album",
+        Selector.Text("从相册选择"),
+        Selector.ContentDesc("从相册选择"),
+    )
+    val BTN_TEXT_NOTE = Selector.fromResourceId(
+        "com.xingin.xhs:id/tv_text_note",
+        Selector.Text("写文字"),
+        Selector.ContentDesc("写文字"),
+    )
     val BTN_NEXT_STEP = Selector.fromResourceId(
         "com.xingin.xhs:id/btn_next",
         Selector.Text("下一步"),
@@ -74,12 +85,16 @@ object XhsSelectors {
     )
     val EDIT_TITLE = Selector.fromResourceId(
         "com.xingin.xhs:id/edit_title",
+        Selector.Text("添加标题"),
         Selector.Text("填写标题会有更多赞哦"),
+        Selector.ContentDesc("添加标题"),
         Selector.ContentDesc("填写标题会有更多赞哦"),
     )
     val EDIT_CONTENT = Selector.fromResourceId(
         "com.xingin.xhs:id/edit_content",
+        Selector.Text("添加正文"),
         Selector.Text("输入正文"),
+        Selector.ContentDesc("添加正文"),
         Selector.ContentDesc("输入正文"),
     )
     val BTN_ADD_IMAGE = Selector.fromResourceId(
@@ -94,6 +109,13 @@ object XhsSelectors {
         "com.xingin.xhs:id/like_btn",
         Selector.Text("点赞"),
         Selector.ContentDesc("点赞"),
+    )
+    // WebView 落地页上的「打开 APP 查看」按钮（https explore 链接 → 原生详情页的中转）
+    val BTN_OPEN_IN_APP = Selector.fromResourceId(
+        "com.xingin.xhs:id/btn_open_in_app",
+        Selector.Text("打开 APP 查看"),
+        Selector.Text("App内打开"),
+        Selector.ContentDesc("打开 APP 查看"),
     )
     val BTN_LIKE = NOTE_DETAIL_LIKE_BTN
     val BTN_COLLECT = Selector.fromResourceId(

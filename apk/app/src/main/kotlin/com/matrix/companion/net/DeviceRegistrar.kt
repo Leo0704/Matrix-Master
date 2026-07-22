@@ -121,7 +121,8 @@ class DeviceRegistrar(private val context: Context) {
             // reason from the error envelope.
             // device_id 仍走 URL path（后端现在会忽略 path 里的 device_id、
             // 改由配对码反查真实 device_id），body 只需 pair_code + identity。
-            val httpResp = http.post("$MASTER_DEFAULT/api/v1/devices/$deviceId/pair") {
+            val masterUrl = MasterConfig.get(context)
+            val httpResp = http.post("$masterUrl/api/v1/devices/$deviceId/pair") {
                 contentType(ContentType.Application.Json)
                 setBody(
                     PairRequest(
@@ -197,9 +198,9 @@ class DeviceRegistrar(private val context: Context) {
     companion object {
         private const val KEY_DEVICE_ID = "device_id"
         /**
-         * Override via [net.DeviceRegistrar.MASTER_URL_OVERRIDE] at runtime
-         * by editing BuildConfig field in app/build.gradle.kts.
+         * 从 BuildConfig 读取，方便 dev/prod 注入不同后端地址。
+         * 构建时通过 -PmatrixMasterUrl=https://matrix.example.com 覆盖。
          */
-        const val MASTER_DEFAULT = "http://192.168.1.172:8666"
+        const val MASTER_DEFAULT = com.matrix.companion.BuildConfig.MASTER_URL
     }
 }

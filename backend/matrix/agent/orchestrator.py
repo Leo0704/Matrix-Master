@@ -157,7 +157,9 @@ async def _allocate_round_slots(
     if n <= 0:
         return [], 0
     try:
-        persona_cfg = services.system_metadata.get("persona_config")
+        from matrix.agent._persona_config import load_persona_config
+
+        persona_cfg = await load_persona_config(services)
         slots = await services.round_allocator.allocate(
             brief=dict(goal.target or {}),
             n=n,

@@ -159,6 +159,7 @@ class HttpServer(private val app: App) {
                 driver = app.driver,
                 imagePipeline = app.imagePipeline,
                 imagePicker = app.imagePicker,
+                appContext = app,
             ),
         )
         xhsInteractRoute(XhsInteractor(app.executor, app.noteOpener))

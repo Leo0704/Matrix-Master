@@ -1,8 +1,10 @@
 package com.matrix.companion.status
 
+import android.content.Context
 import com.matrix.companion.auth.HmacAuth
 import com.matrix.companion.auth.HmacSigner
 import com.matrix.companion.auth.SecretProvider
+import com.matrix.companion.net.NetworkTypeMonitor
 import com.matrix.companion.net.TailscaleClient
 import com.matrix.companion.util.Logx
 import io.ktor.client.HttpClient
@@ -42,6 +44,7 @@ import java.util.UUID
  *   failure so a single bad ping doesn't cascade into "device offline".
  */
 class Heartbeat(
+    private val appContext: Context,
     private val provider: StatusProvider,
     private val masterUrl: String,
     private val intervalMs: Long = 30_000L,
@@ -54,6 +57,7 @@ class Heartbeat(
         val online: Boolean,
         val app: String?,
         val battery: Int,
+        val network: String,
     )
 
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -81,7 +85,8 @@ class Heartbeat(
     suspend fun runOnce(deviceId: String): HttpResponse? {
         val ip = TailscaleClient.peekIp() ?: "0.0.0.0"
         val s = provider.snapshot()
-        val payload = Payload(deviceId, ip, s.online, s.app, s.battery)
+        val network = NetworkTypeMonitor.current(appContext)
+        val payload = Payload(deviceId, ip, s.online, s.app, s.battery, network)
         val body = json.encodeToString(Payload.serializer(), payload).toByteArray(Charsets.UTF_8)
 
         val backoffsMs = longArrayOf(0L, 1_000L, 3_000L, 10_000L)

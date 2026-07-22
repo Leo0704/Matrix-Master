@@ -197,6 +197,19 @@ class AccessibilityDriver(private val serviceRef: () -> AccessibilityService?) {
         return null
     }
 
+    /**
+     * 按一次系统返回键（无 UI 目标时用）。典型用途：输完正文后先收起输入法，
+     * 否则底部「发布」按钮被键盘盖住，按坐标点会误触键盘按键（E2E 实测：
+     * 发布键被盖后 tap 落到键盘 "." 上，正文被多加一个句号）。
+     */
+    suspend fun pressBack(): ApiResult<Unit> {
+        val service = serviceRef()
+            ?: return ApiResult.Err(ErrorCode.DEVICE_OFFLINE, "accessibility not bound", retryable = false)
+        val ok = service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+        return if (ok) ApiResult.Ok(Unit)
+        else ApiResult.Err(ErrorCode.INTERNAL_ERROR, "back action rejected", retryable = true)
+    }
+
     suspend fun swipe(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMs: Long): ApiResult<Unit> {
         val service = serviceRef()
             ?: return ApiResult.Err(ErrorCode.DEVICE_OFFLINE, "accessibility not bound", retryable = false)

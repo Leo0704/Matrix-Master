@@ -117,16 +117,26 @@ class XhsMetricsCollector(
         )
     }
 
-    private fun parseCount(text: String, label: String): Int? {
-        // Try 万 / w first (matches "1.2w", "3.5万")
-        val wRe = Regex("""(\d+(?:\.\d+)?)\s*[wW万]\s*$label""")
-        wRe.find(text)?.let { m ->
-            val v = m.groupValues[1].toDoubleOrNull() ?: return null
-            return (v * 10_000).toInt()
+    companion object {
+        /**
+         * 从整屏文本里解析某个指标的计数。兼容两种排版：
+         * - 数字在前：「123 赞」「1.2万 赞」（个人页卡片等）
+         * - 标签在前：「点赞 123」「点赞 1.2万」（2026 版详情页 content-desc 实测格式）
+         */
+        internal fun parseCount(text: String, label: String): Int? {
+            // 注意：数字与标签之间的空白只接受空格/制表符，不能用 \s ——
+            // \s 匹配换行，整屏文本里会把上一行的数字错配到本行标签上。
+            Regex("""(\d+(?:\.\d+)?)[ \t]*[wW万][ \t]*$label""").find(text)?.let { m ->
+                return m.groupValues[1].toDoubleOrNull()?.let { (it * 10_000).toInt() }
+            }
+            Regex("""(\d+)[ \t]*$label""").find(text)?.let { m ->
+                return m.groupValues[1].toIntOrNull()
+            }
+            Regex("""$label[ \t]*(\d+(?:\.\d+)?)[ \t]*[wW万]""").find(text)?.let { m ->
+                return m.groupValues[1].toDoubleOrNull()?.let { (it * 10_000).toInt() }
+            }
+            return Regex("""$label[ \t]*(\d+)""").find(text)?.groupValues?.get(1)?.toIntOrNull()
         }
-        // Fall back to bare integer form ("123 赞")
-        val bareRe = Regex("""(\d+)\s*$label""")
-        return bareRe.find(text)?.groupValues?.get(1)?.toIntOrNull()
     }
 
     /**
