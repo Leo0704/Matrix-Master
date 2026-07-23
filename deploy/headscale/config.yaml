@@ -1,20 +1,27 @@
 # Headscale 开发配置
 # 详细文档：https://headscale.net/
 
-server_url: http://localhost:8080
+# E2E 实测环境：手机无 WiFi（蜂窝网络）+ macOS 防火墙拦截 LAN 入站，
+# 唯一通道是 adb reverse（仅 TCP）。故 server_url 用 127.0.0.1，
+# 手机经 adb reverse tcp:8080 访问；同时开内嵌 DERP，
+# 让数据面也走 TCP（WireGuard UDP 过不了 adb reverse）。
+server_url: http://127.0.0.1:8080
 listen_addr: 0.0.0.0:8080
 metrics_listen_addr: 0.0.0.0:9090
 
-# 生产环境必须生成正式密钥
-# 这里用 dev 占位
-private_key: "dev-private-key-replace-in-production"
+# 密钥文件（dev 环境用 generate private-key 生成；生产必须重新生成并妥善保管）
+private_key_path: /etc/headscale/server.key
 noise:
-  private_key: "dev-noise-key-replace-in-production"
+  private_key_path: /etc/headscale/noise.key
 
 database:
   type: sqlite
   sqlite:
     path: /var/lib/headscale/db.sqlite
+
+# tailnet 地址段（0.23+ 必填）
+prefixes:
+  v4: 100.64.0.0/10
 
 dns:
   magic_dns: true
@@ -25,12 +32,25 @@ dns:
 
 # 开发环境：所有 tailnet 节点互通
 # 生产环境：收紧 ACL
-acl_policy_path: ""
+policy:
+  path: ""
 
-# 关闭自动更新 DERP（避免覆盖本地配置）
 derp:
   urls: []
+  paths:
+    - /etc/headscale/derp-map.yaml
   auto_update_enabled: false
+  # 内嵌 DERP：与控制面共用 8080 端口，数据面全程 TCP（adb reverse 友好）
+  server:
+    enabled: true
+    region_id: 999
+    region_code: "local"
+    region_name: "local-embedded"
+    stun_listen_addr: "0.0.0.0:3478"
+    private_key_path: /var/lib/headscale/derp_server.key
+    # 不自动写入官方 DERP 地图条目（那个条目 InsecureForTests=false，
+    # 客户端会对纯 HTTP 发起 TLS 而失败）；改用 derp-map.yaml 自定义条目。
+    automatically_add_embedded_derp_region: false
 
 # 日志
 log:

@@ -173,11 +173,6 @@ class TestAlertScannerWiring:
         async def fake_config_reader(key: str, default: Any) -> Any:
             return default
 
-        notify_calls: list[tuple[str, dict[str, Any]]] = []
-
-        async def fake_notifier(code: str, payload: dict[str, Any]) -> None:
-            notify_calls.append((code, payload))
-
         # mock session：add / flush / commit 都接受并保留记录
         written: list[Any] = []
 
@@ -216,7 +211,6 @@ class TestAlertScannerWiring:
         scanner = AlertScanner(
             session_factory=factory,  # type: ignore[arg-type]
             config_reader=fake_config_reader,
-            notifier=fake_notifier,
             config=AlertScannerConfig(),
         )
         # patch 内部 helper（用模块的 import 路径）
@@ -244,10 +238,10 @@ class TestAlertScannerWiring:
         codes = [(r.code, r.subject_id) for r in result]
         assert ("DEVICE_OFFLINE", "d1") not in codes
         assert ("RISK_BLOCKED", "a1") in codes
-        # notifier 只调一次（新增的那条）
-        assert len(notify_calls) == 1
-        assert notify_calls[0][0] == "RISK_BLOCKED"
-        assert notify_calls[0][1]["subject_id"] == "a1"
+        # v0.7+：监控类告警只写 alerts 表，不再重复发 notifications
+        assert len(written) == 1
+        assert written[0].code == "RISK_BLOCKED"
+        assert written[0].subject_id == "a1"
 
     @pytest.mark.asyncio
     async def test_alert_scanner_notifier_failure_does_not_lose_alert(self, monkeypatch):
@@ -263,9 +257,6 @@ class TestAlertScannerWiring:
 
         async def fake_config_reader(key, default):
             return default
-
-        async def failing_notifier(code, payload):
-            raise RuntimeError("notifier down")
 
         class _FakeSession:
             async def flush(self):
@@ -290,7 +281,6 @@ class TestAlertScannerWiring:
         scanner = AlertScanner(
             session_factory=_FakeFactory(),  # type: ignore[arg-type]
             config_reader=fake_config_reader,
-            notifier=failing_notifier,
         )
         import matrix.monitoring.alert_scanner as scanner_mod
 

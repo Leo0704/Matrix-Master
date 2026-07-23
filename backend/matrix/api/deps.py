@@ -10,8 +10,10 @@
 from __future__ import annotations
 
 import os
+import secrets
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import HTTPException, Request, status
@@ -19,6 +21,9 @@ from sqlalchemy import and_, exists, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from matrix.db.session import get_session_factory
+from matrix.monitoring.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -57,6 +62,36 @@ async def get_db() -> AsyncIterator[AsyncSession]:
 # ---------------------------------------------------------------------------
 # Auth（运营者 OS 用户）
 # ---------------------------------------------------------------------------
+
+_API_SECRET_DEFAULT_PATH = "/app/backend/.api_secret"
+
+
+def ensure_api_secret() -> None:
+    """确保 ``MATRIX_API_SECRET`` 存在：env → 持久化文件 → 自动生成并落盘。
+
+    零配置安全默认：env 未设时读持久化文件（默认 ``/app/backend/.api_secret``，
+    ``MATRIX_API_SECRET_PATH`` 可覆盖）；文件也没有则生成 64 位十六进制随机串
+    写入该文件（chmod 600），并写回 ``os.environ``——``get_current_user``
+    逐请求读 env，自动生成的值天然生效。首次生成时日志打印一次密码与文件
+    位置（网页控制台的访问密码），后续启动只打文件路径。
+    """
+    if os.environ.get("MATRIX_API_SECRET"):
+        return
+    path = Path(os.environ.get("MATRIX_API_SECRET_PATH", _API_SECRET_DEFAULT_PATH))
+    if path.exists():
+        os.environ["MATRIX_API_SECRET"] = path.read_text().strip()
+        logger.info("api_secret loaded from file", path=str(path))
+        return
+    secret = secrets.token_hex(32)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(secret)
+    os.chmod(path, 0o600)
+    os.environ["MATRIX_API_SECRET"] = secret
+    logger.info(
+        "api_secret generated; it is the web console password",
+        path=str(path),
+        secret=secret,
+    )
 
 
 async def get_current_user(request: Request) -> CurrentUser:

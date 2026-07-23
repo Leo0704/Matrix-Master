@@ -82,7 +82,7 @@ function NoteForm({
         <div className="space-y-1">
           <Label htmlFor="note-account">所属账号</Label>
           <Input id="note-account" value={accountId} onChange={(e) => setAccountId(e.target.value)} />
-          <p className="text-xs text-muted-foreground">填账号 UUID；后续可在账号页选</p>
+          <p className="text-xs text-muted-foreground">填账号唯一标识；后续可在账号页选</p>
         </div>
       )}
       <div className="space-y-1">
@@ -187,7 +187,7 @@ export function Notes() {
             <DialogContent className="max-w-xl">
               <DialogHeader>
                 <DialogTitle>新建笔记</DialogTitle>
-                <DialogDescription>手动写一条笔记。AI run 也会自动创建。</DialogDescription>
+                <DialogDescription>手动写一条笔记。人工智能运行也会自动创建。</DialogDescription>
               </DialogHeader>
               <NoteForm
                 defaultAccountId={defaultAccountId}
@@ -211,7 +211,7 @@ export function Notes() {
         <TabsContent value={status} className="space-y-4">
           {error && <ErrorState error={error} onRetry={() => refetch()} />}
           {!isLoading && items.length === 0 && (
-            <EmptyState title="无笔记" description="目标创建后 AI 会自动生成笔记" />
+            <EmptyState title="无笔记" description="目标创建后人工智能会自动生成笔记" />
           )}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
             {isLoading
@@ -227,7 +227,7 @@ export function Notes() {
         <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>编辑笔记</DialogTitle>
-            <DialogDescription>状态改为 published 时自动写 published_at。</DialogDescription>
+            <DialogDescription>状态改为「已发布」时自动记录发布时间。</DialogDescription>
           </DialogHeader>
           {editing && (
             <NoteForm

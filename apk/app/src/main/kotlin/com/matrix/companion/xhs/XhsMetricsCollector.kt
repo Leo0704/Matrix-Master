@@ -1,7 +1,6 @@
 package com.matrix.companion.xhs
 
 import android.view.accessibility.AccessibilityNodeInfo
-import com.matrix.companion.App
 import com.matrix.companion.accessibility.AccessibilityDriver
 import com.matrix.companion.accessibility.ActionExecutor
 import com.matrix.companion.util.ApiResult

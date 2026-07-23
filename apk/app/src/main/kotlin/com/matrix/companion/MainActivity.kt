@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -20,8 +21,17 @@ import com.matrix.companion.service.CompanionService
 import com.matrix.companion.service.TaskPollerService
 import com.matrix.companion.service.WatchdogService
 import com.matrix.companion.util.Logx
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.cio.CIO
+import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsText
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * First-run / debug entry. Three jobs:
@@ -34,6 +44,12 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private val registrar by lazy { DeviceRegistrar(this) }
+    private val healthClient = HttpClient(CIO) {
+        install(HttpTimeout) {
+            requestTimeoutMillis = 10000
+            connectTimeoutMillis = 5000
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,40 +69,32 @@ class MainActivity : AppCompatActivity() {
             lifecycleScope.launch { runPair(code) }
         }
 
-        binding.startServiceBtn.setOnClickListener {
-            // Refuse to start the service if media access is missing —
-            // publish-with-image would just UPLOAD_FAILED downstream and
-            // the operator would have to re-pair to retry.
-            if (!hasMediaPermission()) {
-                Toast.makeText(
-                    this,
-                    "需要先授予图片读取权限，否则发布带图会失败",
-                    Toast.LENGTH_LONG,
-                ).show()
-                requestMediaPermission()
-                return@setOnClickListener
-            }
+        // 自动启动服务（打开 App 即启动，无需手动点按钮）
+        if (hasMediaPermission()) {
             CompanionService.start(this)
             WatchdogService.start(this)
-            Toast.makeText(this, "已启动", Toast.LENGTH_SHORT).show()
-        }
-
-        binding.stopServiceBtn.setOnClickListener {
-            CompanionService.stop(this)
-            Toast.makeText(this, "已停止", Toast.LENGTH_SHORT).show()
+        } else {
+            // 没权限时提示并请求
+            Toast.makeText(
+                this,
+                "需要图片读取权限才能自动启动服务",
+                Toast.LENGTH_LONG,
+            ).show()
+            requestMediaPermission()
         }
 
         // Tail the global log buffer into the on-screen view.
         lifecycleScope.launch {
-            while (true) {
+            while (isActive) {
                 binding.logView.text = Logx.tail(200).joinToString("\n")
-                kotlinx.coroutines.delay(750)
+                delay(750)
             }
         }
 
         observeRegistration()
         refreshStatus()
         handleIntentExtras(intent)
+        startMasterHealthCheck()
     }
 
     override fun onNewIntent(intent: Intent?) {
@@ -119,6 +127,11 @@ class MainActivity : AppCompatActivity() {
         refreshStatus()
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        healthClient.close()
+    }
+
     private fun observeRegistration() {
         lifecycleScope.launch {
             registrar.state.collectLatest { state ->
@@ -129,8 +142,29 @@ class MainActivity : AppCompatActivity() {
                     is RegistrationState.Paired -> getString(R.string.status_paired)
                     is RegistrationState.Failed -> "配对失败：${state.reason}"
                 }
+                updatePairStatus(state)
             }
         }
+    }
+
+    private fun updatePairStatus(state: RegistrationState? = null) {
+        val app = App.get(this)
+        val provisioned = app.hmacSecretStore.isProvisioned()
+        val effectiveState = state ?: if (provisioned) RegistrationState.Paired else RegistrationState.Idle
+
+        binding.pairStatusView.text = when (effectiveState) {
+            is RegistrationState.Paired -> "配对：已配对"
+            is RegistrationState.Registering -> "配对：配对中…"
+            is RegistrationState.Failed -> "配对：失败（${effectiveState.reason}）"
+            else -> "配对：未配对"
+        }
+        binding.pairStatusView.setTextColor(
+            when (effectiveState) {
+                is RegistrationState.Paired -> Color.parseColor("#2E7D32")
+                is RegistrationState.Failed -> Color.parseColor("#C62828")
+                else -> Color.parseColor("#616161")
+            }
+        )
     }
 
     private fun refreshStatus() {
@@ -138,6 +172,64 @@ class MainActivity : AppCompatActivity() {
         binding.deviceIdView.text = "device: ${app.deviceId()}"
         binding.tailnetIpView.text = "tailnet: ${app.tailnetIp() ?: "(offline)"}"
         binding.foregroundAppView.text = "app: ${app.statusProvider.foregroundApp() ?: "(unknown)"}"
+
+        // 配对状态
+        updatePairStatus()
+
+        // 无障碍状态
+        val accessibilityOn = App.accessibilityServiceInstance != null
+        binding.accessibilityStatusView.text = if (accessibilityOn) "无障碍：已开启" else "无障碍：未开启"
+        binding.accessibilityStatusView.setTextColor(
+            if (accessibilityOn) Color.parseColor("#2E7D32") else Color.parseColor("#C62828")
+        )
+
+        // Tailscale 状态
+        val tsState = com.matrix.companion.net.TailscaleClient.status()
+        val tsOn = tsState == "connected"
+        binding.tailscaleStatusView.text = "Tailscale：$tsState"
+        binding.tailscaleStatusView.setTextColor(
+            if (tsOn) Color.parseColor("#2E7D32") else Color.parseColor("#C62828")
+        )
+
+        // 服务状态（根据是否有 media 权限判断能否启动）
+        val serviceOn = hasMediaPermission()
+        binding.serviceStatusView.text = if (serviceOn) "服务：自动运行中" else "服务：未授权图片权限"
+        binding.serviceStatusView.setTextColor(
+            if (serviceOn) Color.parseColor("#2E7D32") else Color.parseColor("#C62828")
+        )
+    }
+
+    private fun startMasterHealthCheck() {
+        lifecycleScope.launch {
+            while (isActive) {
+                checkMasterHealth()
+                delay(5000)
+            }
+        }
+    }
+
+    private suspend fun checkMasterHealth() {
+        val masterUrl = MasterConfig.get(this)
+        try {
+            val resp = withContext(Dispatchers.IO) {
+                healthClient.get("$masterUrl/api/v1/health")
+            }
+            val body = resp.bodyAsText()
+            val ok = resp.status.value in 200..299 && body.contains("\"status\":\"ok\"")
+            Logx.i("master_health: status=${resp.status.value} ok=$ok")
+            withContext(Dispatchers.Main) {
+                binding.masterStatusView.text = if (ok) "主控：在线" else "主控：异常"
+                binding.masterStatusView.setTextColor(
+                    if (ok) Color.parseColor("#2E7D32") else Color.parseColor("#C62828")
+                )
+            }
+        } catch (e: Exception) {
+            Logx.w("master_health_failed: ${e.message}")
+            withContext(Dispatchers.Main) {
+                binding.masterStatusView.text = "主控：离线"
+                binding.masterStatusView.setTextColor(Color.parseColor("#C62828"))
+            }
+        }
     }
 
     private suspend fun runPair(code: String) {

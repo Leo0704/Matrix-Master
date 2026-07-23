@@ -55,7 +55,7 @@ export function Businesses() {
     if (b.status === 'archived') {
       toast({
         title: '归档业务不能设为当前',
-        description: '请先恢复（unarchive）业务',
+        description: '请先恢复业务',
         variant: 'destructive',
       });
       return;
@@ -63,7 +63,7 @@ export function Businesses() {
     setActiveBusinessId(b.id);
     toast({
       title: '已切换业务',
-      description: `${b.name}（${b.slug}）`,
+      description: `${b.name}（标识：${b.slug}）`,
     });
   }
 
@@ -71,7 +71,7 @@ export function Businesses() {
     <div className="space-y-4">
       <PageHeader
         title="业务管理"
-        description={`共 ${items.length} 个业务（active ${items.filter((b) => b.status === 'active').length} 个）`}
+        description={`共 ${items.length} 个业务（运营中 ${items.filter((b) => b.status === 'active').length} 个）`}
         actions={
           <Button onClick={() => setCreateOpen(true)}>
             <Plus className="mr-1 h-4 w-4" /> 新建业务
@@ -94,7 +94,7 @@ export function Businesses() {
             <thead className="border-b bg-muted/40">
               <tr className="text-left">
                 <th className="px-3 py-2 font-medium">名称</th>
-                <th className="px-3 py-2 font-medium">slug</th>
+                <th className="px-3 py-2 font-medium">业务标识</th>
                 <th className="px-3 py-2 font-medium">状态</th>
                 <th className="px-3 py-2 font-medium">创建时间</th>
                 <th className="px-3 py-2 font-medium text-right">操作</th>
@@ -317,7 +317,7 @@ function CreateForm({
         <Input value={name} onChange={(e) => handleNameChange(e.target.value)} placeholder="例：平价学生党女鞋" />
       </div>
       <div className="space-y-1">
-        <label className="text-sm font-medium">slug（路由前缀，英文+数字+短横线）</label>
+        <label className="text-sm font-medium">业务标识（路由前缀，英文+数字+短横线）</label>
         <Input
           value={slug}
           onChange={(e) => setSlug(e.target.value)}
@@ -372,7 +372,7 @@ function EditForm({
         <Input value={name} onChange={(e) => setName(e.target.value)} />
       </div>
       <div className="space-y-1">
-        <label className="text-sm font-medium">slug</label>
+        <label className="text-sm font-medium">业务标识</label>
         <Input value={slug} onChange={(e) => setSlug(e.target.value)} />
       </div>
       <div className="space-y-1">

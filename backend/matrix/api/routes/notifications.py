@@ -13,22 +13,35 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from matrix.api.deps import filter_derived_by_business, get_db
 from matrix.api.schemas import (
+    NotificationDeleteResponse,
     NotificationItem,
     NotificationListResponse,
     NotificationMarkReadRequest,
     NotificationMarkReadResponse,
 )
-from matrix.db.models import Notification as NotificationORM
+from matrix.db.models import Device, Goal, Note, Notification as NotificationORM
 from matrix.monitoring.logging import get_logger
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
+
+
+def _goal_name(goal: Goal | None) -> str | None:
+    """从 Goal.target 里取主题作为显示名。"""
+    if goal is None:
+        return None
+    target = goal.target or {}
+    theme = target.get("theme")
+    if isinstance(theme, str) and theme.strip():
+        return theme.strip()
+    return None
 
 
 def _to_schema(n: NotificationORM) -> NotificationItem:
@@ -49,6 +62,10 @@ def _to_schema(n: NotificationORM) -> NotificationItem:
         # v0.7+ 业务归属：notifications 表当前无 business_id 列（未加 migration），
         # 用 getattr 安全访问避免 AttributeError；待后续 migration 加列后改成 n.business_id。
         business_id=getattr(n, "business_id", None),
+        # v0.7+ 消息可读化：关联实体名称
+        goal_name=_goal_name(getattr(n, "goal", None)),
+        note_title=getattr(getattr(n, "note", None), "title", None),
+        device_name=getattr(getattr(n, "device", None), "nickname", None),
     )
 
 
@@ -63,8 +80,6 @@ async def list_notifications(
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db),
 ) -> NotificationListResponse:
-    from matrix.db.models import Device, Goal, Note
-
     stmt = select(NotificationORM)
     count_stmt = select(func.count(NotificationORM.id))
     # v0.7+：衍生表业务过滤（4 个 FK 任一匹配业务即返回）
@@ -78,6 +93,13 @@ async def list_notifications(
     stmt = filter_derived_by_business(stmt, business_id=business_id, sources=sources)
     count_stmt = filter_derived_by_business(
         count_stmt, business_id=business_id, sources=sources
+    )
+
+    # 消息可读化：关联实体的名称一并带回去，减少前端二次查询
+    stmt = stmt.options(
+        joinedload(NotificationORM.goal),
+        joinedload(NotificationORM.note),
+        joinedload(NotificationORM.device),
     )
 
     if unread is True:
@@ -97,9 +119,25 @@ async def list_notifications(
         count_stmt = count_stmt.where(NotificationORM.recipient == recipient)
 
     stmt = stmt.order_by(NotificationORM.created_at.desc()).limit(limit).offset(offset)
-    rows = (await session.execute(stmt)).scalars().all()
+    rows = (await session.execute(stmt)).unique().scalars().all()
     total = int((await session.execute(count_stmt)).scalar_one() or 0)
     return NotificationListResponse(items=[_to_schema(r) for r in rows], total=total)
+
+
+@router.post("/digest", response_model=dict)
+async def trigger_digest(
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    """手动触发 AI 日报生成。"""
+    from matrix.agent.daily_digest import DailyDigestGenerator
+    from matrix.llm.router import get_default_client
+
+    generator = DailyDigestGenerator(
+        session_factory=lambda: session,
+        llm_client=get_default_client(),
+    )
+    created = await generator.run_once()
+    return {"created": created}
 
 
 @router.post("/read", response_model=NotificationMarkReadResponse)
@@ -132,3 +170,30 @@ async def mark_read(
     marked = int(result.rowcount or 0)
     logger.info("notifications.mark_read", marked=marked, ids_provided=bool(body.ids))
     return NotificationMarkReadResponse(marked=marked)
+
+
+@router.delete("/{notification_id}", response_model=NotificationDeleteResponse)
+async def delete_notification(
+    notification_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+) -> NotificationDeleteResponse:
+    """删除单条通知。"""
+    stmt = delete(NotificationORM).where(NotificationORM.id == notification_id)
+    result = await session.execute(stmt)
+    await session.commit()
+    deleted = int(result.rowcount or 0)
+    logger.info("notifications.delete", notification_id=str(notification_id), deleted=deleted)
+    return NotificationDeleteResponse(deleted=deleted)
+
+
+@router.post("/clear-read", response_model=NotificationDeleteResponse)
+async def clear_read_notifications(
+    session: AsyncSession = Depends(get_db),
+) -> NotificationDeleteResponse:
+    """一键清空所有已读通知。"""
+    stmt = delete(NotificationORM).where(NotificationORM.read_at.is_not(None))
+    result = await session.execute(stmt)
+    await session.commit()
+    deleted = int(result.rowcount or 0)
+    logger.info("notifications.clear_read", deleted=deleted)
+    return NotificationDeleteResponse(deleted=deleted)

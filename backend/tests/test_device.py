@@ -1079,23 +1079,6 @@ class TestDeviceAPI:
             await get_device(uuid.uuid4(), session=session)
         assert exc_info.value.status_code == 404
 
-    @pytest.mark.asyncio
-    async def test_register_device_via_api(self) -> None:
-        from matrix.device.api import register_device, DeviceRegisterIn
-
-        session = FakeSession()
-        payload = DeviceRegisterIn(
-            nickname="dev1",
-            model="Pixel",
-            android_version="14",
-            apk_version="1.0.0",
-            tailnet_ip="100.64.0.5",
-        )
-        result = await register_device(payload=payload, session=session)
-        assert result.nickname == "dev1"
-        assert result.status == "active"
-        assert result.tailnet_ip == "100.64.0.5"
-
 
 # ---------------------------------------------------------------------------
 # ApkHttpClient: APK 契约 + HMAC

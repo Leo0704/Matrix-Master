@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -10,6 +10,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useGoal, useGoalRounds, useUpdateGoal, useDeleteGoal } from '@/hooks/use-goals';
+import { useAgentRuns } from '@/hooks/use-agent-runs';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusBadge } from '@/components/common/status-badge';
 import { ErrorState } from '@/components/common/error-state';
@@ -27,8 +28,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useToast } from '@/components/ui/use-toast';
-import { formatDate, formatRelative } from '@/lib/format';
-import type { GoalPhase, GoalType } from '@/types/api';
+import { formatDate, formatRelative, GOAL_TYPE_LABEL } from '@/lib/format';
+import { formatState } from '@/types/api';
+import type { GoalPhase, GoalType, AgentRun } from '@/types/api';
 
 const PHASE_LABELS: Record<GoalPhase, string> = {
   PENDING: '排队中',
@@ -49,16 +51,6 @@ const PHASE_ORDER: GoalPhase[] = [
   'DECIDING',
   'DONE',
 ];
-
-const GOAL_TYPE_LABELS: Record<GoalType, string> = {
-  publish_note: '发笔记（种草 / 带货）',
-  interact: '互动（评论 · 点赞 · 关注）',
-  collect_metrics: '数据回采',
-  warmup: '养号',
-  login: '登录',
-  natural_language: '自然语言目标（AI 自动解析）',
-  generic: '通用',
-};
 
 function PhaseStepper({ current }: { current: GoalPhase | undefined }) {
   const cur = current ?? 'PENDING';
@@ -98,6 +90,74 @@ function PhaseStepper({ current }: { current: GoalPhase | undefined }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function RunList({ goalId }: { goalId: string }) {
+  const { data, isLoading, error, refetch } = useAgentRuns({ goal_id: goalId, limit: 500 });
+  const items = useMemo(() => data?.items ?? [], [data?.items]);
+
+  const byRound = useMemo(() => {
+    const map = new Map<number, AgentRun[]>();
+    for (const r of items) {
+      const round = r.round_number ?? 0;
+      if (!map.has(round)) map.set(round, []);
+      map.get(round)!.push(r);
+    }
+    return Array.from(map.entries()).sort((a, b) => b[0] - a[0]);
+  }, [items]);
+
+  if (isLoading) {
+    return (
+      <div className="space-y-2">
+        <div className="h-8 w-32 animate-pulse rounded bg-muted" />
+        <div className="h-16 w-full animate-pulse rounded bg-muted" />
+      </div>
+    );
+  }
+  if (error) return <ErrorState error={error} onRetry={() => refetch()} />;
+  if (items.length === 0) {
+    return <p className="text-sm text-muted-foreground">暂无运行记录</p>;
+  }
+
+  return (
+    <div className="space-y-3">
+      {byRound.map(([round, runs]) => (
+        <div key={round} className="space-y-2">
+          <div className="text-sm font-medium">
+            第 {round} 轮 · {runs.length} 个任务
+          </div>
+          <div className="space-y-1">
+            {runs.map((r) => (
+              <Link key={r.id} to={`/agent-runs/${r.id}`} className="block">
+                <div className="flex items-center justify-between rounded-md border p-2 text-sm transition-colors hover:bg-accent/30">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-xs text-muted-foreground">
+                      {r.id.slice(0, 8)}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {formatState(r.current_state)}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">
+                      {formatRelative(r.started_at)}
+                    </span>
+                    <StatusBadge status={r.status} />
+                  </div>
+                </div>
+                {r.last_error_snapshot && (
+                  <p className="mt-1 text-xs text-destructive">
+                    {String(r.last_error_snapshot.code ?? '未知错误')}:{' '}
+                    {String(r.last_error_snapshot.message ?? '')}
+                  </p>
+                )}
+              </Link>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -180,7 +240,7 @@ export function GoalDetail() {
       });
       toast({
         title: '目标已停止',
-        description: 'KPI 和复盘数据会保留',
+        description: '关键指标和复盘数据会保留',
       });
       setStopOpen(false);
     } catch (err) {
@@ -216,8 +276,8 @@ export function GoalDetail() {
       </Button>
 
       <PageHeader
-        title={(data.target as { theme?: string })?.theme ?? data.type}
-        description={`ID: ${data.id}`}
+        title={(data.target as { theme?: string })?.theme ?? GOAL_TYPE_LABEL[data.type] ?? data.type}
+        description={`编号：${data.id}`}
         actions={
           <div className="flex items-center gap-2">
             {data.status === 'active' && (
@@ -399,9 +459,9 @@ export function GoalDetail() {
                 onChange={(e) => setEditType(e.target.value)}
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {(Object.keys(GOAL_TYPE_LABELS) as GoalType[]).map((t) => (
+                {(Object.keys(GOAL_TYPE_LABEL) as GoalType[]).map((t) => (
                   <option key={t} value={t}>
-                    {GOAL_TYPE_LABELS[t]}
+                    {GOAL_TYPE_LABEL[t]}
                   </option>
                 ))}
               </select>
@@ -506,10 +566,20 @@ export function GoalDetail() {
         </DialogContent>
       </Dialog>
 
-      {/* 轮次 + KPI */}
+      {/* 运行记录 */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">每轮 KPI</CardTitle>
+          <CardTitle className="text-base">运行记录</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <RunList goalId={data.id} />
+        </CardContent>
+      </Card>
+
+      {/* 轮次 + 关键指标 */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">每轮关键指标</CardTitle>
         </CardHeader>
         <CardContent>
           {rounds.length === 0 ? (

@@ -13,7 +13,6 @@ from matrix.monitoring.logging import get_logger
 from typing import Any
 from uuid import UUID, uuid4
 
-from .._services import get_services
 from ..types import AgentState
 
 logger = get_logger(__name__)

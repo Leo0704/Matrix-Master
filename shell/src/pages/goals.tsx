@@ -10,8 +10,8 @@ import { ErrorState } from '@/components/common/error-state';
 import { EmptyState } from '@/components/common/empty-state';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { formatDate, formatRelative } from '@/lib/format';
-import { useActiveBusinessId } from '@/stores/ui-store';
+import { formatDate, formatRelative, GOAL_TYPE_LABEL } from '@/lib/format';
+import { useActiveBusinessId, useUIStore } from '@/stores/ui-store';
 import {
   Dialog,
   DialogContent,
@@ -33,11 +33,29 @@ export function Goals() {
     (g) => g.status === 'active' && g.phase !== 'DONE',
   );
 
+  // v0.7+ 业务过滤提示
+  const filterTip = activeBusinessId ? (
+    <span className="text-xs text-muted-foreground">
+      当前仅显示所选业务的目标，
+      <button
+        className="text-primary underline"
+        onClick={() => useUIStore.getState().setActiveBusinessId(null)}
+      >
+        查看全部
+      </button>
+    </span>
+  ) : null;
+
   return (
     <div className="space-y-4">
       <PageHeader
         title="目标"
-        description={`共 ${items.length} 个`}
+        description={
+          <span className="flex items-center gap-2">
+            <span>共 {items.length} 个</span>
+            {filterTip}
+          </span>
+        }
         actions={
           <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
@@ -56,7 +74,7 @@ export function Goals() {
               <DialogHeader>
                 <DialogTitle>新建目标</DialogTitle>
                 <DialogDescription>
-                  用自然语言描述目标；AI 会自动检索知识库并启动新 run。
+                  用自然语言描述目标；人工智能会自动检索知识库并启动新运行。
                 </DialogDescription>
               </DialogHeader>
               <GoalForm
@@ -70,7 +88,7 @@ export function Goals() {
 
       {error && <ErrorState error={error} onRetry={() => refetch()} />}
       {!isLoading && items.length === 0 && (
-        <EmptyState title="无目标" description="创建第一个目标让 AI 开始工作" />
+        <EmptyState title="无目标" description="创建第一个目标让人工智能开始工作" />
       )}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -81,7 +99,7 @@ export function Goals() {
               <Card className="transition-colors hover:border-primary/50 hover:bg-muted/40">
                 <CardHeader>
                   <CardTitle className="flex items-center justify-between text-base">
-                    <span>{g.type}</span>
+                    <span>{GOAL_TYPE_LABEL[g.type] ?? '未知'}</span>
                     <StatusBadge status={g.status} />
                   </CardTitle>
                 </CardHeader>
@@ -105,7 +123,7 @@ export function Goals() {
                   )}
                   <div className="flex items-center justify-between text-xs text-muted-foreground">
                     <span>截止：{formatDate(g.deadline)}</span>
-                    <span>id: {g.id.slice(0, 8)}…</span>
+                    <span>编号：{g.id.slice(0, 8)}…</span>
                   </div>
                   {g.status === 'active' && (
                     <p className="text-xs text-muted-foreground">最近更新 {formatRelative(g.deadline)}</p>

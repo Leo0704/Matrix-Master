@@ -198,7 +198,7 @@ export function Chat() {
         {
           reply: `确认执行失败：${(e as Error).message}`,
           action: { type: 'llm_error', payload: {} },
-          error_hint: '请重试或检查 token 是否过期（10 分钟）',
+          error_hint: '请重试或检查确认令牌是否过期（10 分钟）',
         },
         `a-confirm-err-${Date.now()}`,
       );
@@ -222,7 +222,7 @@ export function Chat() {
     <div className="flex h-full flex-col space-y-3">
       <PageHeader
         title="对话"
-        description="运营小助手：问数据 / 诊断 / 调参 / 批量 / 审 KB。建目标请去 /goals 手动表单。"
+        description="运营小助手：问数据 / 诊断 / 调参 / 批量 / 审知识库。建目标请去「目标」页手动表单。"
         actions={
           <Button
             variant="ghost"
@@ -295,7 +295,7 @@ export function Chat() {
               send();
             }
           }}
-          placeholder="输入指令…（⌘/Ctrl+Enter 发送）"
+          placeholder="输入指令…（⌘ / 控制键 + Enter 发送）"
         />
         <Button
           onClick={() => send()}

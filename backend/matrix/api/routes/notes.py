@@ -85,7 +85,7 @@ async def get_note(
 async def create_note(
     body: NoteCreate, session: AsyncSession = Depends(get_db)
 ) -> Note:
-    from matrix.db.models import Account, Goal
+    from matrix.db.models import Account
 
     # v0.7+ 业务模型重构：business_id 可选；缺则从 account_id 或 goal_id 推断
     inferred_business_id = body.business_id

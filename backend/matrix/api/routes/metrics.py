@@ -13,7 +13,6 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from matrix.api.deps import get_db
-from matrix.api.schemas import Health, OkResponse  # noqa: F401  (Health unused 但保持 schema 聚合)
 from matrix.db.models import (
     Account,
     Device,

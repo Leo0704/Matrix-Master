@@ -75,8 +75,8 @@ export function AddDeviceDialog({ trigger }: { trigger?: React.ReactNode }) {
             <DialogHeader>
               <DialogTitle>添加新设备</DialogTitle>
               <DialogDescription>
-                填个昵称，提交后主控生成配对码。手机装 companion APK
-                输入配对码后，型号 / Android 版本 / APK 版本 / Tailnet IP 会自动识别。
+                填个昵称，提交后主控生成配对码。手机装配套客户端，
+                输入配对码后，型号 / 安卓版本 / 客户端版本 / 内网 IP 会自动识别。
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3">
@@ -91,7 +91,7 @@ export function AddDeviceDialog({ trigger }: { trigger?: React.ReactNode }) {
               </div>
               <div className="space-y-1">
                 <Label htmlFor="adbSerial">
-                  ADB 串号
+                  调试串号
                   <span className="ml-1 text-xs text-muted-foreground">(可选)</span>
                 </Label>
                 <Input
@@ -102,7 +102,7 @@ export function AddDeviceDialog({ trigger }: { trigger?: React.ReactNode }) {
                 />
               </div>
               <p className="text-xs text-muted-foreground">
-                型号、Android 版本、APK 版本、IP 等信息会在设备首次连接后自动识别。
+                型号、安卓版本、客户端版本、IP 等信息会在设备首次连接后自动识别。
               </p>
             </div>
             <DialogFooter>
@@ -122,7 +122,7 @@ export function AddDeviceDialog({ trigger }: { trigger?: React.ReactNode }) {
             <DialogHeader>
               <DialogTitle>手机端配对</DialogTitle>
               <DialogDescription>
-                在 companion APK 中输入 6 位配对码，或扫描下方二维码。10 分钟内有效。
+                在 companion 客户端中输入 6 位配对码，或扫描下方二维码。10 分钟内有效。
               </DialogDescription>
             </DialogHeader>
             <div className="flex flex-col items-center gap-4 py-4">

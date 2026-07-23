@@ -34,7 +34,6 @@ from matrix.monitoring import (  # noqa: E402
     clear_context,
     configure_logging,
     create_metrics_app,
-    evaluate_all,
     get_logger,
     setup_monitoring,
 )
@@ -92,41 +91,6 @@ class TestTracing:
         assert s.attributes["run_id"] == "run-1"
         assert s.attributes["goal"] == "post about AI"
         assert s.status.is_ok
-
-    def test_trace_state_transition_attributes(self, memory_exporter):
-        with tracing_mod.trace_state_transition("DRAFT", "REVIEW", "run-42"):
-            pass
-
-        s = memory_exporter.get_finished_spans()[0]
-        assert s.name == "agent.state.DRAFT->REVIEW"
-        assert s.attributes["from_state"] == "DRAFT"
-        assert s.attributes["to_state"] == "REVIEW"
-        assert s.attributes["run_id"] == "run-42"
-
-    def test_trace_task_dispatch_attributes(self, memory_exporter):
-        with tracing_mod.trace_task_dispatch("t-1", "d-1", "device_publish"):
-            pass
-        s = memory_exporter.get_finished_spans()[0]
-        assert s.name == "task.dispatch"
-        assert s.attributes["task_id"] == "t-1"
-        assert s.attributes["device_id"] == "d-1"
-        assert s.attributes["action"] == "device_publish"
-
-    def test_trace_device_call_attributes(self, memory_exporter):
-        with tracing_mod.trace_device_call("xhs.publish", device_id="dev-1"):
-            pass
-        s = memory_exporter.get_finished_spans()[0]
-        assert s.name == "device.call.xhs.publish"
-        assert s.attributes["tool_name"] == "xhs.publish"
-        assert s.attributes["device_id"] == "dev-1"
-
-    def test_trace_llm_call_attributes(self, memory_exporter):
-        with tracing_mod.trace_llm_call("claude-sonnet-4-5", call_type="completion"):
-            pass
-        s = memory_exporter.get_finished_spans()[0]
-        assert s.name == "llm.call.claude-sonnet-4-5"
-        assert s.attributes["model"] == "claude-sonnet-4-5"
-        assert s.attributes["call_type"] == "completion"
 
     def test_span_marks_error_on_exception(self, memory_exporter):
         with pytest.raises(ValueError):
@@ -590,51 +554,6 @@ class TestAlerts:
         assert len(alerts) == 1
         assert alerts[0].code == "RISK_BLOCKED"
         assert alerts[0].subject_id == "a2"
-
-    def test_selector_not_found_aggregates(self):
-        events = [
-            {"device_id": "d1", "tool": "xhs.publish"},
-            {"device_id": "d1", "tool": "xhs.publish"},
-            {"device_id": "d1", "tool": "xhs.publish"},
-            {"device_id": "d2", "tool": "xhs.publish"},  # 仅 1 次，不触发
-        ]
-        alerts = alerts_mod.check_selector_not_found(events, threshold=3)
-        assert len(alerts) == 1
-        assert alerts[0].code == "SELECTOR_NOT_FOUND"
-        assert alerts[0].subject_id == "d1"
-
-    def test_tailscale_derp_lost(self):
-        derps = [
-            {"region": "us-east", "reachable": True},
-            {"region": "ap-shanghai", "reachable": False},  # 触发
-        ]
-        alerts = alerts_mod.check_tailscale_derp_lost(derps)
-        assert len(alerts) == 1
-        assert alerts[0].code == "TAILSCALE_DERP_LOST"
-        assert alerts[0].subject_id == "ap-shanghai"
-
-    def test_postgres_disk_full(self):
-        assert alerts_mod.check_postgres_disk_full(50.0) == []
-        alerts = alerts_mod.check_postgres_disk_full(85.0)
-        assert len(alerts) == 1
-        assert alerts[0].code == "POSTGRES_DISK_FULL"
-
-    def test_evaluate_all_merges(self):
-        alerts = evaluate_all(
-            devices=[{"device_id": "d1", "last_heartbeat_age_sec": 600}],
-            accounts=[{"account_id": "a1", "risk_score": 0.95}],
-            selector_events=[{"device_id": "d1", "tool": "x"}] * 5,
-            derp_results=[{"region": "us", "reachable": False}],
-            disk_usage_percent=90,
-        )
-        codes = {a.code for a in alerts}
-        assert codes == {
-            "DEVICE_OFFLINE",
-            "RISK_BLOCKED",
-            "SELECTOR_NOT_FOUND",
-            "TAILSCALE_DERP_LOST",
-            "POSTGRES_DISK_FULL",
-        }
 
 
 # ---------------------------------------------------------------------------

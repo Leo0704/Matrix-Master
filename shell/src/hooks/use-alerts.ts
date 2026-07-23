@@ -35,3 +35,19 @@ export function useResolveAlert() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['alerts'] }),
   });
 }
+
+export function useDeleteAlert() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiClient.delete<{ deleted: number }>(`/alerts/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['alerts'] }),
+  });
+}
+
+export function useClearResolvedAlerts() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiClient.post<{ deleted: number }>('/alerts/clear-resolved'),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['alerts'] }),
+  });
+}

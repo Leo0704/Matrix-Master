@@ -17,13 +17,18 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
+from matrix.db.models import Business
 from matrix.db.models import Goal as GoalORM
 
 from matrix.api.tests.test_api import (
     FakeAsyncSession,
     FakeDB,
+    _BIZ_ID,
     _FakeLLM,
+    _mk_business,
 )
+
+_BIZ_ID_STR = str(_BIZ_ID)
 
 
 def _mk_goal(**kwargs: Any) -> GoalORM:
@@ -61,6 +66,8 @@ def _mk_goal(**kwargs: Any) -> GoalORM:
         created_at=now,
         updated_at=now,
         deleted_at=None,
+        # v0.7+：跨业务校验要求 goal.business_id == 操作者 business
+        business_id=kwargs.pop("business_id", _BIZ_ID),
     )
     base.update(kwargs)
     return GoalORM(**base)
@@ -78,6 +85,12 @@ async def fake_db() -> FakeDB:
 @pytest_asyncio.fixture
 async def fake_session(fake_db: FakeDB) -> FakeAsyncSession:
     return FakeAsyncSession(fake_db)
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _seed_default_business(fake_db: FakeDB) -> None:
+    """v0.7+：chat 请求强制 business_id；每个测试默认 seed 一个 active 业务。"""
+    fake_db.store[(Business, _BIZ_ID)] = _mk_business()
 
 
 @pytest_asyncio.fixture
@@ -143,7 +156,7 @@ async def test_chat_ask_data_summary(
         '"intent": "ask_data", '
         '"args": {"subcommand": "summary"}}'
     )
-    r = await client.post("/api/v1/chat", json={"message": "现在有几个 goal？"})
+    r = await client.post("/api/v1/chat", json={"business_id": _BIZ_ID_STR, "message":"现在有几个 goal？"})
     assert r.status_code == 200
     body = r.json()
     assert body["reply"] == "现在有 3 个 goal 在跑"
@@ -167,7 +180,7 @@ async def test_chat_ask_data_weekly_top(
         '"intent": "ask_data", '
         '"args": {"subcommand": "weekly_top", "limit": 3}}'
     )
-    r = await client.post("/api/v1/chat", json={"message": "最近一周哪个 goal 数据最好？"})
+    r = await client.post("/api/v1/chat", json={"business_id": _BIZ_ID_STR, "message":"最近一周哪个 goal 数据最好？"})
     assert r.status_code == 200
     body = r.json()
     assert body["action"]["type"] == "ask_data"
@@ -185,7 +198,7 @@ async def test_chat_chitchat_short_circuits(
 ) -> None:
     """闲聊：你好的 reply 必须原样返回，action.type=chitchat。"""
     mock_llm('{"reply": "你好！有什么可以帮你的？", "intent": "chitchat", "args": {}}')
-    r = await client.post("/api/v1/chat", json={"message": "你好"})
+    r = await client.post("/api/v1/chat", json={"business_id": _BIZ_ID_STR, "message":"你好"})
     assert r.status_code == 200
     body = r.json()
     assert body["reply"] == "你好！有什么可以帮你的？"
@@ -203,7 +216,7 @@ async def test_chat_unknown_intent_falls_back(
 ) -> None:
     """未知 intent：LLM 输出不在白名单的 intent → unknown_intent 兜底。"""
     mock_llm('{"reply": "我不知道你想干啥", "intent": "fly_to_moon", "args": {}}')
-    r = await client.post("/api/v1/chat", json={"message": "带我去月球"})
+    r = await client.post("/api/v1/chat", json={"business_id": _BIZ_ID_STR, "message":"带我去月球"})
     assert r.status_code == 200
     body = r.json()
     assert body["action"]["type"] == "unknown_intent"
@@ -223,7 +236,7 @@ async def test_chat_parse_error_keeps_raw_text(
 ) -> None:
     """parse_error：LLM 输出不是 JSON → 返 raw 文本 + parse_error。"""
     mock_llm("抱歉我没理解你想干啥")
-    r = await client.post("/api/v1/chat", json={"message": "随便聊聊"})
+    r = await client.post("/api/v1/chat", json={"business_id": _BIZ_ID_STR, "message":"随便聊聊"})
     assert r.status_code == 200
     body = r.json()
     assert body["action"]["type"] == "parse_error"
@@ -241,7 +254,7 @@ async def test_chat_empty_message(
     client: AsyncClient, fake_session: FakeAsyncSession
 ) -> None:
     """空消息：返 reply + action.type=noop。"""
-    r = await client.post("/api/v1/chat", json={"message": ""})
+    r = await client.post("/api/v1/chat", json={"business_id": _BIZ_ID_STR, "message":""})
     assert r.status_code == 200
     body = r.json()
     assert body["action"]["type"] == "noop"
@@ -258,7 +271,7 @@ async def test_chat_confirm_invalid_token(
 ) -> None:
     """/confirm 短路：无效 token 返 parse_error。"""
     r = await client.post(
-        "/api/v1/chat", json={"message": "/confirm invalid-token-xyz"}
+        "/api/v1/chat", json={"business_id": _BIZ_ID_STR, "message": "/confirm invalid-token-xyz"}
     )
     assert r.status_code == 200
     body = r.json()
@@ -273,7 +286,7 @@ async def test_chat_cancel_unknown_token(
 ) -> None:
     """/cancel 短路：未知 token 也允许（幂等）。"""
     r = await client.post(
-        "/api/v1/chat", json={"message": "/cancel some-token"}
+        "/api/v1/chat", json={"business_id": _BIZ_ID_STR, "message": "/cancel some-token"}
     )
     assert r.status_code == 200
     body = r.json()
@@ -303,7 +316,7 @@ async def test_chat_preview_change_requires_confirmation(
         '"changes": [{"field": "status", "to": "cancelled"}]'
         '}}'
     )
-    r = await client.post("/api/v1/chat", json={"message": "暂停所有鞋子主题的 goal"})
+    r = await client.post("/api/v1/chat", json={"business_id": _BIZ_ID_STR, "message":"暂停所有鞋子主题的 goal"})
     assert r.status_code == 200
     body = r.json()
     assert body["action"]["type"] == "preview_change"
@@ -341,13 +354,13 @@ async def test_chat_apply_change_after_confirm(
         '"changes": [{"field": "max_rounds", "to": 5}]'
         '}}'
     )
-    r1 = await client.post("/api/v1/chat", json={"message": "把 max_rounds 改成 5"})
+    r1 = await client.post("/api/v1/chat", json={"business_id": _BIZ_ID_STR, "message":"把 max_rounds 改成 5"})
     assert r1.status_code == 200
     token = r1.json()["action"]["confirmation_token"]
     assert token
 
     # 2) /confirm <token> —— 不调 LLM，走路由层短路
-    r2 = await client.post("/api/v1/chat", json={"message": f"/confirm {token}"})
+    r2 = await client.post("/api/v1/chat", json={"business_id": _BIZ_ID_STR, "message":f"/confirm {token}"})
     assert r2.status_code == 200
     body2 = r2.json()
     assert body2["action"]["type"] == "apply_change"
@@ -378,7 +391,7 @@ async def test_chat_batch_too_large_at_50(
         '"changes": [{"field": "status", "to": "cancelled"}]'
         '}}'
     )
-    r = await client.post("/api/v1/chat", json={"message": "暂停所有 publish_note"})
+    r = await client.post("/api/v1/chat", json={"business_id": _BIZ_ID_STR, "message":"暂停所有 publish_note"})
     assert r.status_code == 200
     body = r.json()
     assert body["action"]["type"] == "batch_too_large"
@@ -408,7 +421,7 @@ async def test_chat_partial_success_on_apply(
         '"changes": [{"field": "max_rounds", "to": 5}]'
         '}}'
     )
-    r1 = await client.post("/api/v1/chat", json={"message": "改 max_rounds"})
+    r1 = await client.post("/api/v1/chat", json={"business_id": _BIZ_ID_STR, "message":"改 max_rounds"})
     token = r1.json()["action"]["confirmation_token"]
 
     # 删除 g2（模拟"preview 之后 goal 被删了"）
@@ -418,7 +431,7 @@ async def test_chat_partial_success_on_apply(
     fake_session._db.store[(GoalORM, g2.id)] = g2
 
     # /confirm
-    r2 = await client.post("/api/v1/chat", json={"message": f"/confirm {token}"})
+    r2 = await client.post("/api/v1/chat", json={"business_id": _BIZ_ID_STR, "message":f"/confirm {token}"})
     assert r2.status_code == 200
     body2 = r2.json()
     # 实际：第 2 期的 _resolve_goal_filter 会过滤 deleted_at IS NULL，
@@ -443,7 +456,7 @@ async def test_chat_diagnose_no_goal_match(
         '"intent": "diagnose", '
         '"args": {"goal_id": "00000000-0000-0000-0000-000000000000"}}'
     )
-    r = await client.post("/api/v1/chat", json={"message": "诊断一个不存在的 goal"})
+    r = await client.post("/api/v1/chat", json={"business_id": _BIZ_ID_STR, "message":"诊断一个不存在的 goal"})
     assert r.status_code == 200
     body = r.json()
     assert body["action"]["type"] == "diagnose"
@@ -480,7 +493,7 @@ async def test_chat_browse_kb_strategy_card(
         '"intent": "browse_kb", '
         '"args": {"type": "strategy_card", "days": 7}}'
     )
-    r = await client.post("/api/v1/chat", json={"message": "看看这周 KB 新写了啥"})
+    r = await client.post("/api/v1/chat", json={"business_id": _BIZ_ID_STR, "message":"看看这周 KB 新写了啥"})
     assert r.status_code == 200
     body = r.json()
     assert body["action"]["type"] == "browse_kb"

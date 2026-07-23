@@ -93,7 +93,7 @@ export function RuleForm({ initial, onSubmit, onCancel, submitting }: RuleFormPr
           rows={3}
           value={content}
           onChange={(e) => setContent(e.target.value)}
-          placeholder="自由文本，每行一条；AI 写笔记时会参考"
+          placeholder="自由文本，每行一条；人工智能写笔记时会参考"
         />
       </div>
       <div className="flex items-center justify-end gap-2 pt-2">

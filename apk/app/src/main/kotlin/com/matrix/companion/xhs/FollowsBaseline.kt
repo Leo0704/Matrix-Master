@@ -50,11 +50,6 @@ class FollowsBaseline(context: Context) {
         return if (v == Int.MIN_VALUE) null else v
     }
 
-    /** Drop the baseline for [accountId] (e.g. after unbind). */
-    fun clear(accountId: String) {
-        prefs.edit().remove(prefsKey(accountId)).apply()
-    }
-
     private fun prefsKey(accountId: String): String = "follows_$accountId"
 
     companion object {

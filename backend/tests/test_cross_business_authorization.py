@@ -19,7 +19,6 @@ from matrix.db.models import (
     Business as BusinessORM,
     Device as DeviceORM,
     Goal as GoalORM,
-    Persona as PersonaORM,
 )
 
 
@@ -38,11 +37,6 @@ async def test_create_account_under_archived_business_rejected(
     # 直接走 ORM 创建（路由测试在 test_api.py）
     dev = DeviceORM(nickname="d", business_id=default_business.id, status="pending")
     session.add(dev)
-    await session.flush()
-    per = PersonaORM(
-        name="p", tone="t", style_guide="sg", business_id=default_business.id
-    )
-    session.add(per)
     await session.flush()
 
     # 模拟路由层校验：archived → 应抛 409
@@ -65,13 +59,9 @@ async def test_account_other_business_returns_404(session, business_factory):
     dev = DeviceORM(nickname="d-b", business_id=biz_b.id, status="pending")
     session.add(dev)
     await session.flush()
-    per = PersonaORM(name="p-b", tone="t", style_guide="sg", business_id=biz_b.id)
-    session.add(per)
-    await session.flush()
     acct = AccountORM(
         handle="@b-test",
         device_id=dev.id,
-        persona_id=per.id,
         business_id=biz_b.id,
         status="pending",
         risk_score=0,
@@ -154,19 +144,17 @@ async def test_allocate_archived_business_returns_empty(
 
 
 @pytest.mark.asyncio
-async def test_confirmation_token_cross_business_rejected():
+async def test_confirmation_token_cross_business_rejected(session, business_factory):
     """_store_token 写 biz_a，_consume_token 用 biz_b 取出时也应能区分（虽然当前 consume 不做业务校验，
     跨业务校验在 chat.py 主路由做）。"""
-    biz_a = uuid.uuid4()
+    biz_a = await business_factory(name="token-biz-a", slug="token-biz-a")
     biz_b = uuid.uuid4()
     token = "test-token-123"
     args = {"filter": {"goal_id": "fake"}}
-    _store_token(token, args, biz_a)
+    await _store_token(session, token, args, biz_a.id)
 
     # 取出
-    from matrix.api.routes.chat import _consume_token
-
-    cached_args, cached_biz = _consume_token(token)
+    cached_args, cached_biz = await _consume_token(session, token)
     assert cached_args == args
-    assert cached_biz == biz_a
+    assert cached_biz == biz_a.id
     assert cached_biz != biz_b  # chat.py 主路由会基于这个比较拒绝跨业务

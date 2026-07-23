@@ -29,6 +29,10 @@ class NotificationItem(BaseModel):
     read_at: Optional[datetime] = None
     created_at: datetime
     business_id: Optional[uuid.UUID] = None  # v0.7+ 业务归属（015/017 加列）
+    # v0.7+ 消息可读化：关联实体的名称，减少前端二次查询
+    goal_name: Optional[str] = None
+    note_title: Optional[str] = None
+    device_name: Optional[str] = None
 
 
 class NotificationListResponse(BaseModel):
@@ -44,6 +48,10 @@ class NotificationMarkReadRequest(BaseModel):
 
 class NotificationMarkReadResponse(BaseModel):
     marked: int
+
+
+class NotificationDeleteResponse(BaseModel):
+    deleted: int
 
 
 __all__ = [

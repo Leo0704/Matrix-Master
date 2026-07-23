@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from matrix.monitoring.alerts import Alert, evaluate_all
+from matrix.monitoring.alerts import Alert
 from matrix.monitoring.logging import (
     bind_context,
     clear_context,
@@ -30,10 +30,6 @@ from matrix.monitoring.tracing import (
     setup_tracing,
     shutdown_tracing,
     trace_agent_run,
-    trace_device_call,
-    trace_llm_call,
-    trace_state_transition,
-    trace_task_dispatch,
 )
 
 
@@ -87,7 +83,6 @@ __all__ = [
     "clear_context",
     "configure_logging",
     "create_metrics_app",
-    "evaluate_all",
     "get_logger",
     "get_tracer",
     "install_middleware",
@@ -96,8 +91,4 @@ __all__ = [
     "shutdown_tracing",
     "start_metrics_server_background",
     "trace_agent_run",
-    "trace_device_call",
-    "trace_llm_call",
-    "trace_state_transition",
-    "trace_task_dispatch",
 ]

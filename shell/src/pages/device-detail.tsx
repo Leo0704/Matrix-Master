@@ -28,7 +28,7 @@ export function DeviceDetail() {
         <>
           <PageHeader
             title={data.nickname}
-            description={`${data.model ?? '—'} · Android ${data.android_version ?? '—'}`}
+            description={`${data.model ?? '—'} · 安卓 ${data.android_version ?? '—'}`}
             actions={<StatusBadge status={data.status} />}
           />
 
@@ -38,9 +38,9 @@ export function DeviceDetail() {
                 <CardTitle className="text-base">基本信息</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 text-sm">
-                <Row k="ID" v={data.id} mono />
-                <Row k="Tailnet IP" v={data.tailnet_ip ?? '—'} mono />
-                <Row k="APK 版本" v={data.apk_version ?? '—'} />
+                <Row k="编号" v={data.id} mono />
+                <Row k="内网 IP" v={data.tailnet_ip ?? '—'} mono />
+                <Row k="客户端版本" v={data.apk_version ?? '—'} />
                 <Row k="绑定账号" v={String(data.bound_accounts ?? 0)} />
                 <Row k="最后心跳" v={formatRelative(data.last_heartbeat)} />
                 <Row k="注册时间" v={formatDate(data.last_heartbeat)} />
@@ -54,9 +54,9 @@ export function DeviceDetail() {
                 <CardTitle className="text-base">操作</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 text-sm">
-                <p className="text-muted-foreground">设备级操作（重启 APK / 截图 / 远程登录）</p>
+                <p className="text-muted-foreground">设备级操作（重启客户端 / 截图 / 远程登录）</p>
                 <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" size="sm">重启 APK</Button>
+                  <Button variant="outline" size="sm">重启客户端</Button>
                   <Button variant="outline" size="sm">截屏</Button>
                   <Button variant="outline" size="sm">查看日志</Button>
                 </div>

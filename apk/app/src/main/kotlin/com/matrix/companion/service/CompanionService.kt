@@ -13,10 +13,12 @@ import com.matrix.companion.App
 import com.matrix.companion.MainActivity
 import com.matrix.companion.R
 import com.matrix.companion.net.DeviceRegistrar
+import com.matrix.companion.net.LoginStateReporter
 import com.matrix.companion.net.MasterConfig
 import com.matrix.companion.net.TailscaleClient
 import com.matrix.companion.status.Heartbeat
 import com.matrix.companion.util.Logx
+import com.matrix.companion.xhs.LoginStateChecker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -39,6 +41,7 @@ class CompanionService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var httpServerJob: Job? = null
     private lateinit var heartbeat: Heartbeat
+    private lateinit var loginStateReporter: LoginStateReporter
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -54,6 +57,15 @@ class CompanionService : Service() {
             secretProvider = App.get(this).hmacSecretStore,
         )
         heartbeat.start(scope) { DeviceRegistrar(this).deviceId() }
+
+        // 启动登录状态检测上报
+        loginStateReporter = LoginStateReporter(
+            context = this,
+            checker = LoginStateChecker(App.get(this).driver, App.get(this).executor),
+            masterUrl = masterUrl,
+            secretProvider = App.get(this).hmacSecretStore,
+        )
+        loginStateReporter.start(scope) { DeviceRegistrar(this).deviceId() }
 
         if (com.matrix.companion.BuildConfig.ENABLE_HTTP_SERVER) {
             httpServerJob = scope.launch {

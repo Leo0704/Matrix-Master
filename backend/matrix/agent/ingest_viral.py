@@ -14,8 +14,6 @@ summarize.py 一致），不走 kb_writer。
 
 from __future__ import annotations
 
-from typing import Any
-
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from matrix.agent import prompts

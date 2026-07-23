@@ -158,9 +158,7 @@ EXPECTED_TABLES = [
     "accounts",
     "account_login_sessions",
     "risk_signals",
-    "personas",
     "topics",
-    "rules",
     "notes",
     "note_metrics",
     "kb_documents",
@@ -178,6 +176,7 @@ EXPECTED_TABLES = [
     "notifications",  # Phase 1 P1-1
     "daily_counters",
     "app_config",
+    "chat_confirmation_tokens",  # 聊天确认令牌（替代进程内 _CONFIRMATION_STORE）
 ]
 
 
@@ -192,9 +191,7 @@ def test_all_tableless_imported():
         "Account",
         "AccountLoginSession",
         "RiskSignal",
-        "Persona",
         "Topic",
-        "Rule",
         "Note",
         "NoteMetric",
         "KbDocument",
@@ -225,9 +222,7 @@ def test_tableless_match_schema():
         "accounts": "Account",
         "account_login_sessions": "AccountLoginSession",
         "risk_signals": "RiskSignal",
-        "personas": "Persona",
         "topics": "Topic",
-        "rules": "Rule",
         "notes": "Note",
         "note_metrics": "NoteMetric",
         "kb_documents": "KbDocument",
@@ -252,7 +247,7 @@ def test_tableless_match_schema():
 
 
 def test_tableless_count():
-    """models 模块声明的 Base 子类数量应为 25（含 Alert + DailyCounter + GoalRound，去掉 LlmUsage）。"""
+    """models 模块声明的 Base 子类数量应为 25（已删除 Persona/Rule 废弃表）。"""
     from sqlalchemy.orm import DeclarativeBase
 
     from matrix.db import models
@@ -266,8 +261,9 @@ def test_tableless_count():
     subclasses = [s for s in subclasses if s is not models.Base]
     # Phase 1 P1-1 加了 Notification 类，从 25 升到 26；
     # v0.7+ 业务模型重构加 Business 类，从 26 升到 27。
-    # 后续加表时记得同步这个数（也可用 >= 25 模糊断言，但精确计数能挡忘记 export 的情况）
-    assert len(subclasses) == 27, f"got {len(subclasses)}: {[s.__name__ for s in subclasses]}"
+    # v1.0 清理：删除废弃的 Persona/Rule 表，从 27 降回 25。
+    # 聊天确认令牌落 DB 加 ChatConfirmationToken 类，从 25 升到 26。
+    assert len(subclasses) == 26, f"got {len(subclasses)}: {[s.__name__ for s in subclasses]}"
 
 
 def test_base_is_declarative():
@@ -312,7 +308,6 @@ def test_status_check_constraints():
         "Interaction": "type",  # 也含 result check
         "Note": "status",
         "Plan": "status",
-        "Rule": "severity",
         "Task": "status",
         "KbDocument": "type",
         "RiskSignal": "severity",
@@ -410,7 +405,7 @@ def test_kb_chunk_instantiation():
 
 
 def test_models_metadata_contains_all_tables():
-    """Base.metadata 应包含全部 24 张表的 Table 对象（含 migration 004 加的 alerts）。"""
+    """Base.metadata 应包含全部 26 张表的 Table 对象（含 chat_confirmation_tokens）。"""
     from matrix.db.models import Base
 
     table_names = set(Base.metadata.tables.keys())

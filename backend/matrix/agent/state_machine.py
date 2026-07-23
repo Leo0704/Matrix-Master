@@ -62,7 +62,7 @@ logger = get_logger(__name__)
 
 @dataclass
 class StateMachine:
-    """LangGraph StateGraph wrapper。暴露 ``compile()`` / ``invoke()``。"""
+    """LangGraph StateGraph wrapper。暴露 ``compile()`` / ``ainvoke()``。"""
 
     cfg: GuardConfig = None  # type: ignore[assignment]
 
@@ -93,15 +93,6 @@ class StateMachine:
             logger.exception("state_machine.ainvoke_failed", state=state.get("current_state"))
             raise
         return result  # type: ignore[return-value]
-
-    def invoke(self, state: dict[str, Any] | AgentState) -> AgentState:
-        """同步执行直到终态。"""
-        compiled = self.compile()
-        result = compiled.invoke(dict(state))
-        return result  # type: ignore[return-value]
-
-    def get_graph(self):
-        return self._graph
 
     # ------------------------------------------------------------------
     # 构图

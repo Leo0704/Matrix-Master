@@ -27,7 +27,6 @@ from matrix.db.models import (
     KbDocument,
     Note,
     NoteMetric,
-    Persona,
 )
 from matrix.monitoring.logging import get_logger
 
@@ -206,20 +205,21 @@ async def business_comparison(
     biz_ids = [b.id for b in businesses]
 
     # 一次 group by 拿各表计数（排除软删）
-    async def count(table, biz_col: str = "business_id") -> dict[uuid.UUID, int]:
+    async def count(table, biz_col: str = "business_id", exclude_disabled: bool = False) -> dict[uuid.UUID, int]:
         col = getattr(table, biz_col)
         stmt = (
             select(col, func.count(table.id))
             .where(col.in_(biz_ids))
             .where(table.deleted_at.is_(None))
-            .group_by(col)
         )
+        if exclude_disabled:
+            stmt = stmt.where(table.status != "disabled")
+        stmt = stmt.group_by(col)
         rows = (await session.execute(stmt)).all()
         return {row[0]: row[1] for row in rows}
 
-    devices_count = await count(Device)
+    devices_count = await count(Device, exclude_disabled=True)
     accounts_count = await count(Account)
-    personas_count = await count(Persona)
     goals_count = await count(Goal)
     notes_count = await count(Note)
     kb_count = await count(KbDocument)
@@ -270,7 +270,6 @@ async def business_comparison(
                 status=b.status,  # type: ignore[arg-type]
                 devices=devices_count.get(b.id, 0),
                 accounts=accounts_n,
-                personas=personas_count.get(b.id, 0),
                 goals=goals_count.get(b.id, 0),
                 notes=notes_n,
                 published_notes=published_count.get(b.id, 0),

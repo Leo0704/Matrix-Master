@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from matrix.monitoring.logging import get_logger
 from typing import Any
 from uuid import uuid4
@@ -57,11 +59,21 @@ async def draft_node(state: AgentState) -> dict[str, Any]:
     persona_tone = ""
     persona_style = ""
     forbidden_words: list[str] = []
-    for c in persona_chunks:
-        text = c.text or ""
-        persona_name = persona_name or _first_line(text)
-        persona_tone = persona_tone or _field(text, "tone")
-        persona_style = persona_style or _field(text, "style")
+
+    # 优先用账号绑定的 Persona（如果 preassigned_slot 里有 account_id）
+    bound_persona = await _load_bound_persona(state)
+    if bound_persona is not None:
+        persona_name = bound_persona["name"]
+        persona_tone = bound_persona["tone"]
+        persona_style = bound_persona["style_guide"]
+        forbidden_words.extend(bound_persona["forbidden_words"])
+    else:
+        # 没绑定时从知识库检索 persona 文档
+        for c in persona_chunks:
+            text = c.text or ""
+            persona_name = persona_name or _first_line(text)
+            persona_tone = persona_tone or _field(text, "tone")
+            persona_style = persona_style or _field(text, "style")
 
     for c in rule_chunks:
         text = c.text or ""
@@ -152,6 +164,68 @@ async def draft_node(state: AgentState) -> dict[str, Any]:
         "review_rules": rule_chunks,
         "last_error": None,
     }
+
+
+async def _load_bound_persona(state: AgentState) -> dict[str, Any] | None:
+    """从 preassigned_slot 里拿 account_id，查账号绑定的知识库 persona 文档。
+
+    Returns:
+        None 表示没绑定或查不到；否则返回 {name, tone, style_guide, forbidden_words}
+    """
+    preassigned = state.get("preassigned_slot")
+    if not isinstance(preassigned, dict):
+        return None
+    account_id_str = preassigned.get("account_id")
+    if not account_id_str:
+        return None
+
+    try:
+        from uuid import UUID
+        from sqlalchemy import select
+        from matrix.db.models import Account, KbDocument
+
+        account_id = UUID(str(account_id_str))
+        # 通过 services 的 session factory 查库
+        services = get_services()
+        session_factory = getattr(services, "session_factory", None)
+        if session_factory is None:
+            return None
+
+        async with session_factory() as session:
+            account = (
+                await session.execute(select(Account).where(Account.id == account_id))
+            ).scalar_one_or_none()
+            if account is None or account.persona_id is None:
+                return None
+            doc = (
+                await session.execute(
+                    select(KbDocument).where(
+                        KbDocument.id == account.persona_id,
+                        KbDocument.type == "persona",
+                    )
+                )
+            ).scalar_one_or_none()
+            if doc is None:
+                return None
+            return {
+                "name": doc.title or "",
+                "tone": _field(doc.content or "", "tone"),
+                "style_guide": _field(doc.content or "", "style"),
+                "forbidden_words": _extract_forbidden(doc.content or ""),
+            }
+    except Exception:
+        logger.exception("draft.load_bound_persona failed")
+        return None
+
+
+def _extract_forbidden(content: str) -> list[str]:
+    """从知识库 persona 文档 content 里提取 [forbidden] 标记的词。"""
+    words = []
+    for line in content.splitlines():
+        m = re.match(r"^\[(禁|forbidden)\]\s*(.+)$", line, re.IGNORECASE)
+        if m:
+            words.append(m.group(1).strip())
+    return words
 
 
 def _first_line(text: str) -> str:

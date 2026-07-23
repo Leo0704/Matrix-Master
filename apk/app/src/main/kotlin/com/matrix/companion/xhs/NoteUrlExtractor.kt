@@ -1,7 +1,5 @@
 package com.matrix.companion.xhs
 
-import com.matrix.companion.accessibility.UiNode
-
 /**
  * Extracts a 24-hex XHS note ID from various places it shows up in the
  * UI: URL fragments, share-link text, accessibility node text/content-desc.
@@ -60,21 +58,6 @@ object NoteUrlExtractor {
             if (startOk && endOk) return m.value
         }
         return null
-    }
-
-    /**
-     * Scrape a UiNode's text + contentDescription for an ID. We don't walk
-     * children here — caller is expected to invoke [extractFromText] on the
-     * full screen text blob (built by [XhsMetricsCollector]'s walkText
-     * helper) when bulk-scraping is needed.
-     */
-    fun extractFromCardNode(node: UiNode): String? {
-        val combined = buildString {
-            append(node.text.orEmpty())
-            append('\n')
-            append(node.contentDesc.orEmpty())
-        }
-        return extractFromText(combined)
     }
 
     private fun Char.isHex(): Boolean = this in '0'..'9' || this in 'a'..'f' || this in 'A'..'F'

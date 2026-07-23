@@ -8,16 +8,15 @@
   - diagnose：只读（含二次 LLM 归因，第 3 期）
   - preview_change / apply_change：写操作，走 confirmation_token 两阶段
 
-确认机制：进程内 _CONFIRMATION_STORE dict（10 分钟 TTL，单 worker dev 够用）。
-多 worker 部署要换 Redis/DB —— TODO。
+确认机制：confirmation_token 落 ``chat_confirmation_tokens`` 表（10 分钟 TTL，
+消费即删）——多 worker / 多实例部署不再丢令牌。
 """
 from __future__ import annotations
 
 import json
 import re
-import time
 import uuid
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends
@@ -32,6 +31,7 @@ from matrix.agent.chat_tools import (
 from matrix.agent.prompts import CHAT_SYSTEM, CHAT_USER
 from matrix.api.deps import get_db
 from matrix.api.schemas import ChatAction, ChatHistoryMessage, ChatRequest, ChatResponse
+from matrix.db.models import ChatConfirmationToken
 from matrix.llm.errors import LLMError
 from matrix.llm.retry import retry_with_backoff
 from matrix.llm.router import get_default_client
@@ -44,51 +44,52 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 
 # ---------------------------------------------------------------------------
-# Confirmation token 存储（进程内，10 分钟 TTL）
-# TODO: 多 worker 部署需换 Redis 或 DB 表
+# Confirmation token 存储（DB 表，10 分钟 TTL，消费即删）
 # ---------------------------------------------------------------------------
-
-_CONFIRMATION_STORE: dict[str, dict[str, Any]] = {}
-# token → {"args": dict, "business_id": uuid.UUID, "expires_at": float}
-# v0.7+：每个 token 绑定创建时的 business_id，/confirm 时跨业务拒绝
 
 _CONFIRMATION_TTL_SEC = 600  # 10 分钟
 
 
 def _make_token() -> str:
-    """生成 UUID token，存 args 到 store。"""
-    token = str(uuid.uuid4())
-    return token
+    """生成 UUID token。"""
+    return str(uuid.uuid4())
 
 
-def _store_token(token: str, args: dict[str, Any], business_id: uuid.UUID) -> None:
-    _CONFIRMATION_STORE[token] = {
-        "args": args,
-        "business_id": business_id,  # v0.7+ 跨业务校验
-        "expires_at": time.time() + _CONFIRMATION_TTL_SEC,
-    }
-    _lazy_cleanup()
+async def _store_token(
+    session: AsyncSession, token: str, args: dict[str, Any], business_id: uuid.UUID
+) -> None:
+    """落库：token → (args, business_id, expires_at)。v0.7+：绑定创建时的 business。"""
+    session.add(
+        ChatConfirmationToken(
+            token=token,
+            args=args,
+            business_id=business_id,
+            expires_at=datetime.now(timezone.utc)
+            + timedelta(seconds=_CONFIRMATION_TTL_SEC),
+        )
+    )
+    await session.flush()
 
 
-def _consume_token(token: str) -> tuple[Optional[dict[str, Any]], Optional[uuid.UUID]]:
+async def _consume_token(
+    session: AsyncSession, token: str
+) -> tuple[Optional[dict[str, Any]], Optional[uuid.UUID]]:
     """校验 + 取出（消费即删除，避免重复执行）。
 
     返回 (args, business_id) — 任一为 None 表示令牌无效/已过期。
+    过期行不主动清理：量小无害，consume 时判定即可。
     """
-    entry = _CONFIRMATION_STORE.pop(token, None)
-    if entry is None:
+    row = await session.get(ChatConfirmationToken, token)
+    if row is None:
         return None, None
-    if entry["expires_at"] < time.time():
+    await session.delete(row)
+    expires_at = row.expires_at
+    # 兼容 naive（SQLite / 测试 fake）：一律按 UTC 对齐再比较
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
         return None, None
-    return entry["args"], entry.get("business_id")
-
-
-def _lazy_cleanup() -> None:
-    """清理过期 token（写入时懒触发）。"""
-    now = time.time()
-    expired = [t for t, e in _CONFIRMATION_STORE.items() if e["expires_at"] < now]
-    for t in expired:
-        _CONFIRMATION_STORE.pop(t, None)
+    return dict(row.args or {}), row.business_id
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +151,7 @@ async def chat(
     # 1) /confirm <token> 短路 —— 用户在前端确认 preview_change 后调用
     if message.startswith("/confirm "):
         token = message[len("/confirm ") :].strip()
-        cached_args, cached_business_id = _consume_token(token)
+        cached_args, cached_business_id = await _consume_token(session, token)
         if cached_args is None:
             return ChatResponse(
                 reply="确认令牌无效或已过期，请重新发起指令。",
@@ -174,6 +175,7 @@ async def chat(
             result = await tool(
                 session,
                 {**cached_args, "confirmation_token": token},
+                business_id=body.business_id,
                 operator_business_id=body.business_id,
             )
         except Exception as e:
@@ -194,7 +196,7 @@ async def chat(
     # 2) /cancel <token> 短路 —— 用户取消预览
     if message.startswith("/cancel "):
         token = message[len("/cancel ") :].strip()
-        _consume_token(token)  # 不关心返回值，丢弃即可
+        await _consume_token(session, token)  # 不关心返回值，丢弃即可
         return ChatResponse(
             reply="已取消，未执行任何操作。",
             action=ChatAction(type="noop", payload={"cancelled_token": token}),
@@ -320,7 +322,7 @@ async def chat(
     # 11) 写操作需要 confirmation（v0.7+ 绑定 business_id）
     if requires_confirmation:
         token = _make_token()
-        _store_token(token, args, body.business_id)
+        await _store_token(session, token, args, body.business_id)
         return ChatResponse(
             reply=reply_text or f"准备好执行，请确认。",
             action=ChatAction(

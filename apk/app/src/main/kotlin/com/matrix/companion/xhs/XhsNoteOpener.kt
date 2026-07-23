@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import com.matrix.companion.accessibility.AccessibilityDriver
 import com.matrix.companion.accessibility.ActionExecutor
+import com.matrix.companion.accessibility.CompanionAccessibilityService
 import com.matrix.companion.util.ApiResult
 import com.matrix.companion.util.ErrorCode
 import com.matrix.companion.util.Jitter
@@ -102,7 +103,30 @@ class XhsNoteOpener(
      * https explore 链接 → XHS 内置 WebView → 点「打开 APP 查看」→ 原生详情页。
      * （2026-07 在 XHS 9.38.1 / RMX2117 实测验证的路径）
      */
+    /** 等当前前台 Activity 变成小红书笔记详情页（按 Activity 名，不看界面树）。 */
+    private suspend fun waitForNoteDetailActivity(timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val cur = CompanionAccessibilityService.currentActivity.orEmpty()
+            if (cur.startsWith("com.xingin.xhs/") && cur.contains("NoteDetail")) {
+                return true
+            }
+            Jitter.sleep(300L)
+        }
+        return false
+    }
+
     private suspend fun openViaHttpsWebView(noteId: String): ApiResult<Unit> {
+        // 这台 Realme（ColorOS）限制「后台 App 拉起新 Activity」：
+        // 本 App 在后台时发 https intent 会被静默丢弃（E2E 实测 webview 根本不出现）。
+        // 先把自家 MainActivity 拉到前台（同包名永远允许），再发 XHS 的 intent。
+        val selfIntent = appContext.packageManager
+            .getLaunchIntentForPackage(appContext.packageName)
+            ?.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+        if (selfIntent != null) {
+            appContext.startActivity(selfIntent)
+            Jitter.sleep(600L)
+        }
         val uri = Uri.parse("https://www.xiaohongshu.com/explore/$noteId")
         val intent = Intent(Intent.ACTION_VIEW, uri).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -111,18 +135,31 @@ class XhsNoteOpener(
         return try {
             appContext.startActivity(intent)
             Jitter.sleep(1_500L)
-            val openBtn = driver.waitFor(XhsSelectors.BTN_OPEN_IN_APP, timeoutMs = 8_000L)
-                ?: return ApiResult.Err(
+            // 等按钮出现且「长好」（有真实坐标）：网页无障碍节点刚出现时
+            // bounds 是 [0,0][0,0]，立刻点会戳到屏幕左上角触发返回（E2E 实测）。
+            val deadline = System.currentTimeMillis() + 15_000L
+            var openBtn = driver.findFirst(XhsSelectors.BTN_OPEN_IN_APP)
+            while ((openBtn == null || openBtn.boundsInScreen.isEmpty) &&
+                System.currentTimeMillis() < deadline
+            ) {
+                Jitter.sleep(300L)
+                openBtn = driver.findFirst(XhsSelectors.BTN_OPEN_IN_APP)
+            }
+            if (openBtn == null || openBtn.boundsInScreen.isEmpty) {
+                return ApiResult.Err(
                     ErrorCode.SELECTOR_NOT_FOUND,
                     "webview '打开 APP 查看' button not found",
                     retryable = true,
                 )
+            }
             when (val r = driver.tap(openBtn.centerX, openBtn.centerY)) {
                 is ApiResult.Ok -> Unit
                 is ApiResult.Err -> return r
             }
             Jitter.sleep(1_000L)
-            val landed = driver.waitFor(XhsSelectors.NOTE_DETAIL_LIKE_BTN, timeoutMs = 8_000L) != null
+            // 详情页的无障碍树对本服务不可见（实测：uiautomator 能看到，
+            // 但服务窗口枚举拿不到），靠节点判定不可靠；改用 Activity 名判定。
+            val landed = waitForNoteDetailActivity(15_000L)
             if (landed) ApiResult.Ok(Unit)
             else ApiResult.Err(
                 ErrorCode.TIMEOUT,

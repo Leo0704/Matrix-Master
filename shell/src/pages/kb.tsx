@@ -29,7 +29,15 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/use-toast';
-import type { KbDocument, KbDocumentCreate } from '@/types/api';
+import type { KbDocument, KbDocumentCreate, KbType } from '@/types/api';
+
+const KB_TYPE_LABEL: Record<KbType, string> = {
+  brand: '品牌',
+  persona: '人设',
+  rule: '规则',
+  history: '历史爆款',
+  strategy_card: '套路卡',
+};
 
 export function KB() {
   // 拉全部未发布文档（limit 200 够用），顶部 banner 用
@@ -44,7 +52,7 @@ export function KB() {
     <div className="space-y-4">
       <PageHeader
         title="知识库"
-        description="AI 写笔记的参考材料库，按类型分 4 个 tab"
+        description="人工智能写笔记的参考材料库，按类型分 4 个标签页"
       />
 
       {/* 待发布 banner：中控复盘写到 KB 默认未发布，需要人工 review 后才生效 */}
@@ -53,18 +61,18 @@ export function KB() {
           <CardHeader>
             <CardTitle className="flex flex-col gap-2 text-base text-orange-700 sm:flex-row sm:items-center sm:justify-between">
               <span>
-                ⏰ 有 {unpublished.length} 篇文档待 review（AI 还看不到）
+                ⏰ 有 {unpublished.length} 篇文档待审核（人工智能还看不到）
               </span>
               <span className="shrink-0 text-xs font-normal text-orange-600">
                 {Object.entries(countByType)
-                  .map(([t, n]) => `${t}: ${n}`)
+                  .map(([t, n]) => `${KB_TYPE_LABEL[t as KbType] ?? t}: ${n}`)
                   .join(' · ')}
               </span>
             </CardTitle>
           </CardHeader>
           <CardContent className="text-xs text-orange-600">
-            中控每轮复盘自动写到 KB，<b>默认未发布</b>。点文档上的「发布」按钮即可生效。
-            复盘不发布 → 下一轮拆任务时 LLM 看不到历史经验。
+            中控每轮复盘自动写到知识库，<b>默认未发布</b>。点文档上的「发布」按钮即可生效。
+            复盘不发布 → 下一轮拆任务时 人工智能看不到历史经验。
           </CardContent>
         </Card>
       )}
@@ -112,7 +120,7 @@ function RuleTab() {
   async function handleCreate(body: KbDocumentCreate) {
     try {
       await createMut.mutateAsync(body);
-      toast({ title: '规则已创建', description: '尚未发布，AI 还看不到' });
+      toast({ title: '规则已创建', description: '尚未发布，人工智能还看不到' });
       setOpen(false);
     } catch (e) {
       toast({ title: '创建失败', description: (e as Error).message, variant: 'destructive' });
@@ -143,7 +151,7 @@ function RuleTab() {
   async function handlePublish(doc: KbDocument) {
     try {
       await publishMut.mutateAsync({ id: doc.id, reviewer: 'operator' });
-      toast({ title: '已发布', description: 'AI 现在能用' });
+      toast({ title: '已发布', description: '人工智能现在能用' });
     } catch (e) {
       toast({ title: '发布失败', description: (e as Error).message, variant: 'destructive' });
     }
@@ -153,7 +161,7 @@ function RuleTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          规则库：哪些词不能写、哪些话不能说。每行前面加 <code>[禁]</code> 标记的，就是 AI 写笔记时绝对不能用的违禁词。
+          规则库：哪些词不能写、哪些话不能说。每行前面加 <code>[禁]</code> 标记的，就是 人工智能写笔记时绝对不能用的违禁词。
         </p>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
@@ -165,7 +173,7 @@ function RuleTab() {
             <DialogHeader>
               <DialogTitle>新建规则</DialogTitle>
               <DialogDescription>
-                这些规则 AI 写笔记时会自动参考。每行加 <code>[禁]</code> 标记的词，AI 一写就报错。
+                这些规则 人工智能写笔记时会自动参考。每行加 <code>[禁]</code> 标记的词，人工智能一写就报错。
               </DialogDescription>
             </DialogHeader>
             <RuleForm
@@ -200,7 +208,7 @@ function RuleTab() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>编辑规则</DialogTitle>
-            <DialogDescription>改完保存，AI 写笔记时会用最新内容。</DialogDescription>
+            <DialogDescription>改完保存，人工智能写笔记时会用最新内容。</DialogDescription>
           </DialogHeader>
           {editing && (
             <RuleForm
@@ -297,9 +305,9 @@ function RuleCard({
 
 // ---------- 通用 Tab：brand / persona / history 复用 ----------
 const TYPE_HINTS: Record<'brand' | 'persona' | 'history', string> = {
-  brand: '卖什么产品、给谁用、什么风格、什么价格。AI 写笔记时会按这些写。',
-  persona: '笔记用什么口吻写——亲切的、活泼的、还是专业的。AI 写笔记时模仿这个口吻。',
-  history: '之前发过的爆款笔记正文。AI 写新笔记时模仿你的爆款套路。',
+  brand: '卖什么产品、给谁用、什么风格、什么价格。人工智能写笔记时会按这些写。',
+  persona: '笔记用什么口吻写——亲切的、活泼的、还是专业的。人工智能写笔记时模仿这个口吻。',
+  history: '之前发过的爆款笔记正文。人工智能写新笔记时模仿你的爆款套路。',
 };
 
 function TypeTab({ ktype, label }: { ktype: 'brand' | 'persona' | 'history'; label: string }) {
@@ -336,7 +344,7 @@ function TypeTab({ ktype, label }: { ktype: 'brand' | 'persona' | 'history'; lab
                 <DialogHeader>
                   <DialogTitle>粘贴爆款文案</DialogTitle>
                   <DialogDescription>
-                    把别人的小红书爆款正文整段粘进来，AI 自动拆解「为什么火」并入库。同时会生成一张待发布的「套路卡」。
+                    把别人的小红书爆款正文整段粘进来，人工智能自动拆解「为什么火」并入库。同时会生成一张待发布的「套路卡」。
                   </DialogDescription>
                 </DialogHeader>
                 <ViralIngestForm
@@ -355,7 +363,7 @@ function TypeTab({ ktype, label }: { ktype: 'brand' | 'persona' | 'history'; lab
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>上传{label}</DialogTitle>
-                <DialogDescription>支持 .md / .txt 文件。提交后自动分段理解 + 立即生效。</DialogDescription>
+                <DialogDescription>支持 Markdown 格式或纯文本文件。提交后自动分段理解 + 立即生效。</DialogDescription>
               </DialogHeader>
               <TypeForm ktype={ktype} onCancel={() => setOpen(false)} />
             </DialogContent>
@@ -429,7 +437,7 @@ function TypeForm({ ktype, onCancel }: {
     if (!file) return;
     try {
       const doc = await uploadMut.mutateAsync({ file, type: ktype, title: title || undefined, is_published: true });
-      toast({ title: '上传成功', description: `${doc.title} 已发布，AI 现在能用` });
+      toast({ title: '上传成功', description: `${doc.title} 已发布，人工智能现在能用` });
       setFile(null); setTitle(''); onCancel();
     } catch (e) {
       const msg = (e as Error)?.message || '上传失败';
@@ -452,7 +460,7 @@ function TypeForm({ ktype, onCancel }: {
           </div>
         ) : (
           <div className="space-y-2">
-            <p className="text-sm text-muted-foreground">把 .md 或 .txt 文件拖到这里</p>
+            <p className="text-sm text-muted-foreground">把 Markdown 或纯文本文件拖到这里</p>
             <p className="text-xs text-muted-foreground">或者</p>
             <label className="inline-block cursor-pointer rounded-md border border-input bg-background px-3 py-1.5 text-sm hover:bg-accent">
               选择文件
@@ -476,7 +484,7 @@ function TypeForm({ ktype, onCancel }: {
 }
 
 
-// ---------- 套路卡：AI 从爆款提炼的可复用套路，草稿需人工发布 ----------
+// ---------- 套路卡：人工智能从爆款提炼的可复用套路，草稿需人工发布 ----------
 
 /** 尝试把 strategy_card 的 JSON content 解析成 lessons 列表；失败则原样返回。 */
 function parseLessons(content: string): string[] {
@@ -500,7 +508,7 @@ function StrategyCardTab() {
   async function handlePublish(doc: KbDocument) {
     try {
       await publishMut.mutateAsync({ id: doc.id, reviewer: 'operator' });
-      toast({ title: '已发布', description: 'AI 写新笔记时会参考它' });
+      toast({ title: '已发布', description: '人工智能写新笔记时会参考它' });
     } catch (e) {
       toast({ title: '发布失败', description: (e as Error).message, variant: 'destructive' });
     }
@@ -519,13 +527,13 @@ function StrategyCardTab() {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        套路卡：AI 从爆款里提炼的可复用套路。粘贴爆款文案时自动生成，<b>默认草稿</b>，点「发布」后 AI 写新笔记时才会参考。
+        套路卡：人工智能从爆款里提炼的可复用套路。粘贴爆款文案时自动生成，<b>默认草稿</b>，点「发布」后 人工智能写新笔记时才会参考。
       </p>
 
       {isLoading && <LoadingBlock />}
       {error && <ErrorState error={error} onRetry={() => refetch()} />}
       {!isLoading && items.length === 0 && (
-        <EmptyState title="还没有套路卡" description="去「历史爆款」tab 粘贴一篇爆款文案，AI 会自动提炼" />
+        <EmptyState title="还没有套路卡" description="去「历史爆款」标签页粘贴一篇爆款文案，人工智能会自动提炼" />
       )}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">

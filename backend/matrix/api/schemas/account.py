@@ -24,7 +24,7 @@ class Account(BaseModel):
 class AccountCreate(BaseModel):
     handle: str
     device_id: uuid.UUID
-    persona_id: uuid.UUID
+    persona_id: Optional[uuid.UUID] = None  # 可选：不绑定则写笔记时从知识库检索
     business_id: uuid.UUID  # v0.7+ 业务模型重构：必填
 
 

@@ -150,6 +150,17 @@ async def build_runtime_services(
     from matrix.device.endpoints import DeviceEndpointResolver
     from matrix.llm.image_gen import get_image_gen_client
 
+    # E2E：backend 经 tailnet 访问手机 100.x 时走 ts-client 边车的 HTTP 代理。
+    # 不设则直连（dev 默认走 MATRIX_DEV_APK_HOST / adb forward）。
+    import httpx as _httpx
+
+    _device_proxy = os.environ.get("MATRIX_DEVICE_PROXY") or None
+    _device_http = (
+        _httpx.AsyncClient(timeout=120.0, proxy=_device_proxy)
+        if _device_proxy
+        else None
+    )
+
     # v0.7+ 第 2 期：装一个进程级 LLM 限速器；并发上限走环境变量 ``MATRIX_LLM_CONCURRENCY``，
     # 缺省 8（典型 tier-1 Provider 撑得住）。
     sem_size = int(os.environ.get("MATRIX_LLM_CONCURRENCY", "8"))
@@ -169,7 +180,10 @@ async def build_runtime_services(
         llm=llm,
         kb_retriever=_LazyRetriever(session_factory, embedder),
         kb_writer=_LazyWriter(session_factory, embedder),
-        device_adapter=ApkHttpClient(resolver=DeviceEndpointResolver(session_factory)),
+        device_adapter=ApkHttpClient(
+            resolver=DeviceEndpointResolver(session_factory),
+            client=_device_http,
+        ),
         config=_LazyConfigReader(session_factory),
         task_writer=task_writer,
         note_writer=db_note_writer,  # v0.7 Phase 5：DRAFT 草稿直接落 notes 表

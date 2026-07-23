@@ -5,7 +5,6 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.matrix.companion.auth.SecretProvider
 import com.matrix.companion.util.Logx
-import java.security.SecureRandom
 import java.util.Base64
 
 /**
@@ -46,18 +45,10 @@ class HmacSecretStore(context: Context) : SecretProvider {
 
     fun isProvisioned(): Boolean = prefs.contains(KEY_SECRET)
 
-    fun clear() { prefs.edit().remove(KEY_SECRET).apply() }
-
     companion object {
         private const val PREFS_NAME = "matrix_companion_secrets"
         private const val KEY_SECRET = "hmac_secret"
         private const val MIN_SECRET_SIZE = 16
         private const val MAX_SECRET_SIZE = 64
-
-        fun generateSecret(): ByteArray {
-            val out = ByteArray(32)
-            SecureRandom().nextBytes(out)
-            return out
-        }
     }
 }

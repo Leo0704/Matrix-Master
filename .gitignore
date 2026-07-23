@@ -41,6 +41,9 @@ secrets/
 *.log
 # 设备配对码运行时缓存（每次配对生成，不入库）
 backend/.pair_codes.json
+# 自动生成的控制台访问密码与 HMAC 信封加密主密钥（绝不入库）
+backend/.api_secret
+backend/.secret_box_key
 
 # Build artifacts
 *.app

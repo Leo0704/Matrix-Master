@@ -37,6 +37,10 @@ class AlertResolveResponse(BaseModel):
     resolved: bool
 
 
+class AlertDeleteResponse(BaseModel):
+    deleted: int
+
+
 __all__ = [
     "AlertItem",
     "AlertListResponse",

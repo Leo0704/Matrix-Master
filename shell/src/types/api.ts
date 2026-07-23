@@ -103,6 +103,8 @@ export interface Device {
   pair_code?: string;
   /** v0.7+ 业务归属 */
   business_id: string;
+  /** 业务名称（列表/详情展示用） */
+  business_name?: string;
 }
 
 // P2-3：注册时只填 nickname + 可选 adb_serial；其余 4 字段由 APK 配对时自动回填
@@ -147,7 +149,7 @@ export interface Account {
 export interface AccountCreate {
   handle: string;
   device_id: string;
-  persona_id: string;
+  persona_id?: string;
   /** v0.7+ 业务归属（必填） */
   business_id: string;
 }
@@ -377,7 +379,7 @@ export const STATE_LABELS: Record<AgentState, string> = {
 };
 
 export function formatState(state: string): string {
-  return (STATE_LABELS as Record<string, string>)[state] ?? state;
+  return (STATE_LABELS as Record<string, string>)[state] ?? '未知';
 }
 
 export interface AgentRun {
@@ -385,9 +387,11 @@ export interface AgentRun {
   goal_id?: string;
   current_state: AgentState | string;
   status: AgentRunStatus;
+  round_number?: number;
   started_at: string;
   updated_at?: string;
   ended_at?: string;
+  last_error_snapshot?: Record<string, unknown> | null;
   /** 主题摘要（仅展示用，agent_runs.payload.brief 透传） */
   brief?: ThemeTarget | Record<string, unknown>;
   /** v0.7+ 业务归属 */
@@ -492,6 +496,10 @@ export interface NotificationItem {
   created_at: string;
   /** v0.7+ 业务归属（可选；015/017 migration 加列） */
   business_id?: string;
+  /** v0.7+ 消息可读化：关联实体名称 */
+  goal_name?: string;
+  note_title?: string;
+  device_name?: string;
 }
 
 export interface NotificationListResponse {

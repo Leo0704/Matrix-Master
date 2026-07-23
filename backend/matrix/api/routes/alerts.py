@@ -11,11 +11,12 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from matrix.api.deps import get_db
 from matrix.api.schemas import (
+    AlertDeleteResponse,
     AlertItem,
     AlertListResponse,
     AlertResolveRequest,
@@ -181,3 +182,30 @@ async def resolve_alert(
         "alerts.resolve", alert_id=alert_id, resolver=body.resolver
     )
     return AlertResolveResponse(id=a.id, resolved=True)
+
+
+@router.delete("/{alert_id}", response_model=AlertDeleteResponse)
+async def delete_alert(
+    alert_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+) -> AlertDeleteResponse:
+    """删除单条告警。"""
+    stmt = delete(AlertORM).where(AlertORM.id == alert_id)
+    result = await session.execute(stmt)
+    await session.commit()
+    deleted = int(result.rowcount or 0)
+    logger.info("alerts.delete", alert_id=str(alert_id), deleted=deleted)
+    return AlertDeleteResponse(deleted=deleted)
+
+
+@router.post("/clear-resolved", response_model=AlertDeleteResponse)
+async def clear_resolved_alerts(
+    session: AsyncSession = Depends(get_db),
+) -> AlertDeleteResponse:
+    """一键清空所有已处理告警。"""
+    stmt = delete(AlertORM).where(AlertORM.resolved == True)  # noqa: E712
+    result = await session.execute(stmt)
+    await session.commit()
+    deleted = int(result.rowcount or 0)
+    logger.info("alerts.clear_resolved", deleted=deleted)
+    return AlertDeleteResponse(deleted=deleted)

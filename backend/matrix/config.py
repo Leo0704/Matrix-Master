@@ -36,7 +36,15 @@ class Settings(BaseSettings):
     )
     matrix_api_secret: Optional[str] = Field(
         default=None,
-        description="主 API Bearer token；>=32 字符随机串。",
+        description="主 API Bearer token；>=32 字符随机串。留空则首次启动自动生成并写入 backend/.api_secret。",
+    )
+    matrix_secret_box_key: Optional[str] = Field(
+        default=None,
+        description="设备 HMAC secret 信封加密主密钥（Fernet key）；留空则自动生成并写入 backend/.secret_box_key。",
+    )
+    matrix_secret_box_key_path: Optional[str] = Field(
+        default=None,
+        description="主密钥文件路径覆盖（默认 /app/backend/.secret_box_key）。",
     )
 
     # ===== LLM providers（按需选填，未填的 provider 不可用）=====

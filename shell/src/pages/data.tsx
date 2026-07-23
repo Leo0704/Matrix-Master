@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Users } from 'lucide-react';
 import { apiClient } from '@/lib/api-client';
+import { humanizeStatus } from '@/lib/format';
 import { Card, CardContent } from '@/components/ui/card';
 import { LoadingSpinner } from '@/components/common/loading-spinner';
 import { PageHeader } from '@/components/common/page-header';
@@ -28,7 +29,7 @@ export function Data() {
     <div className="space-y-4">
       <PageHeader
         title="数据"
-        description={`账号 ${accountCount} 个 · 草稿池 ${poolCount} 个（草稿阶段先落库没绑账号的那批）`}
+        description={`已绑账号 ${accountCount} 个 · 待分配草稿 ${poolCount} 个`}
       />
 
       {isLoading ? (
@@ -69,8 +70,8 @@ function AccountCard({ item }: { item: AccountContentStats }) {
             {isUnassigned
               ? '未绑账号草稿池'
               : item.device_nickname
-                ? `📱 ${item.device_nickname} · ${item.status}`
-                : item.status}
+                ? `📱 ${item.device_nickname} · ${humanizeStatus(item.status)}`
+                : humanizeStatus(item.status)}
           </p>
         </div>
 

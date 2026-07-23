@@ -25,6 +25,7 @@ def _to_schema(r: AgentRunORM) -> AgentRun:
         goal_id=r.goal_id,
         current_state=r.current_state,
         status=r.status,  # type: ignore[arg-type]
+        round_number=r.round_number,
         started_at=r.started_at,
         updated_at=r.updated_at,
         ended_at=r.ended_at,
@@ -35,6 +36,7 @@ def _to_schema(r: AgentRunORM) -> AgentRun:
 @router.get("", response_model=AgentRunListResponse)
 async def list_agent_runs(
     status_filter: Optional[str] = Query(None, alias="status"),
+    goal_id: Optional[uuid.UUID] = Query(None, description="按目标过滤"),
     business_id: Optional[uuid.UUID] = Query(None, description="v0.7+ 业务过滤"),
     limit: int = Query(50, ge=1, le=500),
     session: AsyncSession = Depends(get_db),
@@ -42,6 +44,8 @@ async def list_agent_runs(
     from matrix.db.models import Goal
 
     stmt = select(AgentRunORM).order_by(AgentRunORM.started_at.desc())
+    if goal_id:
+        stmt = stmt.where(AgentRunORM.goal_id == goal_id)
     # v0.7+：衍生表业务过滤（通过 Goal.business_id）
     stmt = filter_derived_by_business(
         stmt,

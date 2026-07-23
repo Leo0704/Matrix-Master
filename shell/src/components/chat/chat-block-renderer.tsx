@@ -19,7 +19,22 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import type { ChatAction } from '@/types/api';
+import { GOAL_TYPE_LABEL } from '@/lib/format';
+import { formatState, type ChatAction } from '@/types/api';
+
+const ASK_DATA_SUBCOMMAND_LABEL: Record<string, string> = {
+  summary: '汇总',
+  running: '运行中',
+  weekly_top: '周榜',
+};
+
+const KB_TYPE_LABEL: Record<string, string> = {
+  brand: '品牌',
+  persona: '人设',
+  rule: '规则',
+  history: '历史爆款',
+  strategy_card: '套路卡',
+};
 
 interface Props {
   action: ChatAction;
@@ -88,7 +103,7 @@ function AskDataBlock({ payload }: { payload: Record<string, unknown> }) {
       <Card className="mt-2">
         <CardContent className="p-3">
           <p className="mb-2 text-xs text-muted-foreground">
-            最近 7 天 Top {total}
+            最近 7 天热门 {total} 篇
           </p>
           <Table>
             <TableHeader>
@@ -132,7 +147,7 @@ function AskDataBlock({ payload }: { payload: Record<string, unknown> }) {
       <Card className="mt-2">
         <CardContent className="p-3">
           <p className="mb-2 text-xs text-muted-foreground">
-            共 {total} 个 goal（{subcommand}）
+            共 {total} 个目标（{ASK_DATA_SUBCOMMAND_LABEL[subcommand] ?? '汇总'}）
           </p>
           <Table>
             <TableHeader>
@@ -157,9 +172,9 @@ function AskDataBlock({ payload }: { payload: Record<string, unknown> }) {
                       </Link>
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
-                      {String(row.type ?? '')}
+                      {GOAL_TYPE_LABEL[String(row.type ?? '')] ?? '未知'}
                     </TableCell>
-                    <TableCell>{String(row.phase ?? row.status ?? '')}</TableCell>
+                    <TableCell>{formatState(String(row.phase ?? row.status ?? ''))}</TableCell>
                     <TableCell className="text-right font-mono">
                       {String(row.current_round ?? '?')}/
                       {String(row.max_rounds ?? '?')}
@@ -179,7 +194,7 @@ function AskDataBlock({ payload }: { payload: Record<string, unknown> }) {
     <Card className="mt-2 border-dashed">
       <CardContent className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
         <Info className="h-3.5 w-3.5" />
-        当前没有 goal
+        当前没有目标
       </CardContent>
     </Card>
   );
@@ -226,7 +241,7 @@ function PreviewChangeBlock({
         <DialogHeader>
           <DialogTitle className="text-base">确认执行</DialogTitle>
           <DialogDescription>
-            {summary || `将影响 ${matched.length} 个 goal`}
+            {summary || `将影响 ${matched.length} 个目标`}
           </DialogDescription>
         </DialogHeader>
 
@@ -238,7 +253,7 @@ function PreviewChangeBlock({
                   <TableHead>主题</TableHead>
                   <TableHead>类型</TableHead>
                   <TableHead>当前状态</TableHead>
-                  <TableHead className="text-right">max_rounds</TableHead>
+                  <TableHead className="text-right">最多轮数</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -250,9 +265,9 @@ function PreviewChangeBlock({
                         {String(row.theme ?? '')}
                       </TableCell>
                       <TableCell className="text-xs">
-                        {String(row.type ?? '')}
+                        {GOAL_TYPE_LABEL[String(row.type ?? '')] ?? '未知'}
                       </TableCell>
-                      <TableCell>{String(row.current_status ?? '')}</TableCell>
+                      <TableCell>{formatState(String(row.current_status ?? ''))}</TableCell>
                       <TableCell className="text-right font-mono">
                         {String(row.current_max_rounds ?? '?')}
                       </TableCell>
@@ -316,7 +331,7 @@ function ApplyChangeBlock({ payload }: { payload: Record<string, unknown> }) {
     return (
       <Card className="mt-2 border-emerald-500/40 bg-emerald-50/30">
         <CardContent className="p-3 text-xs text-emerald-700">
-          ✓ 已成功修改 {succeeded} 个 goal
+          ✓ 已成功修改 {succeeded} 个目标
         </CardContent>
       </Card>
     );
@@ -433,7 +448,7 @@ function DiagnoseBlock({ payload }: { payload: Record<string, unknown> }) {
 
         {llmAttr && (
           <div className="rounded border-l-2 border-primary bg-primary/5 p-2">
-            <p className="mb-1 font-medium">LLM 归因</p>
+            <p className="mb-1 font-medium">智能归因</p>
             <p className="whitespace-pre-wrap text-muted-foreground">{llmAttr}</p>
           </div>
         )}
@@ -476,7 +491,7 @@ function BrowseKbBlock({ payload }: { payload: Record<string, unknown> }) {
     <Card className="mt-2">
       <CardContent className="p-3">
         <p className="mb-2 text-xs text-muted-foreground">
-          {docType} · 共 {total} 条
+          {KB_TYPE_LABEL[docType] ?? '未知类型'} · 共 {total} 条
         </p>
         {items.length === 0 ? (
           <p className="text-xs text-muted-foreground">最近没有新增</p>
@@ -519,7 +534,7 @@ function BrowseKbBlock({ payload }: { payload: Record<string, unknown> }) {
           </ul>
         )}
         <Button asChild size="sm" variant="outline" className="mt-2">
-          <Link to="/kb">去 KB 页查看全部</Link>
+          <Link to="/kb">去知识库页查看全部</Link>
         </Button>
       </CardContent>
     </Card>
@@ -572,7 +587,7 @@ function ErrorBlock({
             : '服务异常';
   const detail =
     type === 'unknown_intent'
-      ? `未知意图：${String(payload.raw_intent ?? '?')}。试试：「现在有几个 goal？」「把 max_rounds=3 的 goal 改成 5」`
+      ? `未知意图：${String(payload.raw_intent ?? '?')}。试试：「现在有几个目标在跑？」「把最多轮数改成 5」`
       : type === 'missing_args'
         ? `缺字段：${(Array.isArray(payload.missing) ? payload.missing : []).join(', ')}`
         : type === 'batch_too_large'

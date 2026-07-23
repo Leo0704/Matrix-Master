@@ -16,6 +16,12 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { BusinessComparisonRow } from '@/types/api';
 
+function statusLabel(status: 'active' | 'archived' | undefined): string {
+  if (status === 'active') return '运营中';
+  if (status === 'archived') return '已归档';
+  return '全部';
+}
+
 const METRICS: Array<{
   key: keyof Pick<
     BusinessComparisonRow,
@@ -38,8 +44,8 @@ const METRICS: Array<{
   { key: 'goals', label: '目标' },
   { key: 'notes', label: '笔记' },
   { key: 'published_notes', label: '已发布' },
-  { key: 'kb_documents', label: 'KB 文档' },
-  { key: 'agent_runs', label: 'Agent 运行' },
+  { key: 'kb_documents', label: '知识库文档' },
+  { key: 'agent_runs', label: '智能体运行' },
   {
     key: 'successful_runs',
     label: '成功运行',
@@ -65,7 +71,7 @@ export function BusinessComparison() {
     <div className="space-y-4">
       <PageHeader
         title="多业务对比"
-        description={`共 ${data?.total_businesses ?? 0} 个业务（${statusFilter ?? '全部'}）`}
+        description={`共 ${data?.total_businesses ?? 0} 个业务（${statusLabel(statusFilter)}）`}
         actions={
           <div className="flex items-center gap-2">
             <Button
@@ -80,14 +86,14 @@ export function BusinessComparison() {
               variant={statusFilter === 'active' ? 'default' : 'outline'}
               onClick={() => setStatusFilter('active')}
             >
-              仅 active
+              仅运营中
             </Button>
             <Button
               size="sm"
               variant={statusFilter === 'archived' ? 'default' : 'outline'}
               onClick={() => setStatusFilter('archived')}
             >
-              仅 archived
+              仅已归档
             </Button>
           </div>
         }
@@ -127,12 +133,12 @@ export function BusinessComparison() {
                         <span className="truncate max-w-[160px]">{row.business_name}</span>
                         {row.status === 'archived' && (
                           <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">
-                            archived
+                            已归档
                           </span>
                         )}
                       </div>
                       <div className="text-xs text-muted-foreground truncate max-w-[160px]">
-                        {row.business_slug}
+                        标识：{row.business_slug}
                       </div>
                     </td>
                     {METRICS.map((m) => {

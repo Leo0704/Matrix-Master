@@ -48,8 +48,8 @@ export function ViralIngestForm({ onDone, onCancel }: ViralIngestFormProps) {
       toast({
         title: '已拆解入库',
         description: res.strategy_card_pending
-          ? '爆款记录已发布；套路卡已生成（草稿），去「套路卡」tab 点发布后 AI 才会用'
-          : '爆款记录已发布，AI 现在能参考',
+          ? '爆款记录已发布；套路卡已生成（草稿），去「套路卡」标签页点发布后人工智能才会用'
+          : '爆款记录已发布，人工智能现在能参考',
       });
       setRawText('');
       setTitle('');
@@ -75,11 +75,11 @@ export function ViralIngestForm({ onDone, onCancel }: ViralIngestFormProps) {
           rows={8}
           value={rawText}
           onChange={(e) => setRawText(e.target.value)}
-          placeholder="把小红书爆款笔记的标题 + 正文整段粘进来，AI 会自动拆解它为什么火"
+          placeholder="把小红书爆款笔记的标题 + 正文整段粘进来，人工智能会自动拆解它为什么火"
         />
       </div>
       <div className="space-y-1">
-        <Label htmlFor="viral-title">标题（可选，留空由 AI 从正文提炼）</Label>
+        <Label htmlFor="viral-title">标题（可选，留空由人工智能从正文提炼）</Label>
         <Input
           id="viral-title"
           value={title}

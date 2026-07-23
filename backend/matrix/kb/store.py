@@ -164,16 +164,6 @@ class KbStore:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def list_chunks(self, doc_id: uuid.UUID) -> list[KbChunk]:
-        """取一篇文档的全部 chunk。"""
-        stmt = (
-            select(KbChunk)
-            .where(KbChunk.doc_id == doc_id)
-            .order_by(KbChunk.chunk_index)
-        )
-        result = await self._session.execute(stmt)
-        return list(result.scalars().all())
-
     # ------------------------------------------------------------------
     # update
     # ------------------------------------------------------------------
@@ -270,19 +260,6 @@ class KbStore:
         )
         await self._session.flush()
         logger.info("kb.soft_delete", doc_id=doc_id)
-        return True
-
-    async def hard_delete(self, doc_id: uuid.UUID) -> bool:
-        """物理删除（级联删 chunks）。仅供测试 / 管理脚本使用。"""
-        doc = await self.get_document(doc_id)
-        if doc is None:
-            return False
-        # chunks 由 ON DELETE CASCADE 在物理删 doc 时连带删
-        await self._session.execute(
-            sa_delete(KbDocument).where(KbDocument.id == doc_id)
-        )
-        await self._session.flush()
-        logger.info("kb.hard_delete", doc_id=doc_id)
         return True
 
 

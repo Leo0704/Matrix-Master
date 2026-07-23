@@ -14,8 +14,6 @@ import io.ktor.client.call.body
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.request.get
 import io.ktor.client.statement.HttpResponse
-import java.io.File
-import java.io.FileOutputStream
 
 /**
  * Downloads note images from URLs the master passes in, and inserts them
@@ -160,22 +158,6 @@ class ImagePipeline(
                 retryable = false,
             )
         }
-    }
-
-    /**
-     * Cleanup helper: delete a list of URIs we previously inserted.
-     * Currently unused (no rollback path on partial failure) but kept
-     * for future test code.
-     */
-    @Suppress("unused")
-    fun cleanup(uris: List<Uri>): Int {
-        var removed = 0
-        for (uri in uris) {
-            try {
-                if (appContext.contentResolver.delete(uri, null, null) > 0) removed++
-            } catch (_: Exception) {}
-        }
-        return removed
     }
 
     companion object {

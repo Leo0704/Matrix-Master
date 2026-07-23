@@ -4,7 +4,7 @@
 
 - :class:`LLMClient` / :class:`AnthropicClient` / :class:`OpenAIClient`
 - :class:`EmbeddingClient`
-- :class:`CompletionCache` 缓存 + :func:`retry_with_backoff` 重试
+- :func:`retry_with_backoff` 重试
 - :func:`get_client` 路由器
 - 异常：:class:`LLMError` / :class:`RateLimitError` / :class:`LLMTimeoutError` /
   :class:`AuthError` / :class:`InvalidRequestError`
@@ -12,7 +12,6 @@
 
 from __future__ import annotations
 
-from .cache import CompletionCache
 from .clients import (
     MODEL_ALIASES,
     AnthropicClient,
@@ -44,7 +43,6 @@ from .image_gen import (  # v0.7 Phase 3
     ZhipuCogViewClient,
     get_image_gen_client,
 )
-from .prompt_caching import CachedBlock, CachedMessages
 from .retry import retry_with_backoff
 from .router import get_client, get_default_client, reset_client_cache
 
@@ -61,17 +59,12 @@ __all__ = [
     "EmbeddingClient",
     "EMBEDDING_DIMENSIONS",
     "get_embedding_dimensions",
-    # cache
-    "CompletionCache",
     # retry
     "retry_with_backoff",
     # router
     "get_client",
     "get_default_client",
     "reset_client_cache",
-    # prompt caching
-    "CachedBlock",
-    "CachedMessages",
     # errors
     "LLMError",
     "RateLimitError",

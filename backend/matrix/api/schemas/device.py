@@ -25,6 +25,7 @@ class Device(BaseModel):
     bound_account_handle: Optional[str] = None  # 绑定账号的 handle（1:1 下最多一个）
     pair_code: str | None = None
     business_id: uuid.UUID  # v0.7+ 业务模型重构：设备挂业务名下
+    business_name: Optional[str] = None  # 业务名称（列表/详情展示用）
 
 
 class DeviceRegisterRequest(BaseModel):
@@ -65,7 +66,7 @@ DeviceUnbindResponse = DeviceRetireResponse
 class DevicePairRequest(BaseModel):
     """消费配对码并下发 HMAC 密钥。可选 ``identity`` 块用于 APK 主动回传真实身份。"""
 
-    pair_code: str = Field(..., description="6 位数字配对码")
+    pair_code: str = Field(..., description="8 位数字配对码")
     identity: Optional[DevicePairIdentity] = None
 
 
@@ -80,7 +81,7 @@ class DevicePairResponse(BaseModel):
     # P2-1 测试期：admin 触发生成配对码的 endpoint 需要把配对码回在响应里
     # （老 pairDevice 路由不返回，正常 pair 流程不需要）。Optional 兼容
     # 老的 pairDevice 调用。
-    pair_code: str | None = Field(default=None, description="P2-1 测试用：admin-issued 时返回 6 位配对码")
+    pair_code: str | None = Field(default=None, description="P2-1 测试用：admin-issued 时返回 8 位配对码")
 
 
 class DeviceListResponse(BaseModel):

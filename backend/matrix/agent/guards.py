@@ -50,11 +50,6 @@ def research_has_candidates(state: AgentState) -> bool:
     return bool(state.get("candidates"))
 
 
-def research_empty_to_alert(state: AgentState) -> bool:
-    """RESEARCH 之后是否转 ALERT（无候选）。"""
-    return not research_has_candidates(state)
-
-
 # ---------------------------------------------------------------------------
 # DRAFT → REVIEW (always ok unless no draft)
 # ---------------------------------------------------------------------------
@@ -105,11 +100,6 @@ def can_review_to_alert(state: AgentState, cfg: GuardConfig) -> bool:
 # ---------------------------------------------------------------------------
 # REVISE → DRAFT / ALERT
 # ---------------------------------------------------------------------------
-
-
-def can_revise_to_draft(state: AgentState, cfg: GuardConfig) -> bool:
-    attempts = int(state.get("revise_attempts", 0))
-    return attempts < cfg.revise_max_attempts
 
 
 def can_revise_to_alert(state: AgentState, cfg: GuardConfig) -> bool:
@@ -230,21 +220,6 @@ def collect_no_metrics_to_alert(state: AgentState, cfg: GuardConfig) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# ANALYZE → IDLE (always)
-# ---------------------------------------------------------------------------
-
-
-# ANALYZE 是一个收尾节点，本身转到 IDLE，不需要 guard。
-# 但仍提供一个可测的 hook：
-def analyze_complete(state: AgentState) -> bool:
-    """ANALYZE 完成后是否回到 IDLE。
-
-    策略：恒为 True（即使 ANALYZE 报错也回 IDLE，由人工/监控处理）。
-    """
-    return True
-
-
-# ---------------------------------------------------------------------------
 # ALERT → IDLE
 # ---------------------------------------------------------------------------
 
@@ -264,10 +239,6 @@ def alert_unacknowledged(state: AgentState) -> bool:
 # ---------------------------------------------------------------------------
 # IDLE 出边
 # ---------------------------------------------------------------------------
-
-
-def idle_to_research(state: AgentState) -> bool:
-    return str(state.get("entry", State.RESEARCH.value)).upper() != State.ANALYZE.value
 
 
 def idle_to_analyze(state: AgentState) -> bool:
@@ -338,14 +309,12 @@ __all__ = [
     "ReviewVerdict",
     # Research
     "research_has_candidates",
-    "research_empty_to_alert",
     # Review
     "review_verdict",
     "can_review_to_schedule",
     "can_review_to_revise",
     "can_review_to_alert",
     # Revise
-    "can_revise_to_draft",
     "can_revise_to_alert",
     # Schedule
     "schedule_has_slot",
@@ -365,10 +334,8 @@ __all__ = [
     "collect_has_metrics",
     "collect_no_metrics_to_alert",
     # Analyze / Alert / IDLE
-    "analyze_complete",
     "alert_acknowledged",
     "alert_unacknowledged",
-    "idle_to_research",
     "idle_to_analyze",
     # Routing
     "route_after_research",

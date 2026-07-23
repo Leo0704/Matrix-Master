@@ -39,18 +39,6 @@ export interface DeviceUpdateBody {
   tags?: string[];
 }
 
-export function useUpdateDevice() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, body }: { id: string; body: DeviceUpdateBody }) =>
-      apiClient.patch<Device>(`/devices/${id}`, body),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['devices'] });
-      qc.invalidateQueries({ queryKey: ['device'] });
-    },
-  });
-}
-
 /** 退役设备：设备永久下线，清账号绑定 + 撤销 HMAC 密钥 */
 export function useRetireDevice() {
   const qc = useQueryClient();

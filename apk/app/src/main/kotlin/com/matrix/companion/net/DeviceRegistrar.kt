@@ -98,11 +98,6 @@ class DeviceRegistrar(private val context: Context) {
         val retryable: Boolean = false,
     )
 
-    @Serializable
-    data class ApiErrorBody(
-        val message: String? = null,
-    )
-
     /**
      * Returns Result.success on pair success, Result.failure otherwise.
      */

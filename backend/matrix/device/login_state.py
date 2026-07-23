@@ -92,16 +92,6 @@ class LoginStateMonitor:
 
         return record
 
-    async def get_recent(self, account_id: UUID, limit: int = 10) -> list[AccountLoginSession]:
-        """获取账号最近的登录态记录。"""
-        result = await self.session.execute(
-            select(AccountLoginSession)
-            .where(AccountLoginSession.account_id == account_id)
-            .order_by(AccountLoginSession.ts.desc())
-            .limit(limit)
-        )
-        return list(result.scalars().all())
-
     async def is_logged_in(self, account_id: UUID, window_minutes: int = 30) -> bool:
         """近 ``window_minutes`` 分钟内是否有过 success 记录。"""
         from datetime import timedelta

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from matrix.api.deps import get_db, resolve_active_business
 from matrix.api.schemas import Account, AccountCreate, AccountListResponse, AccountUpdate
-from matrix.db.models import Account as AccountORM, Device, Persona
+from matrix.db.models import Account as AccountORM, Device, KbDocument
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
@@ -62,9 +62,10 @@ async def create_account(
     device = await session.get(Device, body.device_id)
     if device is None or device.deleted_at is not None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "device not found")
-    persona = await session.get(Persona, body.persona_id)
-    if persona is None:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "persona not found")
+    if body.persona_id is not None:
+        persona_doc = await session.get(KbDocument, body.persona_id)
+        if persona_doc is None or persona_doc.type != "persona":
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "persona document not found")
 
     # 一机一账号预检（migration 007 加的 partial unique index 兜底，这里给友好错误码）
     conflict = (
@@ -178,9 +179,9 @@ async def update_account(
             )
         a.handle = body.handle
     if body.persona_id is not None:
-        persona = await session.get(Persona, body.persona_id)
-        if persona is None:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "persona not found")
+        persona_doc = await session.get(KbDocument, body.persona_id)
+        if persona_doc is None or persona_doc.type != "persona":
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "persona document not found")
         a.persona_id = body.persona_id
     if body.device_id is not None and body.device_id != a.device_id:
         # 一机一账号预检（migration 007 partial unique index 兜底）

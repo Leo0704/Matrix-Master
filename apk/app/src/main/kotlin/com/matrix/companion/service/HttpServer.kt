@@ -1,6 +1,7 @@
 package com.matrix.companion.service
 
 import com.matrix.companion.App
+import com.matrix.companion.BuildConfig
 import com.matrix.companion.api.appOpenRoute
 import com.matrix.companion.api.deviceStatusRoute
 import com.matrix.companion.api.errResp
@@ -79,7 +80,7 @@ class HttpServer(private val app: App) {
                     get("/health") {
                         val data = buildJsonObject {
                             put("app", JsonPrimitive("matrix-companion"))
-                            put("version", JsonPrimitive("0.1.0"))
+                            put("version", JsonPrimitive(BuildConfig.VERSION_NAME))
                             put("accessibility", JsonPrimitive(app.driver.isReady()))
                         }
                         call.respond(okResp(data))
@@ -162,7 +163,7 @@ class HttpServer(private val app: App) {
                 appContext = app,
             ),
         )
-        xhsInteractRoute(XhsInteractor(app.executor, app.noteOpener))
+        xhsInteractRoute(XhsInteractor(app.executor, app.noteOpener, app.driver))
         xhsCollectMetricsRoute(
             XhsMetricsCollector(
                 driver = app.driver,
