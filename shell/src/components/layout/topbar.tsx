@@ -195,6 +195,19 @@ export function BusinessSelector({
   );
 }
 
+function healthStatusLabel(status: string): string {
+  switch (status) {
+    case 'ok':
+      return '正常';
+    case 'degraded':
+      return '降级';
+    case 'down':
+      return '宕机';
+    default:
+      return '未知';
+  }
+}
+
 function SystemHealth({ health }: { health?: Health }) {
   const status = health?.status ?? 'unknown';
   const color =
@@ -209,7 +222,7 @@ function SystemHealth({ health }: { health?: Health }) {
     <div className="hidden sm:flex items-center gap-2 rounded-md border bg-background px-2 py-1.5 text-xs">
       <span className={cn('h-2 w-2 rounded-full', color)} />
       <span className="whitespace-nowrap">
-        主控: <span className="font-medium">{status}</span>
+        主控: <span className="font-medium">{healthStatusLabel(status)}</span>
       </span>
       {health && (
         <span className="whitespace-nowrap text-muted-foreground">v{health.version}</span>

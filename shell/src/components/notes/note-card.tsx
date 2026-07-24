@@ -1,12 +1,20 @@
 import { Link } from 'react-router-dom';
-import { Trash2 } from 'lucide-react';
+import { Pencil, Trash2 } from 'lucide-react';
 import type { Note } from '@/types/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/common/status-badge';
 import { formatDate } from '@/lib/format';
 
-export function NoteCard({ note, onDelete }: { note: Note; onDelete?: () => void }) {
+export function NoteCard({
+  note,
+  onEdit,
+  onDelete,
+}: {
+  note: Note;
+  onEdit?: () => void;
+  onDelete?: () => void;
+}) {
   return (
     <Card>
       <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-2">
@@ -32,20 +40,36 @@ export function NoteCard({ note, onDelete }: { note: Note; onDelete?: () => void
             </a>
           )}
         </div>
-        {onDelete && (
-          <div className="flex justify-end pt-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                onDelete();
-              }}
-              className="h-7 px-2 text-xs text-destructive hover:text-destructive"
-            >
-              <Trash2 className="mr-1 h-3 w-3" /> 删除
-            </Button>
+        {(onEdit || onDelete) && (
+          <div className="flex justify-end gap-1 pt-1">
+            {onEdit && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onEdit();
+                }}
+                className="h-7 px-2 text-xs"
+              >
+                <Pencil className="mr-1 h-3 w-3" /> 编辑
+              </Button>
+            )}
+            {onDelete && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onDelete();
+                }}
+                className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+              >
+                <Trash2 className="mr-1 h-3 w-3" /> 删除
+              </Button>
+            )}
           </div>
         )}
       </CardContent>

@@ -12,7 +12,11 @@ from typing import Any, Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from matrix.agent.bootstrap import build_agent_services, db_note_writer
+from matrix.agent.bootstrap import (
+    build_agent_services,
+    db_interaction_writer,
+    db_note_writer,
+)
 from matrix.agent._services import AgentServices
 from matrix.agent.llm_rate_limiter import LLMRateLimiter
 from matrix.kb.embedding import EmbeddingService
@@ -39,13 +43,19 @@ class _LazyRetriever:
                 text = query.query
                 type_ = kwargs.pop("type", getattr(query, "doc_type", None) or _doc_type_from_doc_types(getattr(query, "doc_types", None)))
                 top_k = kwargs.pop("top_k", getattr(query, "top_k", 5))
+                business_id = kwargs.pop("business_id", getattr(query, "business_id", None))
             elif isinstance(query, dict):
                 text = query.get("query", "")
                 type_ = kwargs.pop("type", query.get("type") or _doc_type_from_doc_types(query.get("doc_types")))
                 top_k = kwargs.pop("top_k", query.get("top_k", 5))
+                business_id = kwargs.pop("business_id", query.get("business_id"))
             else:
                 text, type_, top_k = query, kwargs.pop("type", ""), kwargs.pop("top_k", 5)
-            return await r.retrieve(text, type=type_ or "history", top_k=top_k, **kwargs)
+                business_id = kwargs.pop("business_id", None)
+            return await r.retrieve(
+                text, type=type_ or "history", top_k=top_k,
+                business_id=business_id, **kwargs,
+            )
 
 
 def _doc_type_from_doc_types(doc_types: Any) -> str:
@@ -150,10 +160,30 @@ async def build_runtime_services(
     from matrix.device.endpoints import DeviceEndpointResolver
     from matrix.llm.image_gen import get_image_gen_client
 
+    # E2E：backend 经 tailnet 访问手机 100.x 时走 ts-client 边车的 HTTP 代理。
+    # 不设则直连（dev 默认走 MATRIX_DEV_APK_HOST / adb forward）。
+    import httpx as _httpx
+
+    _device_proxy = os.environ.get("MATRIX_DEVICE_PROXY") or None
+    _device_http = (
+        _httpx.AsyncClient(timeout=120.0, proxy=_device_proxy)
+        if _device_proxy
+        else None
+    )
+
     # v0.7+ 第 2 期：装一个进程级 LLM 限速器；并发上限走环境变量 ``MATRIX_LLM_CONCURRENCY``，
     # 缺省 8（典型 tier-1 Provider 撑得住）。
     sem_size = int(os.environ.get("MATRIX_LLM_CONCURRENCY", "8"))
     llm_rate_limiter = LLMRateLimiter(semaphore=asyncio.Semaphore(sem_size))
+
+    # 互动限速器：与 app.py 调度器同规格（DB 日上限跨进程共享，抖动由 executor 负责）
+    from matrix.scheduler.rate_limiter import DbDailyCounter, RateLimiter
+
+    rate_limiter = RateLimiter(
+        jitter_base=0.0,
+        jitter_sigma=0.0,
+        daily_counter=DbDailyCounter(session_factory),
+    )
 
     if notifier is None:
         # Phase 1：替换原 _noop_notifier。WebhookNotifier 内部持长生命周期 httpx 客户端，
@@ -169,15 +199,21 @@ async def build_runtime_services(
         llm=llm,
         kb_retriever=_LazyRetriever(session_factory, embedder),
         kb_writer=_LazyWriter(session_factory, embedder),
-        device_adapter=ApkHttpClient(resolver=DeviceEndpointResolver(session_factory)),
+        device_adapter=ApkHttpClient(
+            resolver=DeviceEndpointResolver(session_factory),
+            client=_device_http,
+        ),
         config=_LazyConfigReader(session_factory),
         task_writer=task_writer,
         note_writer=db_note_writer,  # v0.7 Phase 5：DRAFT 草稿直接落 notes 表
+        interaction_writer=db_interaction_writer,  # 修断线：互动成功记录落 interactions 表
+        rate_limiter=rate_limiter,  # 修断线：interact 节点的限速器此前永远是 None
         scheduler=scheduler,
         notifier=notifier,
         llm_rate_limiter=llm_rate_limiter,
         round_allocator=round_allocator,  # 第 1 期：注入 DefaultRoundSlotAllocator
         image_generator=get_image_gen_client(),  # v0.7 Phase 3 补接线：IMAGE_GEN 节点此前永远 NO_CLIENT
+        session_factory=session_factory,  # 修断线：interact 去重/平台 id → 本地 UUID 解析都要 DB
     )
     # 默认 1024 对"返回 3 个选题 + 长 rationale / 800 字正文 + JSON 外壳"太短，
     # 输出截断 → json_parse_fail → 整条 run 进 ALERT（E2E 实测复现）。提到 4096。

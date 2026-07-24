@@ -24,6 +24,7 @@ from matrix.api.schemas.device import (
 )
 from matrix.api.schemas.agent_run import AgentRun, AgentRunListResponse
 from matrix.api.schemas.alerts import (
+    AlertDeleteResponse,
     AlertItem,
     AlertListResponse,
     AlertResolveRequest,
@@ -77,17 +78,12 @@ from matrix.api.schemas.kb import (
 )
 from matrix.api.schemas.note import Note, NoteCreate, NoteListResponse, NoteUpdate
 from matrix.api.schemas.notification import (
+    NotificationDeleteResponse,
     NotificationItem,
     NotificationListResponse,
     NotificationMarkReadRequest,
     NotificationMarkReadResponse,
     NotificationSeverity,
-)
-from matrix.api.schemas.persona import (
-    Persona,
-    PersonaCreate,
-    PersonaListResponse,
-    PersonaUpdate,
 )
 from matrix.api.schemas.settings import AppSetting, AppSettingList, AppSettingUpsert
 
@@ -107,6 +103,7 @@ __all__ = [
     "BusinessComparisonResponse",
     "BusinessComparisonRow",
     "AgentRunListResponse",
+    "AlertDeleteResponse",
     "AlertItem",
     "AlertListResponse",
     "AlertResolveRequest",
@@ -156,16 +153,13 @@ __all__ = [
     "NoteCreate",
     "NoteListResponse",
     "NoteUpdate",
+    "NotificationDeleteResponse",
     "NotificationItem",
     "NotificationListResponse",
     "NotificationMarkReadRequest",
     "NotificationMarkReadResponse",
     "NotificationSeverity",
     "OkResponse",
-    "Persona",
-    "PersonaCreate",
-    "PersonaListResponse",
-    "PersonaUpdate",
     "AppSetting",
     "AppSettingList",
     "AppSettingUpsert",

@@ -8,7 +8,6 @@
 """
 from __future__ import annotations
 
-import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator
@@ -17,17 +16,12 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-# 测试时禁用监控中间件（避免 prometheus 全局状态污染）
-os.environ.setdefault("OTLP_ENDPOINT", "")
-
 from matrix.api import deps
 from matrix.api.app import create_app
 from matrix.db.models import (
-    Account,
     AgentRun,
+    Business,
     Device,
-    Note,
-    Persona,
 )
 
 
@@ -43,11 +37,29 @@ class FakeDB:
         self.store: dict[tuple[type, Any], Any] = {}
 
 
+def _store_key(obj: Any) -> tuple[type, Any]:
+    """FakeDB store 的键：默认 (type, obj.id)。
+
+    主键不叫 ``id`` 的模型（如 ChatConfirmationToken 的 ``token``）回退到
+    SQLAlchemy mapper 的第一个主键列名取值。
+    """
+    pk = getattr(obj, "id", None)
+    if pk is None and not hasattr(obj, "id"):
+        from sqlalchemy import inspect as sa_inspect
+
+        pk = getattr(obj, sa_inspect(type(obj)).primary_key[0].name, None)
+    return (type(obj), pk)
+
+
 class _ScalarResult:
     def __init__(self, rows: list[Any]) -> None:
         self._rows = rows
 
     def scalars(self) -> "_ScalarResult":
+        return self
+
+    def unique(self) -> "_ScalarResult":
+        # 真实 Result.unique() 用于 joinedload 去重；fake 无需去重，原样返回
         return self
 
     def all(self) -> list[Any]:
@@ -83,7 +95,7 @@ class FakeAsyncSession:
 
     # 配置 helper
     def seed(self, obj: Any) -> None:
-        self._db.store[(type(obj), obj.id)] = obj
+        self._db.store[_store_key(obj)] = obj
 
     # Session 协议
     def add(self, obj: Any) -> None:
@@ -93,15 +105,23 @@ class FakeAsyncSession:
         for obj in self.added:
             if getattr(obj, "id", None) is None and hasattr(obj, "id"):
                 obj.id = uuid.uuid4()
-            if getattr(obj, "id", None) is not None:
-                self._db.store[(type(obj), obj.id)] = obj
+            # 真实 DB 的 server_default(NOW()) 在 fake 里不会生效，
+            # 响应 schema 的 created_at 是必填 datetime，这里补一个
+            if hasattr(obj, "created_at") and getattr(obj, "created_at", None) is None:
+                from datetime import UTC, datetime
+
+                obj.created_at = datetime.now(UTC)
+            key = _store_key(obj)
+            if key[1] is not None:
+                self._db.store[key] = obj
 
     async def commit(self) -> None:
         for obj in self.added:
             if getattr(obj, "id", None) is None and hasattr(obj, "id"):
                 obj.id = uuid.uuid4()
-            if getattr(obj, "id", None) is not None:
-                self._db.store[(type(obj), obj.id)] = obj
+            key = _store_key(obj)
+            if key[1] is not None:
+                self._db.store[key] = obj
         self.committed = True
         self.added.clear()
 
@@ -114,7 +134,7 @@ class FakeAsyncSession:
 
     async def delete(self, obj: Any) -> None:
         # 从 db.store 真删
-        self._db.store.pop((type(obj), obj.id), None)
+        self._db.store.pop(_store_key(obj), None)
 
     async def get(self, cls: type, pk: Any):
         obj = self._db.store.get((cls, pk))
@@ -135,6 +155,14 @@ class FakeAsyncSession:
         # 简化：标量聚合查询（count / sum / coalesce）→ 先处理（可能 entity 是 None）
         if any(agg in sql for agg in ("count(", "sum(", "coalesce(", "avg(", "min(", "max(")):
             return _ScalarResult([0])
+
+        # 处理 Delete / Update 语句
+        from sqlalchemy import Delete, Update
+
+        if isinstance(stmt, Delete):
+            return await self._execute_delete(stmt)
+        if isinstance(stmt, Update):
+            return await self._execute_update(stmt)
 
         # 简化策略：扫描 db.store 中所有 (Cls, id) 匹配 stmt 涉及的列
         from matrix.db.models import Base
@@ -191,6 +219,107 @@ class FakeAsyncSession:
 
         return _ScalarResult(rows)
 
+    async def _execute_delete(self, stmt: Any) -> Any:
+        """内存执行 Delete 语句，返回带 rowcount 的 mock result。"""
+        orm_cls = self._orm_cls_from_stmt(stmt)
+        if orm_cls is None:
+            return _MockRowcountResult(0)
+
+        deleted = 0
+        for key, obj in list(self._db.store.items()):
+            cls, _ = key
+            if cls is not orm_cls:
+                continue
+            if getattr(obj, "deleted_at", None) is not None:
+                continue
+            if self._match_where(obj, stmt):
+                del self._db.store[key]
+                deleted += 1
+        return _MockRowcountResult(deleted)
+
+    async def _execute_update(self, stmt: Any) -> Any:
+        """内存执行 Update 语句，返回带 rowcount 的 mock result。"""
+        orm_cls = self._orm_cls_from_stmt(stmt)
+        if orm_cls is None:
+            return _MockRowcountResult(0)
+
+        values = self._extract_update_values(stmt)
+        updated = 0
+        for (cls, _), obj in self._db.store.items():
+            if cls is not orm_cls:
+                continue
+            if getattr(obj, "deleted_at", None) is not None:
+                continue
+            if self._match_where(obj, stmt):
+                for k, v in values.items():
+                    setattr(obj, k, v)
+                updated += 1
+        return _MockRowcountResult(updated)
+
+    def _orm_cls_from_stmt(self, stmt: Any) -> type | None:
+        """从 Delete/Update 语句的 table 推断 ORM 类。"""
+        table = getattr(stmt, "table", None)
+        if table is None:
+            return None
+        name = getattr(table, "name", None)
+        if name is None:
+            return None
+        from matrix.db.models import Base
+
+        for (cls, _), obj in self._db.store.items():
+            if issubclass(cls, Base) and getattr(cls, "__tablename__", None) == name:
+                return cls
+        return None
+
+    def _match_where(self, obj: Any, stmt: Any) -> bool:
+        """极其简化的 where 匹配。"""
+        s = str(stmt).lower()
+
+        # id = uuid（单条删除）
+        if "where notifications.id =" in s or "where " + obj.__tablename__ + ".id =" in s:
+            import re as _re
+            m = _re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", str(stmt))
+            if m:
+                return str(obj.id) == m.group(0)
+
+        # read_at IS NOT NULL / IS NULL
+        if "read_at is not null" in s:
+            return getattr(obj, "read_at", None) is not None
+        if "read_at is null" in s:
+            return getattr(obj, "read_at", None) is None
+
+        # resolved = true / false
+        if "resolved = true" in s:
+            return bool(getattr(obj, "resolved", False))
+        if "resolved = false" in s:
+            return not bool(getattr(obj, "resolved", False))
+
+        return True
+
+    @staticmethod
+    def _extract_update_values(stmt: Any) -> dict[str, Any]:
+        """从 Update 语句里提取 values 字典。"""
+        try:
+            return {k.key: v for k, v in stmt.values.items()}
+        except Exception:
+            return {}
+
+
+class _MockRowcountResult:
+    """模拟 SQLAlchemy Result 的 rowcount。"""
+
+    def __init__(self, rowcount: int) -> None:
+        self.rowcount = rowcount
+
+    def scalar_one(self) -> int:
+        return self.rowcount
+
+    def scalars(self) -> "_MockRowcountResult":
+        return self
+
+    def all(self) -> list[Any]:
+        return []
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -205,6 +334,31 @@ async def fake_db() -> FakeDB:
 @pytest_asyncio.fixture
 async def fake_session(fake_db: FakeDB) -> FakeAsyncSession:
     return FakeAsyncSession(fake_db)
+
+
+# v0.7+：写操作路由强制 business_id（resolve_active_business 校验存在+active）。
+# 每个测试默认 seed 一个 active 业务，请求体里用 ``_BIZ_ID`` 引用。
+_BIZ_ID = uuid.uuid4()
+
+
+def _mk_business(**kwargs: Any) -> Business:
+    base = dict(
+        id=_BIZ_ID,
+        name="默认测试业务",
+        slug="default-test-biz",
+        description=None,
+        status="active",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        archived_at=None,
+    )
+    base.update(kwargs)
+    return Business(**base)
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _seed_default_business(fake_db: FakeDB) -> None:
+    fake_db.store[(Business, _BIZ_ID)] = _mk_business()
 
 
 @pytest_asyncio.fixture
@@ -341,6 +495,7 @@ async def test_register_device(client: AsyncClient) -> None:
             "apk_version": "0.1.0",
             "tailnet_ip": "100.64.0.1",
             "adb_serial": "ABC123",
+            "business_id": str(_BIZ_ID),
         },
     )
     assert r.status_code == 201
@@ -349,7 +504,7 @@ async def test_register_device(client: AsyncClient) -> None:
     assert body["status"] == "pending"
     assert "id" in body
     assert body["pair_code"].isdigit()
-    assert len(body["pair_code"]) == 6
+    assert len(body["pair_code"]) == 8
 
 
 @pytest.mark.asyncio
@@ -370,6 +525,7 @@ async def test_pair_device(client: AsyncClient, fake_session: FakeAsyncSession) 
             "android_version": "14",
             "apk_version": "0.1.0",
             "tailnet_ip": "100.64.0.2",
+            "business_id": str(_BIZ_ID),
         },
     )
     pair_source = registration.json()
@@ -408,37 +564,18 @@ async def test_pair_device_bad_code(
 # ---------------------------------------------------------------------------
 
 
-def _mk_persona(**kwargs: Any) -> Persona:
-    base = dict(
-        id=uuid.uuid4(),
-        name=kwargs.pop("name", "default"),
-        tone="casual",
-        style_guide="be authentic",
-        forbidden_words=[],
-        sample_note_ids=[],
-        version=1,
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
-        deleted_at=None,
-    )
-    base.update(kwargs)
-    return Persona(**base)
-
-
 @pytest.mark.asyncio
 async def test_create_account(
     client: AsyncClient, fake_session: FakeAsyncSession
 ) -> None:
     device = _mk_device()
-    persona = _mk_persona()
     fake_session.seed(device)
-    fake_session.seed(persona)
     r = await client.post(
         "/api/v1/accounts",
         json={
             "handle": "new_handle",
             "device_id": str(device.id),
-            "persona_id": str(persona.id),
+            "business_id": str(_BIZ_ID),
         },
     )
     assert r.status_code == 201
@@ -452,27 +589,6 @@ async def test_create_account(
 async def test_get_account_not_found(client: AsyncClient) -> None:
     r = await client.get(f"/api/v1/accounts/{uuid.uuid4()}")
     assert r.status_code == 404
-
-
-# ---------------------------------------------------------------------------
-# /personas
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_create_persona(client: AsyncClient) -> None:
-    r = await client.post(
-        "/api/v1/personas",
-        json={
-            "name": "casual-girl",
-            "tone": "casual",
-            "style_guide": "use first person",
-        },
-    )
-    assert r.status_code == 201
-    body = r.json()
-    assert body["name"] == "casual-girl"
-    assert body["version"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -503,13 +619,13 @@ async def test_get_note_not_found(client: AsyncClient) -> None:
 async def test_create_goal(client: AsyncClient) -> None:
     r = await client.post(
         "/api/v1/goals",
-        json={"type": "publish_note", "target": {"count": 3}},
+        json={"type": "publish_note", "target": {"theme": "测试主题", "count": 3}, "business_id": str(_BIZ_ID)},
     )
     assert r.status_code == 201
     body = r.json()
     assert body["type"] == "publish_note"
     assert body["status"] == "active"
-    assert body["target"] == {"count": 3}
+    assert body["target"] == {"theme": "测试主题", "count": 3}
 
 
 @pytest.mark.asyncio
@@ -524,6 +640,7 @@ async def test_patch_goal_tuning_fields(client: AsyncClient) -> None:
             "target_likes": 100,
             "notes_per_round": 3,
             "max_rounds": 2,
+            "business_id": str(_BIZ_ID),
         },
     )
     assert r.status_code == 201
@@ -564,7 +681,7 @@ async def test_patch_goal_type_and_target(client: AsyncClient) -> None:
     """v0.7 B：PATCH /goals/{id} 能改 type 和 target（换方向继续）。"""
     r = await client.post(
         "/api/v1/goals",
-        json={"type": "natural_language", "target": {"theme": "原主题"}},
+        json={"type": "natural_language", "target": {"theme": "原主题"}, "business_id": str(_BIZ_ID)},
     )
     assert r.status_code == 201
     goal_id = r.json()["id"]
@@ -596,7 +713,7 @@ async def test_delete_goal_hard_delete(client: AsyncClient) -> None:
     """v0.7：DELETE /goals/{id} 物理删。删后 GET 404，list 不再返回。"""
     r = await client.post(
         "/api/v1/goals",
-        json={"type": "natural_language", "target": {"theme": "删我"}},
+        json={"type": "natural_language", "target": {"theme": "删我"}, "business_id": str(_BIZ_ID)},
     )
     assert r.status_code == 201
     goal_id = r.json()["id"]
@@ -623,7 +740,7 @@ async def test_patch_goal_status_cancelled(client: AsyncClient) -> None:
     """v0.7 B：PATCH /goals/{id} 把 status 改成 cancelled，手动停 goal。"""
     r = await client.post(
         "/api/v1/goals",
-        json={"type": "publish_note", "target": {"theme": "x"}},
+        json={"type": "publish_note", "target": {"theme": "x"}, "business_id": str(_BIZ_ID)},
     )
     assert r.status_code == 201
     goal_id = r.json()["id"]
@@ -712,7 +829,7 @@ async def test_chat_unknown_intent_for_create_goal(
         '"intent": "create_goal", '
         '"args": {}}'
     )
-    r = await client.post("/api/v1/chat", json={"message": "建一个夏季女鞋 goal"})
+    r = await client.post("/api/v1/chat", json={"message": "建一个夏季女鞋 goal", "business_id": str(_BIZ_ID)})
     assert r.status_code == 200
     body = r.json()
     assert "reply" in body
@@ -732,7 +849,7 @@ async def test_chat_pause_no_longer_keyword_short_circuit(
     seeded_run = _mk_run(status="running")
     fake_session.seed(seeded_run)
     await fake_session.flush()
-    r = await client.post("/api/v1/chat", json={"message": "暂停"})
+    r = await client.post("/api/v1/chat", json={"message": "暂停", "business_id": str(_BIZ_ID)})
     assert r.status_code == 200
     body = r.json()
     assert body["action"]["type"] == "chitchat"
@@ -744,7 +861,7 @@ async def test_chat_pause_no_longer_keyword_short_circuit(
 
 @pytest.mark.asyncio
 async def test_chat_empty_message(client: AsyncClient) -> None:
-    r = await client.post("/api/v1/chat", json={"message": ""})
+    r = await client.post("/api/v1/chat", json={"message": "", "business_id": str(_BIZ_ID)})
     assert r.status_code == 200
     body = r.json()
     assert body["action"]["type"] == "noop"
@@ -782,5 +899,5 @@ async def test_validation_error_envelope(client: AsyncClient) -> None:
     assert r.status_code == 422
     body = r.json()
     assert body["ok"] is False
-    assert body["error"]["code"] == "INVALID_PARAMS"
+    assert body["error"]["code"] == "VALIDATION_ERROR"
     assert body["error"]["retryable"] is False

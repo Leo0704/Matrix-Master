@@ -1,21 +1,22 @@
 """设备-账号管理子系统的 FastAPI 路由（按 master-rest.openapi.yaml ``/devices``）。
 
-HMAC 鉴权：APK 端调 ``POST /api/v1/devices/{id}/pair`` 时，body 路径需要
+HMAC 鉴权：心跳 / 登录态上报 / 任务拉取与完成等 APK 端点需带
 ``X-Signature`` / ``X-Timestamp`` / ``X-Request-Id`` 三个 header；
 签名内容 ``{timestamp}\\n{request_id}\\n{body_sha256}``。
+配对（pair）不在本 router——见 ``matrix.api.routes.devices``：配对阶段
+APK 尚无共享密钥，密码学上无法验签，由一次性配对码 + 失败限流保护。
 """
 from __future__ import annotations
 
-from matrix.monitoring.logging import get_logger
 from typing import Annotated, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from matrix.db.models import AppConfig, Device, Note, Task
+from matrix.db.models import Device, Note, Task
 from matrix.db.session import get_session_factory
 
 
@@ -34,21 +35,13 @@ from matrix.device.hmac import (
     verify_signature,
 )
 from matrix.device.key_manager import KeyManager
-from matrix.device.login_state import LoginStateMonitor, LoginStateReport
+from matrix.device.login_state import LoginStateError, LoginStateMonitor
 
 from matrix.device.registry import (
     DeviceHeartbeatData,
     DeviceNotFound,
     DeviceRegistry,
 )
-from matrix.device.pair_codes import (
-    claim_pair_code,
-    finalize_pair_code,
-    restore_pair_code,
-)
-from matrix.device.tailscale_client import TailscaleClient
-
-logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
 
@@ -58,31 +51,6 @@ router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
 # ---------------------------------------------------------------------------
 
 
-class DeviceRegisterIn(BaseModel):
-    nickname: str
-    model: str
-    android_version: str
-    apk_version: str
-    tailnet_ip: Optional[str] = None
-    adb_serial: Optional[str] = None
-    tags: list[str] = Field(default_factory=list)
-    # 预创建模式：APK 已有 UUID，update 而非 insert
-    device_id: Optional[UUID] = None
-
-
-class DeviceOut(BaseModel):
-    id: UUID
-    nickname: str
-    model: str
-    android_version: str
-    apk_version: str
-    tailnet_ip: Optional[str] = None
-    status: str
-    tags: list[str] = Field(default_factory=list)
-    last_heartbeat: Optional[str] = None
-    bound_accounts: int = 0
-
-
 class HeartbeatIn(BaseModel):
     battery: Optional[int] = Field(default=None, ge=0, le=100)
     network: Optional[str] = None
@@ -90,20 +58,7 @@ class HeartbeatIn(BaseModel):
     foreground_app: Optional[str] = None
     errors: Optional[dict] = None
     tailscale_state: Optional[str] = None
-
-
-class PairCreateIn(BaseModel):
-    """``POST /devices/{id}/pair`` 的请求体（来自 APK）。"""
-
-    pair_code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
-    hmac_key_id: Optional[str] = None  # APK 可选地提前声明期望的 key_id
-
-
-class PairCreateOut(BaseModel):
-    device_id: UUID
-    key_id: str
-    hmac_key: str
-    sent_via: str = "tailscale"
+    tailscale_ip: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -177,11 +132,17 @@ async def verify_hmac(
 async def _load_secret_for_verify(session: AsyncSession, key_id: str) -> Optional[bytes]:
     """从 ``app_config`` 加载主控侧的密钥原文（与 APK 端同步下发时存的同一份）。
 
-    配置 key 约定：``hmac_secret:{key_id}``，value 为 base64 字符串。
-    生产中应使用 OS keyring；这里用 ``app_config`` 保持可移植 / 可测。
-    返回 None 表示未找到。
+    配置 key 约定：``hmac_secret:{key_id}``。
+    新格式（v1）：``{"v": 1, "enc_secret": "<fernet token>"}``——信封加密存储，
+    主密钥见 ``matrix.device.secret_box``；
+    旧格式：``{"secret": "<base64 明文>"}``——明文落库时代的遗留行，读到时按
+    明文返回并顺手重写为新格式（懒迁移；重写失败不影响本次验签，下次请求重试）。
+    返回 None 表示未找到或解密失败。
     """
+    import base64
+
     from matrix.db.models import AppConfig
+    from matrix.device.secret_box import decrypt_secret, encrypt_secret
 
     config_key = f"hmac_secret:{key_id}"
     config = await session.get(AppConfig, config_key)
@@ -190,153 +151,28 @@ async def _load_secret_for_verify(session: AsyncSession, key_id: str) -> Optiona
     val = config.value
     if not isinstance(val, dict):
         return None
+
+    enc = val.get("enc_secret")
+    if isinstance(enc, str):
+        return decrypt_secret(enc)
+
     raw = val.get("secret")
     if not isinstance(raw, str):
         return None
-    import base64
-
     try:
-        return base64.b64decode(raw.encode("ascii"))
+        secret = base64.b64decode(raw.encode("ascii"))
     except Exception:
         return None
+    try:
+        config.value = {"v": 1, "enc_secret": encrypt_secret(secret)}
+    except Exception:
+        pass  # 懒迁移重写失败无碍本次验签，下次请求重试
+    return secret
 
 
 # ---------------------------------------------------------------------------
 # 路由
 # ---------------------------------------------------------------------------
-
-
-def _to_out(device: Device, bound_accounts: int = 0) -> DeviceOut:
-    return DeviceOut(
-        id=device.id,
-        nickname=device.nickname,
-        model=device.model,
-        android_version=device.android_version,
-        apk_version=device.apk_version,
-        tailnet_ip=str(device.tailnet_ip) if device.tailnet_ip else None,
-        status=device.status,
-        tags=list(device.tags or []),
-        last_heartbeat=device.last_heartbeat.isoformat() if device.last_heartbeat else None,
-        bound_accounts=bound_accounts,
-    )
-
-
-@router.get("", response_model=dict)
-async def list_devices(
-    session: Annotated[AsyncSession, Depends(get_session)],
-    status_filter: Annotated[Optional[str], Query(alias="status")] = None,
-    tag: Annotated[Optional[str], Query()] = None,
-) -> dict:
-    """设备列表（master-rest.openapi.yaml ``GET /devices``）。"""
-    registry = DeviceRegistry(session)
-    devices = await registry.get_devices(status=status_filter, tag=tag)
-    return {"items": [_to_out(d) for d in devices]}
-
-
-@router.post("/register", response_model=DeviceOut, status_code=status.HTTP_201_CREATED)
-async def register_device(
-    payload: DeviceRegisterIn,
-    session: Annotated[AsyncSession, Depends(get_session)],
-) -> DeviceOut:
-    """注册 / 更新设备（APK 调）。"""
-    registry = DeviceRegistry(session)
-    device = await registry.register_device(
-        nickname=payload.nickname,
-        model=payload.model,
-        android_version=payload.android_version,
-        apk_version=payload.apk_version,
-        tailnet_ip=payload.tailnet_ip,
-        adb_serial=payload.adb_serial,
-        tags=payload.tags,
-        device_id=payload.device_id,
-    )
-    return _to_out(device)
-
-
-@router.get("/{device_id}", response_model=DeviceOut)
-async def get_device(
-    device_id: UUID,
-    session: Annotated[AsyncSession, Depends(get_session)],
-) -> DeviceOut:
-    """设备详情（master-rest.openapi.yaml ``GET /devices/{id}``）。"""
-    registry = DeviceRegistry(session)
-    device = await registry.get_device(device_id)
-    if device is None or device.deleted_at is not None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="device not found")
-    bound = await registry.get_bound_account_count(device_id)
-    return _to_out(device, bound_accounts=bound)
-
-
-@router.post("/{device_id}/pair", response_model=PairCreateOut)
-async def pair_device(
-    device_id: UUID,
-    payload: PairCreateIn,
-    # 接受 HMAC 鉴权；如果设备尚未配对，签名校验可能失败 → 仍允许按配对码验证
-    session: Annotated[AsyncSession, Depends(get_session)],
-    _hmac: Annotated[Optional[HmacAuthResult], Depends(verify_hmac)] = None,
-) -> PairCreateOut:
-    """APK 调主控配对。
-
-    鉴权策略：APK 在配对时还没有共享密钥，因此 HMAC 鉴权失败也允许继续
-    （通过配对码验证身份）。如果客户端带上了 HMAC header，优先校验。
-
-    标准配对流程（防重放）：
-    1. ``validate_code`` 预检：配对码存在 + 未过期 + 未被消费
-    2. 校验 ``device_id`` 与配对码登记设备一致
-    3. ``consume_pair_code`` 原子消费（防并发 / 防重放）
-    4. ``complete_pairing`` 签发并下发 HMAC 密钥
-    """
-    km = KeyManager(session)
-
-    # 优先从持久化文件领用配对码（跨 worker / request 共享）。
-    expected_device = claim_pair_code(payload.pair_code)
-    if expected_device is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="invalid or expired pair code"
-        )
-    if expected_device != device_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="pair code does not match device"
-        )
-
-    device = await session.get(Device, device_id)
-    if device is None or device.deleted_at is not None:
-        restore_pair_code(payload.pair_code)
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="device not found")
-
-    try:
-        issued = await km.issue_key(device_id)
-    except Exception as e:
-        restore_pair_code(payload.pair_code)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"failed to issue HMAC key: {e}",
-        ) from e
-
-    # 把密钥原文存到 AppConfig，供后续 verify_hmac 读取。
-    import base64
-
-    config_key = f"hmac_secret:{issued.key_id}"
-    session.add(
-        AppConfig(
-            key=config_key,
-            value={"secret": base64.b64encode(issued.secret).decode("ascii")},
-        )
-    )
-
-    finalize_pair_code(payload.pair_code)
-
-    logger.info(
-        "pairing.completed",
-        device_id=str(device_id),
-        key_id=issued.key_id,
-    )
-    return PairCreateOut(
-        device_id=device_id,
-        key_id=issued.key_id,
-        hmac_key=base64.b64encode(issued.secret).decode("ascii"),
-        sent_via="tailscale",
-    )
 
 
 @router.post("/{device_id}/heartbeat", status_code=status.HTTP_204_NO_CONTENT)
@@ -355,6 +191,7 @@ async def heartbeat(
         foreground_app=payload.foreground_app,
         errors=payload.errors,
         tailscale_state=payload.tailscale_state,
+        tailscale_ip=payload.tailscale_ip,
     )
     try:
         await registry.update_heartbeat(device_id, data)
@@ -362,26 +199,34 @@ async def heartbeat(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
 
 
+class LoginStateIn(BaseModel):
+    """APK 登录态上报体（新契约）：不带 account_id——APK 无权访问控制台鉴权的
+    GET /accounts，账号由后端按 ``accounts.device_id`` 解析。"""
+
+    platform: Optional[str] = None  # 目前仅 xhs；accounts 表尚无 platform 列，仅作契约透传
+    state: str  # 取值同 VALID_RESULTS：success / failed / captcha / logout / expired
+    risk_signal: Optional[str] = None
+    error_message: Optional[str] = None
+
+
 @router.post("/{device_id}/login_state", status_code=status.HTTP_204_NO_CONTENT)
 async def report_login_state(
     device_id: UUID,
-    payload: dict,
+    payload: LoginStateIn,
     session: Annotated[AsyncSession, Depends(get_session)],
     _auth: Annotated[HmacAuthResult, Depends(verify_hmac)] = None,
 ) -> None:
-    """APK 上报 XHS 登录态。"""
+    """APK 上报 XHS 登录态。绑定账号由后端按 device_id 解析。"""
     monitor = LoginStateMonitor(session)
     try:
-        report = LoginStateReport(
-            account_id=UUID(str(payload["account_id"])),
-            device_id=device_id,
-            result=str(payload["result"]),
-            risk_signal=payload.get("risk_signal"),
-            error_message=payload.get("error_message"),
+        await monitor.report_for_device(
+            device_id,
+            payload.state,
+            risk_signal=payload.risk_signal,
+            error_message=payload.error_message,
         )
-    except (KeyError, ValueError) as e:
+    except LoginStateError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
-    await monitor.report(report)
 
 
 # ---------------------------------------------------------------------------
@@ -414,6 +259,8 @@ async def claim_next_task(
 
     原子语义：用 CTE + FOR UPDATE SKIP LOCKED 选一条 pending task，
     同一台设备并发请求不会重复消费同一条任务。
+    只认领 ``action='device_publish'``：手机只会执行发布，collect 等
+    其他动作由后端 worker 处理，被手机抢走只会判死。
     """
     from datetime import UTC, datetime
 
@@ -424,6 +271,7 @@ async def claim_next_task(
             SELECT id FROM tasks
             WHERE device_id = :device_id
               AND status = 'pending'
+              AND action = 'device_publish'
               AND scheduled_at <= :now
             ORDER BY scheduled_at ASC
             FOR UPDATE SKIP LOCKED
@@ -513,8 +361,6 @@ __all__ = [
     "router",
     "verify_hmac",
     "HmacAuthResult",
-    "DeviceRegisterIn",
-    "DeviceOut",
     "claim_next_task",
     "complete_task",
 ]

@@ -924,3 +924,52 @@ class TestReviewGate:
         assert params["resource_type"] == "kb_document"
         assert params["after_state"]["new_state"] is True
         assert params["after_state"]["comment"] == "approved"
+
+
+# ===========================================================================
+# Retriever 业务隔离（W5）
+# ===========================================================================
+
+
+class TestRetrieverBusinessScope:
+    @pytest.mark.asyncio
+    async def test_business_id_adds_scope_clause(self):
+        """传 business_id：两条 SQL 都带 (business_id = X OR IS NULL) 过滤 + 参数。"""
+        session = _FakeSession(vector_rows=[], keyword_rows=[])
+        embedder = MagicMock()
+        embedder.embed_one = AsyncMock(return_value=[0.0] * 4)
+        r = Retriever(session, embedder)
+        bid = uuid.uuid4()
+        await r.retrieve("q", type="rule", business_id=bid)
+        assert len(session.executed) >= 1
+        for sql, params in session.executed:
+            assert (
+                "d.business_id = CAST(:business_id AS uuid) OR d.business_id IS NULL"
+                in sql
+            )
+            assert params.get("business_id") == str(bid)
+
+    @pytest.mark.asyncio
+    async def test_business_id_accepts_str(self):
+        """business_id 传字符串 UUID 也可以（agent 节点从 state 拿的就是 str）。"""
+        session = _FakeSession(vector_rows=[], keyword_rows=[])
+        embedder = MagicMock()
+        embedder.embed_one = AsyncMock(return_value=[0.0] * 4)
+        r = Retriever(session, embedder)
+        bid = str(uuid.uuid4())
+        await r.retrieve("q", type="rule", business_id=bid)
+        for _, params in session.executed:
+            assert params.get("business_id") == bid
+
+    @pytest.mark.asyncio
+    async def test_no_business_id_no_scope_clause(self):
+        """不传 business_id：保持老行为，SQL 不含业务过滤（全局检索）。"""
+        session = _FakeSession(vector_rows=[], keyword_rows=[])
+        embedder = MagicMock()
+        embedder.embed_one = AsyncMock(return_value=[0.0] * 4)
+        r = Retriever(session, embedder)
+        await r.retrieve("q", type="rule")
+        assert len(session.executed) >= 1
+        for sql, params in session.executed:
+            assert ":business_id" not in sql
+            assert "business_id" not in params

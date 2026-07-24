@@ -7,13 +7,14 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
 from matrix.monitoring.logging import get_logger
 
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -41,7 +42,6 @@ from matrix.api.routes import (
     metrics as metrics_routes,
     notes as notes_routes,
     notifications as notifications_routes,
-    personas as personas_routes,
     settings as settings_routes,
 )
 from matrix.agent._default_repository import DefaultAgentRepository
@@ -58,14 +58,15 @@ from matrix.agent.goal_stuck_watchdog import (  # noqa: E402  P2-2
     GoalStuckWatchdogConfig,
 )
 from matrix.api._agent_factory import _LazyConfigReader  # noqa: E402  P2-2
+from matrix.api.deps import ensure_api_secret, get_current_user
 from matrix.api.schemas import ErrorDetail, ErrorResponse
 from matrix.db import create_engine
 from matrix.llm.embeddings import EmbeddingClient
 from matrix.llm.router import get_default_client
-from matrix.monitoring import setup_monitoring, shutdown_tracing
 from matrix.monitoring.alert_scanner import AlertScanner
-from matrix.monitoring.logging import get_logger
+from matrix.monitoring.logging import configure_logging, get_logger
 from matrix.monitoring.middleware import install_middleware
+from matrix.agent.daily_digest import DailyDigestWorker
 
 logger = get_logger(__name__)
 
@@ -231,12 +232,21 @@ def create_app(
                 scanner = AlertScanner(
                     session_factory=app.state.db_session_factory,
                     config_reader=services.config,  # type: ignore[union-attr]
-                    notifier=services.notifier,  # type: ignore[union-attr]
                 )
                 scanner.start()
                 app.state.alert_scanner = scanner
             except Exception:  # pragma: no cover
                 logger.warning("alert_scanner setup failed", exc_info=True)
+            # v0.7 Phase 5：AI 每日日报 worker
+            try:
+                digest_worker = DailyDigestWorker(
+                    session_factory=app.state.db_session_factory,
+                    llm_client=get_default_client(),
+                )
+                digest_worker.start()
+                app.state.daily_digest_worker = digest_worker
+            except Exception:  # pragma: no cover
+                logger.warning("daily_digest setup failed", exc_info=True)
         except Exception as e:  # pragma: no cover
             logger.warning(
                 "agent services / worker setup failed; "
@@ -251,8 +261,19 @@ def create_app(
             from matrix.device.adapters import ApkHttpClient
             from matrix.device.endpoints import DeviceEndpointResolver
 
+            # 与 _agent_factory 一致：设了 MATRIX_DEVICE_PROXY 就走
+            # ts-client 边车代理（tailnet）；否则直连（adb forward dev 路径）
+            import httpx as _httpx
+
+            _device_proxy = os.environ.get("MATRIX_DEVICE_PROXY") or None
+            _device_http = (
+                _httpx.AsyncClient(timeout=120.0, proxy=_device_proxy)
+                if _device_proxy
+                else None
+            )
             apk_client = ApkHttpClient(
-                resolver=DeviceEndpointResolver(app.state.db_session_factory)
+                resolver=DeviceEndpointResolver(app.state.db_session_factory),
+                client=_device_http,
             )
             app.state.apk_client = apk_client
             from matrix.scheduler.rate_limiter import DbDailyCounter
@@ -288,6 +309,7 @@ def create_app(
         except Exception:  # pragma: no cover
             logger.warning("matrix.scheduler setup failed; tasks will not auto-execute", exc_info=True)
 
+        ensure_api_secret()
         logger.info(
             "matrix.api starting", version=__version__, db=str(database_url or "default")
         )
@@ -359,10 +381,13 @@ def create_app(
                 await notifier.aclose()
             except Exception:  # pragma: no cover
                 logger.warning("notifier aclose failed", exc_info=True)
-        try:
-            shutdown_tracing()
-        except Exception:  # pragma: no cover
-            logger.exception("shutdown_tracing failed")
+        # v0.7 Phase 5: 停 AI 日报 worker
+        digest_worker = getattr(app.state, "daily_digest_worker", None)
+        if digest_worker is not None:
+            try:
+                await digest_worker.stop()
+            except Exception:  # pragma: no cover
+                logger.warning("daily_digest worker stop failed", exc_info=True)
         if app.state.db_engine is not None:
             try:
                 await app.state.db_engine.dispose()
@@ -402,30 +427,65 @@ def create_app(
 
     # ---- 路由 ----
     API_PREFIX = "/api/v1"
+    # 控制台统一鉴权：Bearer token（MATRIX_API_SECRET，未配置时启动自动生成，
+    # 见 deps.ensure_api_secret）。豁免仅四处：
+    # - health：docker 健康检查 / Caddy 探活不该要 token；
+    # - device_router：APK 设备侧，生效端点均以端点级 Depends(verify_hmac) 保护；
+    # - pair_router：APK 首次配对尚无凭证，由一次性配对码 + 失败限流保护；
+    # - logs_router：APK 日志 ingest，靠 Tailscale 网络层隔离（见 routes/logs.py）。
+    _console_auth = [Depends(get_current_user)]
     app.include_router(health_routes.router, prefix=API_PREFIX)
-    app.include_router(devices_routes.router, prefix=API_PREFIX)
-    # 设备侧路由（heartbeat / login_state / register 等）。该 router 自带
+    app.include_router(
+        devices_routes.router, prefix=API_PREFIX, dependencies=_console_auth
+    )
+    app.include_router(devices_routes.pair_router, prefix=API_PREFIX)
+    # 设备侧路由（heartbeat / login_state / tasks 等）。该 router 自带
     # prefix="/api/v1/devices"，故此处不再传 prefix 以免路径重复。
-    # 必须在 devices_routes 之后挂载：两者均有 `GET ""`/`GET /{id}`/`POST /{id}/pair`，
-    # Starlette 按注册顺序首匹配，devices_routes 在前 → 其（已修复的）pair/list/get
-    # 优先生效；device_router 仅贡献独有的 heartbeat/login_state/register。
     app.include_router(device_router)
-    app.include_router(accounts_routes.router, prefix=API_PREFIX)
-    app.include_router(businesses_routes.router, prefix=API_PREFIX)  # v0.7+ 业务模型重构
-    app.include_router(personas_routes.router, prefix=API_PREFIX)
-    app.include_router(notes_routes.router, prefix=API_PREFIX)
-    app.include_router(goals_routes.router, prefix=API_PREFIX)
-    app.include_router(learning_routes.router, prefix=API_PREFIX)
-    app.include_router(settings_routes.router, prefix=API_PREFIX)
-    app.include_router(agent_runs_routes.router, prefix=API_PREFIX)
-    app.include_router(chat_routes.router, prefix=API_PREFIX)
-    app.include_router(kb_routes.router, prefix=API_PREFIX)
-    app.include_router(alerts_routes.router, prefix=API_PREFIX)
-    app.include_router(notifications_routes.router, prefix=API_PREFIX)  # Phase 1
-    app.include_router(analytics_routes.router, prefix=API_PREFIX)
-    app.include_router(metrics_routes.router, prefix=API_PREFIX)
-    app.include_router(interactions_routes.router, prefix=API_PREFIX)  # v0.6
-    app.include_router(logs_routes.router, prefix=API_PREFIX)            # PR 6
+    app.include_router(
+        accounts_routes.router, prefix=API_PREFIX, dependencies=_console_auth
+    )
+    app.include_router(
+        businesses_routes.router, prefix=API_PREFIX, dependencies=_console_auth
+    )  # v0.7+ 业务模型重构
+    app.include_router(
+        notes_routes.router, prefix=API_PREFIX, dependencies=_console_auth
+    )
+    app.include_router(
+        goals_routes.router, prefix=API_PREFIX, dependencies=_console_auth
+    )
+    app.include_router(
+        learning_routes.router, prefix=API_PREFIX, dependencies=_console_auth
+    )
+    app.include_router(
+        settings_routes.router, prefix=API_PREFIX, dependencies=_console_auth
+    )
+    app.include_router(
+        agent_runs_routes.router, prefix=API_PREFIX, dependencies=_console_auth
+    )
+    app.include_router(
+        chat_routes.router, prefix=API_PREFIX, dependencies=_console_auth
+    )
+    app.include_router(kb_routes.router, prefix=API_PREFIX, dependencies=_console_auth)
+    app.include_router(
+        alerts_routes.router, prefix=API_PREFIX, dependencies=_console_auth
+    )
+    app.include_router(
+        notifications_routes.router, prefix=API_PREFIX, dependencies=_console_auth
+    )  # Phase 1
+    app.include_router(
+        analytics_routes.router, prefix=API_PREFIX, dependencies=_console_auth
+    )
+    app.include_router(
+        metrics_routes.router, prefix=API_PREFIX, dependencies=_console_auth
+    )
+    app.include_router(
+        interactions_routes.router, prefix=API_PREFIX, dependencies=_console_auth
+    )  # v0.6
+    # APK 日志 ingest：不挂控制台鉴权（Bearer）。设计意图见 routes/logs.py：
+    # APK 无控制台 token，靠 Tailscale / adb-reverse 网络层隔离做访问控制；
+    # 端点自身保留批量条数上限等校验。
+    app.include_router(logs_routes.router, prefix=API_PREFIX)  # PR 6
 
     return app
 
@@ -442,6 +502,7 @@ _STATUS_CODE_MAP: dict[int, str] = {
     status.HTTP_404_NOT_FOUND: "NOT_FOUND",
     status.HTTP_409_CONFLICT: "CONFLICT",
     status.HTTP_422_UNPROCESSABLE_ENTITY: "VALIDATION_ERROR",
+    status.HTTP_429_TOO_MANY_REQUESTS: "RATE_LIMITED",
 }
 
 
@@ -514,7 +575,7 @@ def _install_exception_handlers(app: FastAPI) -> None:
 
 
 def _extract_trace_id(request: Request) -> str:
-    """从 request.state（middleware 注入）/ X-Request-ID header / OTel context 取 trace_id。
+    """从 request.state（middleware 注入）/ X-Request-ID header 取 trace_id。
 
     不依赖 ``X-Trace-Id`` response header（那是给客户端读的，handler 在它之前）。
     """
@@ -526,15 +587,6 @@ def _extract_trace_id(request: Request) -> str:
         candidate = raw.strip().lower()
         if len(candidate) == 32 and all(c in "0123456789abcdef" for c in candidate):
             return candidate
-    try:
-        from opentelemetry import trace as otel_trace
-
-        span = otel_trace.get_current_span()
-        ctx = span.get_span_context() if span else None
-        if ctx and ctx.trace_id:
-            return format(ctx.trace_id, "032x")
-    except Exception:  # pragma: no cover
-        pass
     return ""
 
 
@@ -542,11 +594,11 @@ def _extract_trace_id(request: Request) -> str:
 # 默认 app（供 uvicorn ``matrix.api.app:app`` 加载）
 # ---------------------------------------------------------------------------
 
-# 初始化 monitoring（tracing + logging），失败也不阻塞启动
+# 初始化 structlog logging，失败也不阻塞启动
 try:
-    setup_monitoring("matrix-api", otlp_endpoint=None)
+    configure_logging()
 except Exception:  # pragma: no cover
-    logging.getLogger(__name__).warning("setup_monitoring failed", exc_info=True)
+    logging.getLogger(__name__).warning("configure_logging failed", exc_info=True)
 
 app = create_app()
 

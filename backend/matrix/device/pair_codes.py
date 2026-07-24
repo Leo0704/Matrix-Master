@@ -21,7 +21,7 @@ from matrix.monitoring.logging import get_logger
 
 logger = get_logger(__name__)
 
-PAIR_CODE_TTL_SECONDS = 600
+PAIR_CODE_TTL_SECONDS = 300
 
 _PAIR_CODES_PATH = Path(
     os.environ.get("MATRIX_PAIR_CODES_PATH", "/app/backend/.pair_codes.json")
@@ -92,11 +92,11 @@ def _codes() -> dict[str, tuple[uuid.UUID, float, Optional[float]]]:
 
 
 def issue_pair_code(device_id: uuid.UUID) -> str:
-    """生成并持久化一个配对码，返回 6 位数字字符串。"""
+    """生成并持久化一个配对码，返回 8 位数字字符串。"""
     codes = _purge_expired(_codes())
     expires_at_wall = time.time() + PAIR_CODE_TTL_SECONDS
     while True:
-        code = f"{secrets.randbelow(1_000_000):06d}"
+        code = f"{secrets.randbelow(100_000_000):08d}"
         if code not in codes:
             codes[code] = (device_id, expires_at_wall, None)
             _save_pair_codes(codes)

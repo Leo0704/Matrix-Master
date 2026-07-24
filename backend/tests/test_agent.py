@@ -1567,3 +1567,394 @@ class TestProtocolsSanity:
 
     def test_device_publisher_protocol(self):
         assert isinstance(FakeDevicePublisher(), DevicePublisher)
+
+
+# ---------------------------------------------------------------------------
+# W4：publish_node 断线检查 + 幂等防重复发布
+# ---------------------------------------------------------------------------
+
+from contextlib import asynccontextmanager  # noqa: E402
+from datetime import timedelta  # noqa: E402
+
+
+class _Scalars:
+    def __init__(self, value: Any) -> None:
+        self._value = value
+
+    def first(self) -> Any:
+        return self._value
+
+
+class _Result:
+    def __init__(self, value: Any) -> None:
+        self._value = value
+
+    def scalars(self) -> _Scalars:
+        return _Scalars(self._value)
+
+
+class _FakePublishSession:
+    """按 model 名分发 session.get()；execute() 返回预设 scalar。"""
+
+    def __init__(self, *, get_map: dict | None = None, execute_first: Any = None) -> None:
+        self._get_map = get_map or {}
+        self._execute_first = execute_first
+
+    async def get(self, model: Any, pk: Any) -> Any:
+        return self._get_map.get(getattr(model, "__name__", str(model)))
+
+    async def execute(self, stmt: Any) -> _Result:
+        return _Result(self._execute_first)
+
+
+def _factory_of(session: Any):
+    @asynccontextmanager
+    async def factory():
+        yield session
+
+    return factory
+
+
+class TestPublishRunStatusGuard:
+    """修看门狗误杀配套：sleep 到 scheduled_at 醒来后先确认 run 仍 running。"""
+
+    @pytest.mark.asyncio
+    async def test_run_still_running_true_when_running(self, monkeypatch):
+        from matrix.agent.nodes import publish as publish_mod
+
+        session = _FakePublishSession(
+            get_map={"AgentRun": SimpleNamespace(status="running")}
+        )
+        monkeypatch.setattr(
+            publish_mod, "get_session_factory", lambda: _factory_of(session)
+        )
+        assert await publish_mod._run_still_running(uuid4()) is True
+
+    @pytest.mark.asyncio
+    async def test_run_still_running_false_when_timeout(self, monkeypatch):
+        from matrix.agent.nodes import publish as publish_mod
+
+        session = _FakePublishSession(
+            get_map={"AgentRun": SimpleNamespace(status="timeout")}
+        )
+        monkeypatch.setattr(
+            publish_mod, "get_session_factory", lambda: _factory_of(session)
+        )
+        assert await publish_mod._run_still_running(uuid4()) is False
+
+    @pytest.mark.asyncio
+    async def test_run_still_running_failopen_on_db_error(self, monkeypatch):
+        from matrix.agent.nodes import publish as publish_mod
+
+        def _boom():
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(publish_mod, "get_session_factory", _boom)
+        assert await publish_mod._run_still_running(uuid4()) is True
+        # run_id 缺失也 fail-open
+        assert await publish_mod._run_still_running(None) is True
+
+    @pytest.mark.asyncio
+    async def test_publish_aborts_after_sleep_when_run_timed_out(self, monkeypatch):
+        """watchdog 在 sleep 期间标了 timeout → 醒来后放弃发布，设备不被调。"""
+        from matrix.agent.nodes import publish as publish_mod
+
+        publisher = FakeDevicePublisher(ok=True)
+        set_services(make_services(publisher=publisher))
+        session = _FakePublishSession(
+            get_map={"AgentRun": SimpleNamespace(status="timeout")}
+        )
+        monkeypatch.setattr(
+            publish_mod, "get_session_factory", lambda: _factory_of(session)
+        )
+        scheduled = datetime.now(UTC) + timedelta(milliseconds=300)
+        result = await publish_node(
+            {
+                "run_id": uuid4(),
+                "created_task_ids": ["t1"],
+                "draft": {"title": "t", "content": "c", "tags": ["a"], "images": []},
+                "slot": {
+                    "device_id": str(uuid4()),
+                    "account_id": str(uuid4()),
+                    "scheduled_at": scheduled.isoformat(),
+                },
+            }
+        )
+        assert result["publish_result"]["ok"] is False
+        assert result["publish_result"]["error_code"] == "RUN_NOT_RUNNING"
+        assert not publisher.calls, "已判死的 run 不能再发笔记"
+
+    @pytest.mark.asyncio
+    async def test_publish_proceeds_after_sleep_when_run_running(self, monkeypatch):
+        from matrix.agent.nodes import publish as publish_mod
+
+        publisher = FakeDevicePublisher(ok=True)
+        set_services(make_services(publisher=publisher))
+        session = _FakePublishSession(
+            get_map={"AgentRun": SimpleNamespace(status="running")}
+        )
+        monkeypatch.setattr(
+            publish_mod, "get_session_factory", lambda: _factory_of(session)
+        )
+        scheduled = datetime.now(UTC) + timedelta(milliseconds=200)
+        result = await publish_node(
+            {
+                "run_id": uuid4(),
+                "created_task_ids": ["t1"],
+                "draft": {"title": "t", "content": "c", "tags": ["a"], "images": []},
+                "slot": {
+                    "device_id": str(uuid4()),
+                    "account_id": str(uuid4()),
+                    "scheduled_at": scheduled.isoformat(),
+                },
+            }
+        )
+        assert result["publish_result"]["ok"] is True
+        assert publisher.calls
+
+
+class TestPublishIdempotency:
+    """修重启重复发布：已 published 直接成功；有 pending/running task 则复用。"""
+
+    @pytest.mark.asyncio
+    async def test_note_already_published_returns_platform_info(self, monkeypatch):
+        from matrix.agent.nodes import publish as publish_mod
+
+        note = SimpleNamespace(
+            status="published", platform_note_id="p999", platform_url="http://x"
+        )
+        session = _FakePublishSession(get_map={"Note": note})
+        monkeypatch.setattr(
+            publish_mod, "get_session_factory", lambda: _factory_of(session)
+        )
+        assert await publish_mod._note_already_published(uuid4()) == (
+            "p999",
+            "http://x",
+        )
+
+    @pytest.mark.asyncio
+    async def test_note_not_published_returns_none(self, monkeypatch):
+        from matrix.agent.nodes import publish as publish_mod
+
+        note = SimpleNamespace(
+            status="draft", platform_note_id=None, platform_url=None
+        )
+        session = _FakePublishSession(get_map={"Note": note})
+        monkeypatch.setattr(
+            publish_mod, "get_session_factory", lambda: _factory_of(session)
+        )
+        assert await publish_mod._note_already_published(uuid4()) is None
+
+    @pytest.mark.asyncio
+    async def test_publish_skips_when_note_already_published(self, monkeypatch):
+        """note 已 published + 有平台回执 → 直接成功，不再写 device_publish task。"""
+        from matrix.agent.nodes import publish as publish_mod
+
+        calls: list[dict] = []
+
+        async def task_writer(rec: dict) -> None:
+            calls.append(rec)
+
+        set_services(make_services(task_writer=task_writer))
+        note_id = uuid4()
+        note = SimpleNamespace(
+            status="published", platform_note_id="p999", platform_url="http://x"
+        )
+        session = _FakePublishSession(get_map={"Note": note})
+        monkeypatch.setattr(
+            publish_mod, "get_session_factory", lambda: _factory_of(session)
+        )
+        result = await publish_node(
+            {
+                "created_task_ids": ["t1"],
+                "draft": {
+                    "note_id": str(note_id),
+                    "title": "t",
+                    "content": "c",
+                    "tags": [],
+                    "images": [],
+                },
+                "slot": {"device_id": str(uuid4()), "account_id": str(uuid4())},
+            }
+        )
+        assert result["publish_result"]["ok"] is True
+        assert result["publish_result"]["platform_note_id"] == "p999"
+        assert calls == [], "已发布的 note 不能再新建发布 task"
+
+    @pytest.mark.asyncio
+    async def test_reuses_open_publish_task_instead_of_creating(self, monkeypatch):
+        """已有该 note 的 pending device_publish task → 复用轮询，不新建。"""
+        from matrix.agent.nodes import _ensure_publish_plan as plan_mod
+        from matrix.agent.nodes import publish as publish_mod
+
+        calls: list[dict] = []
+
+        async def task_writer(rec: dict) -> None:
+            calls.append(rec)
+
+        set_services(make_services(task_writer=task_writer))
+
+        note_id = uuid4()
+        open_task_id = uuid4()
+        draft_note = SimpleNamespace(
+            status="publishing", platform_note_id=None, platform_url=None
+        )
+        done_task = SimpleNamespace(status="success", last_error=None)
+        session = _FakePublishSession(
+            get_map={"Note": draft_note, "Task": done_task},
+            execute_first=open_task_id,  # _find_open_publish_task 命中
+        )
+        monkeypatch.setattr(
+            publish_mod, "get_session_factory", lambda: _factory_of(session)
+        )
+
+        async def fake_plan_id(session: Any, goal_id: Any) -> UUID:
+            return uuid4()
+
+        monkeypatch.setattr(plan_mod, "ensure_publish_plan_id", fake_plan_id)
+
+        result = await publish_mod._publish_via_task_queue(
+            {"goal_id": uuid4(), "run_id": uuid4()},
+            {"note_id": str(note_id), "title": "t", "content": "c", "tags": [], "images": []},
+            {"device_id": str(uuid4()), "account_id": str(uuid4())},
+            "req-1",
+        )
+        assert calls == [], "存在未完成的 device_publish task 时必须复用而非新建"
+        assert result["ok"] is True
+
+
+# ---------------------------------------------------------------------------
+# W4：orchestrator._gather_round_kpi 按 note 去重 + follows_gained 真值
+# ---------------------------------------------------------------------------
+
+
+class TestGatherRoundKpi:
+    """DB 集成：用 conftest 的 session fixture（测试结束 rollback）。"""
+
+    @pytest.mark.asyncio
+    async def test_analyze_run_same_note_deduped(self, session, default_business):
+        """24h 采集 spawn 的 ANALYZE run（同 goal+round+payload.note_id）不再重复计数。"""
+        from matrix.agent.orchestrator import _gather_round_kpi
+        from matrix.db.models import AgentRun, Goal, Note, NoteMetric
+
+        goal = Goal(
+            type="publish_note",
+            target={"theme": "t"},
+            business_id=default_business.id,
+            status="active",
+        )
+        session.add(goal)
+        await session.flush()
+
+        note = Note(
+            title="t1",
+            content="c",
+            business_id=default_business.id,
+            status="published",
+            platform_note_id=f"xhs-{uuid4().hex[:8]}",
+        )
+        session.add(note)
+        await session.flush()
+
+        now = datetime.now(UTC)
+        publish_run = AgentRun(
+            goal_id=goal.id,
+            round_number=1,
+            status="success",
+            business_id=default_business.id,
+            started_at=now,
+            payload={},
+        )
+        session.add(publish_run)
+        await session.flush()
+        note.run_id = publish_run.id
+        await session.flush()
+
+        # ANALYZE run：不带 notes.run_id，靠 payload.note_id fallback 解析到同一篇
+        analyze_run = AgentRun(
+            goal_id=goal.id,
+            round_number=1,
+            status="success",
+            business_id=default_business.id,
+            started_at=now,
+            payload={"note_id": str(note.id), "entry": "ANALYZE"},
+        )
+        session.add(analyze_run)
+        session.add(
+            NoteMetric(
+                note_id=note.id,
+                ts=now,
+                views=100,
+                likes=10,
+                collects=2,
+                comments=1,
+                follows_gained=7,
+            )
+        )
+        await session.flush()
+
+        kpi = await _gather_round_kpi(session, goal.id, 1)
+
+        assert kpi["notes_count"] == 1, "同一 note 被两条 run 解析到时只能算一次"
+        assert kpi["total_views"] == 100
+        assert kpi["total_likes"] == 10
+        # follows_gained 真值（修硬编码 0）
+        assert kpi["total_follows_gained"] == 7
+        assert kpi["per_note"][0]["follows_gained"] == 7
+        assert kpi["dimensions"]["conversion"]["follows_gained"] == 7
+
+    @pytest.mark.asyncio
+    async def test_distinct_notes_both_counted(self, session, default_business):
+        """去重不能误伤：两条 run 各自一篇 note → notes_count == 2。"""
+        from matrix.agent.orchestrator import _gather_round_kpi
+        from matrix.db.models import AgentRun, Goal, Note, NoteMetric
+
+        goal = Goal(
+            type="publish_note",
+            target={"theme": "t"},
+            business_id=default_business.id,
+            status="active",
+        )
+        session.add(goal)
+        await session.flush()
+
+        now = datetime.now(UTC)
+        for i in range(2):
+            note = Note(
+                title=f"t{i}",
+                content="c",
+                business_id=default_business.id,
+                status="published",
+                platform_note_id=f"xhs-{uuid4().hex[:8]}",
+            )
+            session.add(note)
+            await session.flush()
+            run = AgentRun(
+                goal_id=goal.id,
+                round_number=1,
+                status="success",
+                business_id=default_business.id,
+                started_at=now,
+                payload={},
+            )
+            session.add(run)
+            await session.flush()
+            note.run_id = run.id
+            session.add(
+                NoteMetric(
+                    note_id=note.id,
+                    ts=now,
+                    views=50,
+                    likes=5,
+                    collects=1,
+                    comments=0,
+                    follows_gained=1,
+                )
+            )
+        await session.flush()
+
+        kpi = await _gather_round_kpi(session, goal.id, 1)
+
+        assert kpi["notes_count"] == 2
+        assert kpi["total_views"] == 100
+        assert kpi["total_follows_gained"] == 2

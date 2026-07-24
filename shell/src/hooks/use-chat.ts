@@ -1,5 +1,6 @@
 import { useMutation } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api-client';
+import { useActiveBusinessId } from '@/stores/ui-store';
 import type { ChatHistoryMessage, ChatRequest, ChatResponse } from '@/types/api';
 
 /**
@@ -22,11 +23,13 @@ export function useChat() {
  * 后端走 /confirm <token> 路径短路，直接调 apply_change 工具（不再调 LLM）。
  */
 export function useConfirmChat() {
+  const activeBusinessId = useActiveBusinessId();
   return useMutation({
     mutationFn: (token: string) =>
       apiClient.post<ChatResponse>('/chat', {
         message: `/confirm ${token}`,
         history: [],
+        business_id: activeBusinessId ?? '',  // v0.7+ 业务归属（后端必填，缺则 422）
       }),
   });
 }

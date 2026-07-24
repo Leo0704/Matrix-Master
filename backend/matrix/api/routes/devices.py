@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import base64
+import time
 import uuid
+from collections import deque
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -23,16 +25,14 @@ from matrix.api.schemas import (
     DeviceRetireResponse,
     DeviceUpdate,
 )
-from matrix.db.models import Account, AppConfig, Device as DeviceORM
+from matrix.db.models import Account, AppConfig, Business, Device as DeviceORM
 from matrix.device.key_manager import KeyManager
+from matrix.device.secret_box import encrypt_secret
 from matrix.device.pair_codes import (
-    PAIR_CODE_TTL_SECONDS as _PAIR_CODE_TTL_SECONDS,
     claim_pair_code as _claim_pair_code,
     finalize_pair_code as _finalize_pair_code,
     issue_pair_code as _issue_pair_code,
     restore_pair_code as _restore_pair_code,
-    _codes,
-    _purge_expired,
 )
 from matrix.monitoring.logging import get_logger
 
@@ -40,12 +40,37 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/devices", tags=["devices"])
 
+# APK 首次配对时手里没有任何凭证（HMAC 密钥正是本端点下发的），因此 pair
+# 端点必须活在控制台统一鉴权之外——单独一个 router，app.py 挂载时不加
+# dependencies。它的安全保障 = 一次性配对码 + 上方失败限流。
+pair_router = APIRouter(prefix="/devices", tags=["devices"])
+
+
+# ---------------------------------------------------------------------------
+# 配对失败限流（防在线爆破配对码）
+# ---------------------------------------------------------------------------
+# APK 流量经 socat 边车 / adb reverse 转发，request.client.host 恒为边车地址，
+# per-IP 计数没有区分度——故用进程内全局滑窗。当前部署为单实例（scheduler 同样
+# 假设单实例），进程内计数足够；窗口内失败超限直接 429，不区分"码错/码不存在"，
+# 避免泄露码有效性。
+_PAIR_FAIL_WINDOW_SEC = 300.0
+_PAIR_FAIL_MAX = 10
+_pair_failures: deque[float] = deque()
+
+
+def _pair_rate_limited(now: float) -> bool:
+    """惰性清理过期记录后，判断当前是否已超限。"""
+    while _pair_failures and now - _pair_failures[0] > _PAIR_FAIL_WINDOW_SEC:
+        _pair_failures.popleft()
+    return len(_pair_failures) >= _PAIR_FAIL_MAX
+
 
 def _to_schema(
     d: DeviceORM,
     bound_accounts: int = 0,
     bound_account_handle: str | None = None,
     pair_code: str | None = None,
+    business_name: str | None = None,
 ) -> Device:
     return Device(
         id=d.id,
@@ -61,6 +86,7 @@ def _to_schema(
         bound_account_handle=bound_account_handle,
         pair_code=pair_code,
         business_id=d.business_id,  # v0.7+ 业务归属
+        business_name=business_name,
     )
 
 
@@ -120,9 +146,23 @@ async def list_devices(
             # 1:1 下至多覆盖一次；若多个则取第一个（应被 migration unique 阻止）
             handles.setdefault(did, h)
 
+    # 一次性拉业务名称，避免前端二次查询
+    business_names: dict[uuid.UUID, str] = {}
+    if rows:
+        biz_ids = {r.business_id for r in rows if r.business_id}
+        if biz_ids:
+            biz_stmt = select(Business.id, Business.name).where(Business.id.in_(biz_ids))
+            for bid, bname in (await session.execute(biz_stmt)).all():
+                business_names[bid] = bname
+
     return DeviceListResponse(
         items=[
-            _to_schema(r, counts.get(r.id, 0), handles.get(r.id))
+            _to_schema(
+                r,
+                counts.get(r.id, 0),
+                handles.get(r.id),
+                business_name=business_names.get(r.business_id),
+            )
             for r in rows
         ]
     )
@@ -146,33 +186,14 @@ async def issue_pair_code_endpoint(
     if d is None or d.deleted_at is not None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
     code = _issue_pair_code(device_id)
-    logger.info("admin.issue_pair_code", device_id=str(device_id), code=code)
+    # 配对码本身不落日志（码=可领取 HMAC 密钥的凭证），只记设备维度
+    logger.info("admin.issue_pair_code", device_id=str(device_id))
     return DevicePairResponse(
         device_id=device_id,
-        key_id=f"admin-issued-{code}",
+        key_id="admin-issued",  # 真 key_id 在 pair 时才签发；此处不嵌配对码
         hmac_key="",  # 不下发 secret，等 pair 时真发
         pair_code=code,
     )
-
-
-@router.get("/{device_id}/_debug_pair_codes", response_model=dict)
-async def debug_pair_codes(device_id: uuid.UUID) -> dict:
-    """P2-1 测试期：返回当前磁盘上的配对码内容（_codes 现为每次重读磁盘）。
-
-    历史：曾返回 uvicorn 进程内 _pair_codes_cache，但该缓存从不刷新
-    导致新生成的码在同进程里不可见；现已移除进程内缓存、以文件为唯一源。
-    """
-    cache = _codes()
-    purged = _purge_expired(cache)
-    return {
-        "device_id": str(device_id),
-        "cache_size": len(cache),
-        "cache_after_purge_size": len(purged),
-        "cache_keys": list(cache.keys()),
-        "file_exists": _PAIR_CODES_PATH.exists(),
-        "file_content": _PAIR_CODES_PATH.read_text() if _PAIR_CODES_PATH.exists() else None,
-        "now_wall": time.time(),
-    }
 
 
 @router.post("", response_model=Device, status_code=status.HTTP_201_CREATED)
@@ -223,10 +244,14 @@ async def get_device(
             )
         )
     ).scalar_one()
-    return _to_schema(d, int(cnt), handle)
+    biz_name = None
+    if d.business_id:
+        biz = await session.get(Business, d.business_id)
+        biz_name = biz.name if biz else None
+    return _to_schema(d, int(cnt), handle, business_name=biz_name)
 
 
-@router.post("/{device_id}/pair", response_model=DevicePairResponse)
+@pair_router.post("/{device_id}/pair", response_model=DevicePairResponse)
 async def pair_device(
     device_id: uuid.UUID,
     body: DevicePairRequest,
@@ -244,8 +269,15 @@ async def pair_device(
     APK 上线时把它们写回 Device 行——替代了原本让用户在 register 时手填的字段。
     老 APK 只发 pair_code 也照样能配对，4 字段都缺也无副作用。
     """
+    now = time.time()
+    if _pair_rate_limited(now):
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "too many failed pair attempts; try again later",
+        )
     real_device_id = _claim_pair_code(body.pair_code)
     if real_device_id is None:
+        _pair_failures.append(now)
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "invalid, expired, or already used pair code"
         )
@@ -267,8 +299,10 @@ async def pair_device(
         await key_manager.revoke_all(real_device_id)
         issued = await key_manager.issue_key(real_device_id)
         d.hmac_key_id = issued.key_id
+        # 密钥原文信封加密（Fernet）后落 app_config，供 verify_hmac 验签时解密；
+        # 明文只出现在此处内存与返回 APK 的一次性响应里。
         secret_key = f"hmac_secret:{issued.key_id}"
-        secret_value = {"secret": base64.b64encode(issued.secret).decode("ascii")}
+        secret_value = {"v": 1, "enc_secret": encrypt_secret(issued.secret)}
         secret_row = await session.get(AppConfig, secret_key)
         if secret_row is None:
             session.add(
@@ -313,7 +347,7 @@ async def pair_device(
     return DevicePairResponse(
         device_id=real_device_id,
         key_id=issued.key_id,
-        hmac_key=secret_value["secret"],
+        hmac_key=base64.b64encode(issued.secret).decode("ascii"),
     )
 
 

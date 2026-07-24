@@ -1,4 +1,4 @@
-"""后台告警扫描器：定期跑 ``monitoring.alerts.evaluate_all`` → 写库 + 通知。
+"""后台告警扫描器：定期跑 ``monitoring.alerts.evaluate_all`` → 写库。
 
 设计要点
 --------
@@ -7,7 +7,7 @@
   ``monitoring.risk_score_threshold``），缺省走 ``monitoring/alerts.py`` 默认值
 - 复用现有 ``Alert`` ORM（迁移 004 已建）；同 ``(code, subject_id)`` 未 resolved
   的不重复写（去重）
-- notifier 失败 / DB 失败都 logger.exception，不让后台循环崩
+- DB 失败 logger.exception，不让后台循环崩
 - ``stop()`` 等待当前一轮跑完才返回，避免半截 INSERT
 
 调用方
@@ -55,9 +55,6 @@ class AlertScannerConfig:
 # 与 ``_LazyConfigReader.get`` 同型：async (key, default) -> Any
 ConfigReader = Callable[[str, Any], Awaitable[Any]]
 
-# 与 ``agent.protocols.Notifier`` 同型：async (code, payload) -> None
-Notifier = Callable[[str, dict[str, Any]], Awaitable[None]]
-
 
 # ---------------------------------------------------------------------------
 # Scanner
@@ -65,19 +62,17 @@ Notifier = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
 class AlertScanner:
-    """后台扫描器：周期拉取监测数据 → 生成 alerts → 写库 + 通知。"""
+    """后台扫描器：周期拉取监测数据 → 生成 alerts → 写库。"""
 
     def __init__(
         self,
         *,
         session_factory: async_sessionmaker[AsyncSession],
         config_reader: ConfigReader,
-        notifier: Notifier,
         config: AlertScannerConfig | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._config_reader = config_reader
-        self._notifier = notifier
         self._config = config or AlertScannerConfig()
         self._task: asyncio.Task[None] | None = None
         self._stop_event: asyncio.Event = asyncio.Event()
@@ -168,6 +163,12 @@ class AlertScanner:
                 )
             )
             written: list[Alert] = []
+            # 设备/账号 → 业务 映射（payloads 里带了 business_id），
+            # 写告警时按 subject_id（device_id / account_id）回填 alerts.business_id
+            subject_business: dict[str, Any] = {
+                str(p.get("device_id") or p.get("account_id")): p.get("business_id")
+                for p in (*device_payloads, *account_payloads)
+            }
             for a in alerts:
                 if (a.code, a.subject_id) in existing_pairs:
                     continue
@@ -177,6 +178,7 @@ class AlertScanner:
                     message=a.message,
                     subject_id=a.subject_id,
                     resolved=False,
+                    business_id=subject_business.get(a.subject_id or ""),
                 )
                 session.add(row)
                 await session.flush()
@@ -191,25 +193,9 @@ class AlertScanner:
 
             await session.commit()
 
-        # 通知走 commit 之后；不在事务里调外部 side-effect
-        for row in written:
-            try:
-                await self._notifier(
-                    row.code,
-                    {
-                        "message": row.message,
-                        "severity": row.severity,
-                        "subject_id": row.subject_id,
-                        "alert_id": str(row.id),
-                    },
-                )
-            except Exception:  # pragma: no cover - 通知失败不应回滚 DB
-                logger.exception(
-                    "alert_scanner.notifier failed",
-                    code=row.code,
-                    subject_id=row.subject_id,
-                )
-
+        # v0.7+：监控类告警只写入 alerts 表，不再重复发到 notifications。
+        # 消息页只保留 AI 运营反馈（goal round / note published / collect / agent.alert
+        # 运行期异常等），避免告警页和消息页内容重叠。
         return written
 
     # -- 内部 helpers ------------------------------------------------------
@@ -248,7 +234,11 @@ class AlertScanner:
                 except Exception:  # pragma: no cover
                     age = 0.0
             payloads.append(
-                {"device_id": str(d.id), "last_heartbeat_age_sec": age}
+                {
+                    "device_id": str(d.id),
+                    "last_heartbeat_age_sec": age,
+                    "business_id": d.business_id,
+                }
             )
         return payloads
 
@@ -258,7 +248,11 @@ class AlertScanner:
         stmt = select(Account).where(Account.deleted_at.is_(None))
         rows = (await session.execute(stmt)).scalars().all()
         return [
-            {"account_id": str(a.id), "risk_score": float(a.risk_score or 0)}
+            {
+                "account_id": str(a.id),
+                "risk_score": float(a.risk_score or 0),
+                "business_id": a.business_id,
+            }
             for a in rows
         ]
 

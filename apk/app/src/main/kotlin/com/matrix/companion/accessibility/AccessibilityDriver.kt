@@ -31,19 +31,9 @@ import kotlin.coroutines.resume
  */
 class AccessibilityDriver(private val serviceRef: () -> AccessibilityService?) {
 
-    @Volatile private var lastEventAt: Long = 0L
     private val executor: Executor by lazy { Executors.newSingleThreadExecutor() }
 
     fun isReady(): Boolean = serviceRef() != null
-
-    fun markEventSeen() {
-        lastEventAt = System.currentTimeMillis()
-    }
-
-    fun secondsSinceLastEvent(): Long {
-        val now = System.currentTimeMillis()
-        return if (lastEventAt == 0L) Long.MAX_VALUE else (now - lastEventAt) / 1000L
-    }
 
     /**
      * Get the root node of the currently *foreground* app's window.
@@ -62,22 +52,26 @@ class AccessibilityDriver(private val serviceRef: () -> AccessibilityService?) {
     fun rootNode(): AccessibilityNodeInfo? {
         val service = serviceRef() ?: return null
         val ownPkg = service.packageName?.toString()
-        // 1) Fast path — works on most stock Android.
+        // 多窗口场景（实测：小红书笔记详情页 NoteDetailActivity）：
+        // rootInActiveWindow 会返回「后面的旧窗口」（如同包的首页），
+        // 树里找不到任何当前页面的节点。所以先在应用窗口里找
+        // 「有焦点的」（其次 layer 最高的），最后才退回 rootInActiveWindow。
+        val appWindows = service.windows.filter {
+            it.type == AccessibilityWindowInfo.TYPE_APPLICATION &&
+                it.root?.packageName?.toString() != ownPkg
+        }
+        if (appWindows.isNotEmpty()) {
+            val best = appWindows.firstOrNull { it.isFocused }
+                ?: appWindows.maxByOrNull { it.layer }
+            best?.root?.let { return it }
+        }
         val root = service.rootInActiveWindow
         if (root != null && root.packageName?.toString() != ownPkg) {
             Log.d(TAG, "rootNode: rootInActiveWindow pkg=${root.packageName} (non-own, fast path)")
             return root
         }
-        // 2) HyperOS / MIUI fallback.
         root?.recycle()
-        val windows = service.windows
-        val winPkgs = windows.joinToString(",") { "${it.type}:${it.layer}:${it.root?.packageName}" }
-        Log.d(TAG, "rootNode: rootInActiveWindow was own/null; windows=[${winPkgs}] ownPkg=$ownPkg")
-        return windows
-            .filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
-            .maxByOrNull { it.layer }
-            ?.root
-            ?.takeIf { it.packageName?.toString() != ownPkg }
+        return null
     }
 
     companion object {

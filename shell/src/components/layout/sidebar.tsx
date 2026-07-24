@@ -4,29 +4,29 @@ import {
   Smartphone,
   FileText,
   Target,
-  Activity,
   BarChart3,
   BookOpen,
   Bell,
   Inbox,
   Briefcase,
   Layers,
+  Users,
 } from 'lucide-react';
 import { useUIStore } from '@/stores/ui-store';
 import { cn } from '@/lib/utils';
 
 const nav = [
   { to: '/chat', label: '对话', icon: MessageSquare },
-  { to: '/devices', label: '设备', icon: Smartphone },
-  { to: '/notes', label: '内容', icon: FileText },
   { to: '/goals', label: '目标', icon: Target },
-  { to: '/agent-runs', label: 'Agent', icon: Activity },
+  { to: '/notes', label: '内容', icon: FileText },
   { to: '/data', label: '数据', icon: BarChart3 },
   { to: '/analytics-comparison', label: '业务对比', icon: Layers }, // v0.7+ 多业务对比
+  { to: '/accounts', label: '账号', icon: Users },
+  { to: '/devices', label: '设备', icon: Smartphone },
   { to: '/kb', label: '知识库', icon: BookOpen },
+  { to: '/businesses', label: '业务管理', icon: Briefcase }, // v0.7+ 业务管理
   { to: '/alerts', label: '告警', icon: Bell },
   { to: '/notifications', label: '消息', icon: Inbox }, // Phase 1
-  { to: '/businesses', label: '业务管理', icon: Briefcase }, // v0.7+ 业务管理
 ];
 
 export function Sidebar() {

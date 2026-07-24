@@ -15,6 +15,7 @@ class AgentRun(BaseModel):
     goal_id: Optional[uuid.UUID] = None
     current_state: str
     status: AgentRunStatus = "running"
+    round_number: Optional[int] = None
     started_at: datetime
     updated_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None

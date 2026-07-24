@@ -4,6 +4,7 @@ import type { AgentRun } from '@/types/api';
 
 export function useAgentRuns(params?: {
   status?: string;
+  goal_id?: string;
   limit?: number;
   /** v0.7+ 业务过滤 */
   business_id?: string;

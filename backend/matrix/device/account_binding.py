@@ -83,16 +83,6 @@ class AccountBinding:
         await self.session.flush()
         return True
 
-    async def get_device_for_account(self, account_id: UUID) -> Optional[Device]:
-        """获取账号绑定的设备（未删除、未禁用）。"""
-        account = await self.session.get(Account, account_id)
-        if account is None or account.device_id is None:
-            return None
-        device = await self.session.get(Device, account.device_id)
-        if device is None or device.deleted_at is not None:
-            return None
-        return device
-
     async def list_accounts_for_device(
         self,
         device_id: UUID,

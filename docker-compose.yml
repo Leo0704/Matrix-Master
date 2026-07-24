@@ -1,5 +1,5 @@
 # Matrix Master 开发环境
-# - 常驻服务：PostgreSQL + Headscale + 自建 DERP（+ monitoring 监控栈可选）
+# - 常驻服务：PostgreSQL + Headscale + 自建 DERP
 # - 应用服务：backend (uvicorn) + frontend (vite dev server)，前后端都跑在 docker 里
 # - 测试：test service 在 docker 内跑 pytest
 
@@ -30,13 +30,16 @@ services:
   headscale:
     image: headscale/headscale:0.23.0
     container_name: matrix-headscale
-    command: headscale serve
+    command: serve
     environment:
       HEADSCALE_DEBUG: "true"
     ports:
       - "8080:8080"
     volumes:
       - ./deploy/headscale/config.yaml:/etc/headscale/config.yaml:ro
+      - ./deploy/headscale/derp-map.yaml:/etc/headscale/derp-map.yaml:ro
+      - ./deploy/headscale/server.key:/etc/headscale/server.key:ro
+      - ./deploy/headscale/noise.key:/etc/headscale/noise.key:ro
       - headscale_data:/var/lib/headscale
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
@@ -57,27 +60,6 @@ services:
       - "3478:3478/udp"  # STUN
     depends_on:
       - headscale
-
-  # 监控栈（开发用）
-  prometheus:
-    image: prom/prometheus:v2.51.0
-    container_name: matrix-prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    profiles: ["monitoring"]  # 默认不启动，需要时 --profile monitoring
-
-  grafana:
-    image: grafana/grafana:10.4.0
-    container_name: matrix-grafana
-    ports:
-      - "3000:3000"
-    environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin
-    profiles: ["monitoring"]
 
   # 生产 HTTPS 入口（需要域名 + DNS 指向本机）
   caddy:
@@ -124,6 +106,83 @@ services:
     # 不写 command：继承 Dockerfile 的 CMD = ["pytest", "tests"]
     # 用户在 docker compose run 后面追加参数可覆盖
 
+  # Tailscale 客户端（TUN 模式）：让 backend 经 tailnet 访问手机的 100.x 地址，
+  # 同时让手机能通过本容器的 100.x 地址访问后端 API。
+  # backend 通过本容器暴露的 HTTP 代理访问 tailnet（见 MATRIX_DEVICE_PROXY）。
+  ts-client:
+    image: tailscale/tailscale:latest
+    container_name: matrix-ts-client
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+    volumes:
+      - ts_client_state:/var/lib/tailscale
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    # 不用镜像自带 boot 脚本：直接驱动 tailscaled + 重试登录。
+    # 未设 --login-server 时默认连 Tailscale 官方控制面；自建 headscale 时加回该参数。
+    command:
+      - sh
+      - -c
+      - |
+        rm -f /var/lib/tailscale/ts.state
+        mkdir -p /var/run/tailscale
+        tailscaled \
+          --state=/var/lib/tailscale/ts.state \
+          --socket=/var/run/tailscale/tailscaled.sock \
+          --outbound-http-proxy-listen=0.0.0.0:1055 &
+        sleep 3
+        until tailscale --socket=/var/run/tailscale/tailscaled.sock up \
+          --authkey="$$TS_AUTHKEY" \
+          --hostname=matrix-backend; do
+          echo "[ts-client] login retry in 5s..."
+          sleep 5
+        done
+        echo "[ts-client] tailnet up"
+        sleep infinity
+
+  # DERP 的 TLS 终结：tailscaled 连 DERP 强制 TLS（InsecureForTests 只跳过
+  # 证书校验、不跳过 TLS），而 headscale 内嵌 DERP 是纯 HTTP。
+  # 用 socat 在 8443 终结自签 TLS → 转发明文到 headscale:8080 的 DERP 通道。
+  # 手机经 adb reverse tcp:8443 访问（地图里 hostname=127.0.0.1）。
+  derp-tls:
+    image: alpine/socat:latest
+    container_name: matrix-derp-tls
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./deploy/headscale/derp-tls.pem:/certs/derp.pem:ro
+    command: OPENSSL-LISTEN:8443,fork,reuseaddr,cert=/certs/derp.pem,verify=0 TCP:headscale:8080
+    depends_on:
+      - headscale
+
+  # 与 ts-client 共用网络命名空间，把它的 127.0.0.1:8443 转到 derp-tls。
+  # socat 用 fork 模式支持并发长连接（busybox nc 单连接会被 DERP 长连接堵死）。
+  # 注意：ts-client 重建时本容器必须一起重建（网络命名空间绑定）。
+  ts-derp-forward:
+    image: alpine/socat:latest
+    container_name: matrix-ts-derp-forward
+    network_mode: service:ts-client
+    restart: unless-stopped
+    command: TCP-LISTEN:8443,fork,reuseaddr TCP:derp-tls:8443
+    depends_on:
+      - ts-client
+      - derp-tls
+
+  # 与 ts-client 共用网络命名空间，把 ts-client 的 8666 端口转发到 backend:8666，
+  # 让手机能通过 ts-client 的 Tailscale IP (100.x) 访问后端 API。
+  ts-backend-forward:
+    image: alpine/socat:latest
+    container_name: matrix-ts-backend-forward
+    network_mode: service:ts-client
+    restart: unless-stopped
+    command: TCP-LISTEN:8666,fork,reuseaddr TCP:backend:8666
+    depends_on:
+      - ts-client
+      - backend
+
   # 后端 FastAPI（uvicorn）服务
   # 用法：docker compose up -d backend
   # 健康检查：curl http://localhost:8666/api/v1/health
@@ -145,6 +204,8 @@ services:
       # `adb forward tcp:8765 tcp:8765`。
       # 可用 shell 环境变量 / .env 覆盖（如指向 docker 网络内的假 APK 容器做 E2E）。
       MATRIX_DEV_APK_HOST: ${MATRIX_DEV_APK_HOST:-host.docker.internal}
+      # 走 tailnet 访问手机时，指向 ts-client 边车的 HTTP 代理（默认空=直连）。
+      MATRIX_DEVICE_PROXY: ${MATRIX_DEVICE_PROXY:-}
     volumes:
       # 开发态：源码改动立即生效，uvicorn --reload 自动重启
       - ./backend:/app/backend
@@ -191,6 +252,7 @@ services:
     # 浏览器访问 host 上 localhost:8666 → 经 port mapping → 容器内 backend 8666
 
 volumes:
+  ts_client_state:
   postgres_data:
   headscale_data:
   frontend_node_modules:

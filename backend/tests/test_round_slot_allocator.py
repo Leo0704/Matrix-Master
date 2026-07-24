@@ -25,7 +25,6 @@ from matrix.agent.protocols import ChosenSlot
 from matrix.db.models import Account as AccountORM
 from matrix.db.models import Business as BusinessORM
 from matrix.db.models import Device as DeviceORM
-from matrix.db.models import Persona as PersonaORM
 from matrix.scheduler.round_slot_allocator import (
     DefaultRoundSlotAllocator,
     STYLE_ROTATION,
@@ -268,16 +267,11 @@ class TestAllocateBusinessIsolation:
             dev_a = DeviceORM(
                 nickname="dev-a", business_id=biz_a.id, status="active"
             )
-            per_a = PersonaORM(
-                name="per-a", tone="t", style_guide="sg", business_id=biz_a.id
-            )
             session.add(dev_a)
-            session.add(per_a)
             await session.flush()
             acct_a = AccountORM(
                 handle="@a",
                 device_id=dev_a.id,
-                persona_id=per_a.id,
                 business_id=biz_a.id,
                 status="active",
                 risk_score=0,
@@ -288,16 +282,11 @@ class TestAllocateBusinessIsolation:
             dev_b = DeviceORM(
                 nickname="dev-b", business_id=biz_b.id, status="active"
             )
-            per_b = PersonaORM(
-                name="per-b", tone="t", style_guide="sg", business_id=biz_b.id
-            )
             session.add(dev_b)
-            session.add(per_b)
             await session.flush()
             acct_b = AccountORM(
                 handle="@b",
                 device_id=dev_b.id,
-                persona_id=per_b.id,
                 business_id=biz_b.id,
                 status="active",
                 risk_score=0,

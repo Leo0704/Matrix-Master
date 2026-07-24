@@ -28,7 +28,7 @@ export function NoteDetail() {
         <>
           <PageHeader
             title={data.title}
-            description={`ID: ${data.id}`}
+            description={`编号：${data.id}`}
             actions={<StatusBadge status={data.status} />}
           />
 
@@ -61,7 +61,7 @@ export function NoteDetail() {
                 <Row k="账号" v={data.account_id} mono />
                 <Row k="排期" v={formatDate(data.scheduled_at)} />
                 <Row k="发布" v={formatDate(data.published_at)} />
-                <Row k="平台 ID" v={data.platform_note_id ?? '—'} mono />
+                <Row k="平台编号" v={data.platform_note_id ?? '—'} mono />
                 {data.platform_url && (
                   <a
                     href={data.platform_url}

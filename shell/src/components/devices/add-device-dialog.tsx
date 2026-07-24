@@ -11,7 +11,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { QrCode, Copy } from 'lucide-react';
+import { Copy, KeyRound } from 'lucide-react';
 import { useRegisterDevice } from '@/hooks/use-devices';
 import { useActiveBusinessId } from '@/stores/ui-store';
 import { toast } from '@/components/ui/use-toast';
@@ -75,8 +75,8 @@ export function AddDeviceDialog({ trigger }: { trigger?: React.ReactNode }) {
             <DialogHeader>
               <DialogTitle>添加新设备</DialogTitle>
               <DialogDescription>
-                填个昵称，提交后主控生成配对码。手机装 companion APK
-                输入配对码后，型号 / Android 版本 / APK 版本 / Tailnet IP 会自动识别。
+                填个昵称，提交后主控生成配对码。手机装配套客户端，
+                输入配对码后，型号 / 安卓版本 / 客户端版本 / 内网 IP 会自动识别。
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3">
@@ -91,7 +91,7 @@ export function AddDeviceDialog({ trigger }: { trigger?: React.ReactNode }) {
               </div>
               <div className="space-y-1">
                 <Label htmlFor="adbSerial">
-                  ADB 串号
+                  调试串号
                   <span className="ml-1 text-xs text-muted-foreground">(可选)</span>
                 </Label>
                 <Input
@@ -102,7 +102,7 @@ export function AddDeviceDialog({ trigger }: { trigger?: React.ReactNode }) {
                 />
               </div>
               <p className="text-xs text-muted-foreground">
-                型号、Android 版本、APK 版本、IP 等信息会在设备首次连接后自动识别。
+                型号、安卓版本、客户端版本、IP 等信息会在设备首次连接后自动识别。
               </p>
             </div>
             <DialogFooter>
@@ -122,13 +122,10 @@ export function AddDeviceDialog({ trigger }: { trigger?: React.ReactNode }) {
             <DialogHeader>
               <DialogTitle>手机端配对</DialogTitle>
               <DialogDescription>
-                在 companion APK 中输入 6 位配对码，或扫描下方二维码。10 分钟内有效。
+                在 companion 客户端里手动输入下方 8 位配对码。10 分钟内有效。
               </DialogDescription>
             </DialogHeader>
             <div className="flex flex-col items-center gap-4 py-4">
-              <div className="flex h-32 w-32 items-center justify-center rounded-md border-2 border-dashed bg-muted">
-                <QrCode className="h-16 w-16 text-muted-foreground" />
-              </div>
               <div className="flex items-center gap-2 rounded-md border bg-muted px-4 py-2 font-mono text-2xl tracking-widest">
                 {pairCode}
                 <Button
@@ -142,7 +139,10 @@ export function AddDeviceDialog({ trigger }: { trigger?: React.ReactNode }) {
                   <Copy className="h-4 w-4" />
                 </Button>
               </div>
-              <p className="text-xs text-muted-foreground">等待手机端确认…</p>
+              <p className="flex items-center text-xs text-muted-foreground">
+                <KeyRound className="mr-1 h-3 w-3" />
+                把这串数字输进手机客户端，等待手机端确认…
+              </p>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setOpen(false)}>

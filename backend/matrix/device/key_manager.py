@@ -18,7 +18,7 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from matrix.db.models import Device, DeviceHmacKey
+from matrix.db.models import AppConfig, Device, DeviceHmacKey
 from matrix.device.hmac import generate_key, hash_key
 
 logger = get_logger(__name__)
@@ -99,38 +99,31 @@ class KeyManager:
         )
         return result.scalar_one_or_none()
 
-    async def current_key_id(self, device_id: UUID) -> Optional[str]:
-        """获取设备当前 active 的 key_id（未撤销的最近一条）。"""
-        result = await self.session.execute(
-            select(DeviceHmacKey.id)
-            .where(
-                DeviceHmacKey.device_id == device_id,
-                DeviceHmacKey.revoked_at.is_(None),
-            )
-            .order_by(DeviceHmacKey.created_at.desc())
-            .limit(1)
-        )
-        return result.scalar_one_or_none()
-
-    async def revoke_key(self, device_id: UUID, key_id: str) -> bool:
-        """撤销设备的指定密钥（设备下线时调用）。
-
-        Returns:
-            True 表示至少一行被更新；False 表示 key_id 不存在或已撤销。
-        """
-        result = await self.session.execute(
-            update(DeviceHmacKey)
-            .where(
-                DeviceHmacKey.device_id == device_id,
-                DeviceHmacKey.id == key_id,
-                DeviceHmacKey.revoked_at.is_(None),
-            )
-            .values(revoked_at=datetime.now(timezone.utc))
-        )
-        return result.rowcount > 0
-
     async def revoke_all(self, device_id: UUID) -> int:
-        """撤销某设备的所有未撤销密钥。返回受影响的行数。"""
+        """撤销某设备的所有未撤销密钥。返回受影响的行数。
+
+        打 revoked 标记前，先删掉 ``app_config`` 里对应的 secret 加密副本
+        （``hmac_secret:{key_id}``）——重配对 / 设备退役后不再残留钥匙。
+        注意 ``rotate_if_expired`` 只标 ``rotated_at`` 不标 revoked（过渡期旧 key
+        仍可验签），其副本必须保留，故不在这里处理。
+        """
+        key_ids = (
+            (
+                await self.session.execute(
+                    select(DeviceHmacKey.id).where(
+                        DeviceHmacKey.device_id == device_id,
+                        DeviceHmacKey.revoked_at.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for key_id in key_ids:
+            stale = await self.session.get(AppConfig, f"hmac_secret:{key_id}")
+            if stale is not None:
+                await self.session.delete(stale)
+
         result = await self.session.execute(
             update(DeviceHmacKey)
             .where(

@@ -288,6 +288,8 @@ async def _prepare_round(
             session,
             theme=str(target.get("theme", "")),
             audience=target.get("audience"),
+            # 业务隔离：只拉本业务 + 全局共享（NULL）的经验卡
+            business_id=_goal_business_id(goal),
         )
     except Exception:
         logger.exception("orchestrator.learnings_fetch_failed", goal_id=str(goal.id))
@@ -426,8 +428,12 @@ async def _gather_round_kpi(
     total_likes = 0
     total_collects = 0
     total_comments = 0
+    total_follows_gained = 0
     notes_count = 0
     per_note: list[dict[str, Any]] = []
+    # 按 note_id 去重：24h 采集后 spawn 的 ANALYZE run 与发布 run 同 goal+轮次，
+    # payload.note_id 指向同一篇笔记，fallback 解析会把它再算一遍
+    seen_note_ids: set[str] = set()
 
     for run in runs:
         note = None
@@ -479,6 +485,10 @@ async def _gather_round_kpi(
             note = (await session.execute(note_stmt)).scalars().first()
         if note is None:
             continue
+        note_key = str(note.id)
+        if note_key in seen_note_ids:
+            continue
+        seen_note_ids.add(note_key)
         notes_count += 1
         # 最新 metrics
         metric_stmt = (
@@ -489,10 +499,12 @@ async def _gather_round_kpi(
         )
         metric = (await session.execute(metric_stmt)).scalars().first()
         if metric is not None:
+            follows = int(getattr(metric, "follows_gained", 0) or 0)
             total_views += metric.views
             total_likes += metric.likes
             total_collects += metric.collects
             total_comments += metric.comments
+            total_follows_gained += follows
             per_note.append({
                 "note_id": str(note.id),
                 "title": note.title,
@@ -500,6 +512,7 @@ async def _gather_round_kpi(
                 "likes": metric.likes,
                 "collects": metric.collects,
                 "comments": metric.comments,
+                "follows_gained": follows,
             })
 
     flat: list[dict[str, Any]] = [
@@ -510,7 +523,7 @@ async def _gather_round_kpi(
             "likes": row["likes"],
             "collects": row["collects"],
             "comments": row["comments"],
-            "follows_gained": 0,  # 旧 NoteMetric 行未必有 follows_gained
+            "follows_gained": row["follows_gained"],
         }
         for row in per_note
     ]
@@ -524,6 +537,7 @@ async def _gather_round_kpi(
         "total_likes": total_likes,
         "total_collects": total_collects,
         "total_comments": total_comments,
+        "total_follows_gained": total_follows_gained,
         "notes_count": notes_count,
         "per_note": per_note,
         "dimensions": dimensions,
@@ -745,6 +759,8 @@ async def advance_goal(
                     "round_number": goal.current_round,
                     "runs_created": created,
                     "eta_min": 5,
+                    # W5：业务归属写入 notifications.business_id（新列）
+                    "business_id": str(_goal_business_id(goal)) if _goal_business_id(goal) else None,
                 },
             )
         return OrchestratorResult(
@@ -803,6 +819,8 @@ async def advance_goal(
                 "goal_id": str(goal.id),
                 "round_number": goal.current_round,
                 "notes_count": kpi.get("notes_count", 0),
+                # W5：业务归属写入 notifications.business_id（新列）
+                "business_id": str(_goal_business_id(goal)) if _goal_business_id(goal) else None,
             },
         )
         return OrchestratorResult(
@@ -823,7 +841,12 @@ async def advance_goal(
         # Phase 1：通知"本轮已总结完，进决策"
         await _safe_notify(
             "goal.round.decided",
-            {"goal_id": str(goal.id), "round_number": goal.current_round},
+            {
+                "goal_id": str(goal.id),
+                "round_number": goal.current_round,
+                # W5：业务归属写入 notifications.business_id（新列）
+                "business_id": str(_goal_business_id(goal)) if _goal_business_id(goal) else None,
+            },
         )
         return OrchestratorResult(
             goal_id=goal.id,
@@ -855,6 +878,8 @@ async def advance_goal(
                     "next_round": goal.current_round,
                     "reason": reason,
                     "eta_min": 5,
+                    # W5：业务归属写入 notifications.business_id（新列）
+                    "business_id": str(_goal_business_id(goal)) if _goal_business_id(goal) else None,
                 },
             )
             return OrchestratorResult(
@@ -882,6 +907,8 @@ async def advance_goal(
                     "round_number": goal.current_round,
                     "total_rounds": goal.current_round,
                     "reason": reason,
+                    # W5：业务归属写入 notifications.business_id（新列）
+                    "business_id": str(_goal_business_id(goal)) if _goal_business_id(goal) else None,
                 },
             )
             return OrchestratorResult(

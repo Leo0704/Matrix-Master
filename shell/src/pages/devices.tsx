@@ -71,11 +71,19 @@ export function Devices() {
       {error && <ErrorState error={error} onRetry={() => refetch()} />}
       {!isLoading && filtered.length === 0 && (
         <EmptyState
-          title={showRetired ? '无已退役设备' : '无匹配设备'}
+          title={
+            filter
+              ? '无匹配设备'
+              : showRetired
+                ? '无已退役设备'
+                : '暂无设备'
+          }
           description={
-            showRetired
-              ? '当前业务下没有已退役设备'
-              : '尝试调整搜索条件或添加新设备'
+            filter
+              ? '尝试调整搜索条件'
+              : showRetired
+                ? '当前业务下没有已退役设备'
+                : '点击右上角「添加设备」注册第一台'
           }
         />
       )}

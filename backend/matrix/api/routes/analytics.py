@@ -27,7 +27,6 @@ from matrix.db.models import (
     KbDocument,
     Note,
     NoteMetric,
-    Persona,
 )
 from matrix.monitoring.logging import get_logger
 
@@ -62,10 +61,7 @@ _LATEST_METRIC_PER_NOTE = (
 async def account_content_stats(
     business_id: Optional[uuid.UUID] = Query(
         None,
-        description=(
-            "v0.7+ 业务过滤（schema 占位，暂未实际过滤；"
-            "聚合查询 JOIN 多表，TODO 后续重构）"
-        ),
+        description="v0.7+ 业务过滤：只统计该业务的账号与未分配草稿",
     ),
     session: AsyncSession = Depends(get_db),
 ) -> AccountContentStatsResponse:
@@ -134,6 +130,9 @@ async def account_content_stats(
             Account.handle.asc(),
         )
     )
+    if business_id is not None:
+        # v0.7+ 业务过滤：只看本业务的账号
+        assigned_stmt = assigned_stmt.where(Account.business_id == business_id)
     assigned_rows = (await session.execute(assigned_stmt)).all()
 
     items: list[AccountContentStats] = [
@@ -157,6 +156,9 @@ async def account_content_stats(
     unassigned_stmt = select(func.count(Note.id)).where(
         Note.account_id.is_(None), Note.deleted_at.is_(None)
     )
+    if business_id is not None:
+        # v0.7+ 业务过滤：未分配草稿也按 notes.business_id 收敛
+        unassigned_stmt = unassigned_stmt.where(Note.business_id == business_id)
     unassigned_total = int((await session.execute(unassigned_stmt)).scalar_one() or 0)
     if unassigned_total > 0:
         items.append(
@@ -206,20 +208,21 @@ async def business_comparison(
     biz_ids = [b.id for b in businesses]
 
     # 一次 group by 拿各表计数（排除软删）
-    async def count(table, biz_col: str = "business_id") -> dict[uuid.UUID, int]:
+    async def count(table, biz_col: str = "business_id", exclude_disabled: bool = False) -> dict[uuid.UUID, int]:
         col = getattr(table, biz_col)
         stmt = (
             select(col, func.count(table.id))
             .where(col.in_(biz_ids))
             .where(table.deleted_at.is_(None))
-            .group_by(col)
         )
+        if exclude_disabled:
+            stmt = stmt.where(table.status != "disabled")
+        stmt = stmt.group_by(col)
         rows = (await session.execute(stmt)).all()
         return {row[0]: row[1] for row in rows}
 
-    devices_count = await count(Device)
+    devices_count = await count(Device, exclude_disabled=True)
     accounts_count = await count(Account)
-    personas_count = await count(Persona)
     goals_count = await count(Goal)
     notes_count = await count(Note)
     kb_count = await count(KbDocument)
@@ -270,7 +273,6 @@ async def business_comparison(
                 status=b.status,  # type: ignore[arg-type]
                 devices=devices_count.get(b.id, 0),
                 accounts=accounts_n,
-                personas=personas_count.get(b.id, 0),
                 goals=goals_count.get(b.id, 0),
                 notes=notes_n,
                 published_notes=published_count.get(b.id, 0),

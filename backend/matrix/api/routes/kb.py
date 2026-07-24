@@ -201,6 +201,8 @@ async def ingest_viral(
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "raw_text must be non-empty"
         )
+    # 业务上下文校验（存在 + active）
+    await resolve_active_business(session, body.business_id)
 
     try:
         embedder = await _get_embedder()
@@ -219,6 +221,7 @@ async def ingest_viral(
         raw_text=body.raw_text,
         title=body.title,
         metrics=body.metrics,
+        business_id=body.business_id,
     )
     await session.commit()
     logger.info(
@@ -239,14 +242,20 @@ async def upload_document(
     type: str = Form(...),
     title: Optional[str] = Form(None),
     is_published: bool = Form(True),
+    business_id: uuid.UUID = Form(...),
     session: AsyncSession = Depends(get_db),
 ) -> KbDocument:
-    """拖文件上传：支持 .md / .txt。文件内容作为正文，标题默认用文件名（去后缀）。"""
+    """拖文件上传：支持 .md / .txt。文件内容作为正文，标题默认用文件名（去后缀）。
+
+    ``business_id`` 必填（kb_documents.business_id 是 NOT NULL，
+    与 POST /kb/documents 一致），传入后校验业务上下文。
+    """
     if type not in KB_TYPES:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             f"invalid type: {type!r}; must be one of {sorted(KB_TYPES)}",
         )
+    await resolve_active_business(session, business_id)
     suffix = (file.filename or "").lower().rsplit(".", 1)[-1] if file.filename else ""
     if suffix not in ("md", "txt"):
         raise HTTPException(
@@ -272,6 +281,7 @@ async def upload_document(
     store = KbStore(session, await _get_embedder())
     doc = await store.create_document(
         type=type, content=content, title=title, is_published=is_published,
+        business_id=business_id,  # 业务归属（必填，NOT NULL）
     )
     logger.info("kb.api.upload", doc_id=doc.id, type=type, filename=file.filename)
     return _to_schema(doc)
@@ -354,6 +364,7 @@ async def search_kb(
             type=body.type,
             top_k=body.top_k,
             filters=body.filters,
+            business_id=body.business_id,
         )
     except ValueError as e:
         # 白名单外的 filter key

@@ -118,9 +118,5 @@ class XhsImagePicker(
     companion object {
         /** XHS allows at most 9 images per note. */
         const val MAX_NOTE_IMAGES = 9
-
-        /** We never reuse this parameter list; kept for documentation symmetry. */
-        @Suppress("unused")
-        fun unusedUrisReference(uris: List<Uri>): Int = uris.size
     }
 }

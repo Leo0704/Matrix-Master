@@ -6,6 +6,40 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+fun gitVersionName(): String {
+    return try {
+        val process = ProcessBuilder("git", "describe", "--tags", "--abbrev=0")
+            .directory(File(rootDir, ".."))
+            .redirectErrorStream(true)
+            .start()
+        val exit = process.waitFor()
+        if (exit == 0) {
+            process.inputStream.bufferedReader().readText().trim().removePrefix("v")
+        } else {
+            "0.1.0"
+        }
+    } catch (e: Exception) {
+        "0.1.0"
+    }
+}
+
+fun gitVersionCode(): Int {
+    return try {
+        val process = ProcessBuilder("git", "rev-list", "--count", "HEAD")
+            .directory(File(rootDir, ".."))
+            .redirectErrorStream(true)
+            .start()
+        val exit = process.waitFor()
+        if (exit == 0) {
+            process.inputStream.bufferedReader().readText().trim().toInt()
+        } else {
+            1
+        }
+    } catch (e: Exception) {
+        1
+    }
+}
+
 android {
     namespace = "com.matrix.companion"
     compileSdk = 34
@@ -14,8 +48,8 @@ android {
         applicationId = "com.matrix.companion"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = gitVersionCode()
+        versionName = gitVersionName()
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         val masterUrl = (project.findProperty("matrixMasterUrl") as String?)

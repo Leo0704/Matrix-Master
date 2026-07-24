@@ -32,7 +32,7 @@ from sqlalchemy.dialects.postgresql import (
     JSONB,
     UUID,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -180,7 +180,7 @@ class Account(Base):
     )
     handle: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     persona_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("personas.id")
+        UUID(as_uuid=True), nullable=True
     )
     device_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("devices.id")
@@ -286,40 +286,6 @@ class RiskSignal(Base):
 # =============================================================================
 
 
-class Persona(Base):
-    __tablename__ = "personas"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        server_default=sa_text("uuid_generate_v4()"),
-    )
-    name: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
-    tone: Mapped[str] = mapped_column(String(256), nullable=False)
-    style_guide: Mapped[str] = mapped_column(Text, nullable=False)
-    forbidden_words: Mapped[list[str]] = mapped_column(
-        ARRAY(Text), nullable=False, server_default=sa_text("'{}'")
-    )
-    sample_note_ids: Mapped[list[uuid.UUID]] = mapped_column(
-        ARRAY(UUID(as_uuid=True)), nullable=False, server_default=sa_text("'{}'")
-    )
-    version: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=sa_text("1")
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=sa_text("NOW()")
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=sa_text("NOW()")
-    )
-    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    # 业务归属（v0.7+ 业务模型重构：人设绑死业务，跨业务允许重名）
-    # 015 加 nullable 列；017 升 NOT NULL + FK；017 同时把 UNIQUE(name) 改为 UNIQUE(business_id, name)
-    business_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )
-
-
 class Topic(Base):
     __tablename__ = "topics"
 
@@ -345,34 +311,6 @@ class Topic(Base):
         DateTime(timezone=True), nullable=False, server_default=sa_text("NOW()")
     )
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-
-
-class Rule(Base):
-    __tablename__ = 'rules'
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        server_default=sa_text('uuid_generate_v4()'),
-    )
-    category: Mapped[str] = mapped_column(String(32), nullable=False)
-    text: Mapped[str] = mapped_column(Text, nullable=False)
-    severity: Mapped[int] = mapped_column(SmallInteger, nullable=False)
-    source: Mapped[Optional[str]] = mapped_column(String(64))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=sa_text('NOW()')
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=sa_text('NOW()')
-    )
-    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-
-    __table_args__ = (
-        CheckConstraint(
-            'severity BETWEEN 1 AND 5',
-            name='rules_severity_check',
-        ),
-    )
 
 
 # =============================================================================
@@ -967,6 +905,16 @@ class Notification(Base):
     device_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey('devices.id', ondelete='SET NULL'), nullable=True
     )
+    # v0.7+ 业务归属（019 migration 加列）：查询过滤优先用该列，
+    # 老数据（NULL）回退到 4 个 typed FK 的 EXISTS 推导
+    business_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey('businesses.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+    goal: Mapped[Optional["Goal"]] = relationship("Goal", lazy="raise")
+    note: Mapped[Optional["Note"]] = relationship("Note", lazy="raise")
+    device: Mapped[Optional["Device"]] = relationship("Device", lazy="raise")
     payload: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=sa_text("'{}'::jsonb")
     )
@@ -990,6 +938,32 @@ class AppConfig(Base):
     value: Mapped[dict] = mapped_column(JSONB, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=sa_text('NOW()')
+    )
+
+
+class ChatConfirmationToken(Base):
+    """聊天 preview_change 的确认令牌（替代进程内 _CONFIRMATION_STORE）。
+
+    多 worker / 多实例部署时内存 dict 会丢令牌，改落 DB：/confirm、/cancel
+    消费即删；过期行不主动清理——单用户控制台一天几行的量级，consume 时按
+    ``expires_at`` 判定即可。
+    """
+    __tablename__ = 'chat_confirmation_tokens'
+
+    token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    args: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=sa_text("'{}'::jsonb")
+    )
+    business_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey('businesses.id', ondelete='CASCADE'),
+        nullable=False,
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=sa_text('NOW()')
     )
 

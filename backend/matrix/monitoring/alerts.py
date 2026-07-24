@@ -1,19 +1,18 @@
 """告警判定函数（基于 monitoring-runbook §3 的处理逻辑）。
 
 约定：每个函数返回 ``list[Alert]``；``Alert`` 仅包含触发的告警。
-调用方负责把 ``Alert`` 投递给通知渠道（邮件 / 飞书 / Webhook 等）。
+调用方负责把 ``Alert`` 投递到通知渠道（邮件 / 飞书 / Webhook 等）。
 
 设计要点：
-- 纯函数：不直接读 Prometheus client state，参数化输入
+- 纯函数：不读外部状态，参数化输入
 - 易测试：每个判定都接收原始值
-- 覆盖 runbook §3 全部条目（DEVICE_OFFLINE / RISK_BLOCKED /
-  SELECTOR_NOT_FOUND / TAILSCALE_DERP_LOST / POSTGRES_DISK_FULL）
+- 覆盖 runbook §3 中已接入扫描器的条目（DEVICE_OFFLINE / RISK_BLOCKED）
+- v0.7+：message 必须是用户看得懂的人话，禁止把原始字段/代码怼脸。
 """
-
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Iterable
 
 
 @dataclass(frozen=True)
@@ -46,13 +45,14 @@ def check_device_offline(
     for d in devices:
         age = d.get("last_heartbeat_age_sec", 0) or 0
         if age > heartbeat_threshold_sec:
+            minutes = round(age / 60)
             alerts.append(
                 Alert(
                     code="DEVICE_OFFLINE",
                     severity="critical",
                     message=(
-                        f"Device {d.get('device_id')} heartbeat age "
-                        f"{age}s > {heartbeat_threshold_sec}s"
+                        f"设备已经超过 {minutes} 分钟没上报心跳，"
+                        f"请检查手机网络、电量和 Matrix 应用是否在后台运行。"
                     ),
                     subject_id=d.get("device_id"),
                 )
@@ -83,134 +83,10 @@ def check_risk_blocked(
                     code="RISK_BLOCKED",
                     severity="critical",
                     message=(
-                        f"Account {a.get('account_id')} risk_score={score:.2f} "
-                        f"> {risk_threshold}; auto-paused"
+                        f"账号风险评分 {score:.2f} 超过阈值，"
+                        f"系统已自动暂停该账号，请人工确认后再恢复。"
                     ),
                     subject_id=a.get("account_id"),
                 )
             )
-    return alerts
-
-
-# ---------------------------------------------------------------------------
-# §3.3 SELECTOR_NOT_FOUND
-# ---------------------------------------------------------------------------
-
-
-def check_selector_not_found(
-    events: Iterable[dict],
-    *,
-    window_min: int = 5,
-    threshold: int = 3,
-) -> list[Alert]:
-    """窗口内 selector 失败次数 > 阈值 → SELECTOR_NOT_FOUND。
-
-    Args:
-        events: 每项含 ``device_id`` / ``tool`` / ``ts``。
-        window_min: 滚动窗口（分钟）。
-        threshold: 触发告警的次数阈值。
-    """
-    counts: dict[tuple[str, str], int] = {}
-    for ev in events:
-        key = (ev.get("device_id", ""), ev.get("tool", ""))
-        counts[key] = counts.get(key, 0) + 1
-
-    alerts: list[Alert] = []
-    for (device_id, tool), n in counts.items():
-        if n >= threshold:
-            alerts.append(
-                Alert(
-                    code="SELECTOR_NOT_FOUND",
-                    severity="warning",
-                    message=(
-                        f"Selector failed {n}x in {window_min}min "
-                        f"on device={device_id} tool={tool}; triggering VLM fallback"
-                    ),
-                    subject_id=device_id,
-                )
-            )
-    return alerts
-
-
-# ---------------------------------------------------------------------------
-# §3.4 TAILSCALE_DERP_LOST
-# ---------------------------------------------------------------------------
-
-
-def check_tailscale_derp_lost(
-    derp_results: Iterable[dict],
-) -> list[Alert]:
-    """DERP 区域不可达 → TAILSCALE_DERP_LOST。
-
-    Args:
-        derp_results: 每项含 ``region`` / ``reachable``。
-    """
-    alerts: list[Alert] = []
-    for r in derp_results:
-        if not r.get("reachable", False):
-            alerts.append(
-                Alert(
-                    code="TAILSCALE_DERP_LOST",
-                    severity="critical",
-                    message=(
-                        f"DERP region {r.get('region')} unreachable; "
-                        "check Headscale / DERP container"
-                    ),
-                    subject_id=r.get("region"),
-                )
-            )
-    return alerts
-
-
-# ---------------------------------------------------------------------------
-# §3.5 POSTGRES_DISK_FULL
-# ---------------------------------------------------------------------------
-
-
-def check_postgres_disk_full(
-    disk_usage_percent: float,
-    *,
-    threshold: float = 80.0,
-) -> list[Alert]:
-    """DB 磁盘使用率超阈值 → POSTGRES_DISK_FULL。"""
-    if disk_usage_percent > threshold:
-        return [
-            Alert(
-                code="POSTGRES_DISK_FULL",
-                severity="warning",
-                message=(
-                    f"Postgres disk usage {disk_usage_percent:.1f}% > "
-                    f"{threshold:.1f}%; cleanup old checkpoints/heartbeats"
-                ),
-            )
-        ]
-    return []
-
-
-# ---------------------------------------------------------------------------
-# 聚合入口：跑全部检查并合并
-# ---------------------------------------------------------------------------
-
-
-def evaluate_all(
-    *,
-    devices: Sequence[dict] | None = None,
-    accounts: Sequence[dict] | None = None,
-    selector_events: Sequence[dict] | None = None,
-    derp_results: Sequence[dict] | None = None,
-    disk_usage_percent: float = 0.0,
-) -> list[Alert]:
-    """跑全部告警检查，返回合并后的列表。
-
-    任一参数缺省即跳过对应检查。"""
-    alerts: list[Alert] = []
-    if devices is not None:
-        alerts.extend(check_device_offline(devices))
-    if accounts is not None:
-        alerts.extend(check_risk_blocked(accounts))
-    if selector_events is not None:
-        alerts.extend(check_selector_not_found(selector_events))
-    if derp_results is not None:
-        alerts.extend(check_tailscale_derp_lost(derp_results))
-    alerts.extend(check_postgres_disk_full(disk_usage_percent))
     return alerts

@@ -103,6 +103,8 @@ export interface Device {
   pair_code?: string;
   /** v0.7+ 业务归属 */
   business_id: string;
+  /** 业务名称（列表/详情展示用） */
+  business_name?: string;
 }
 
 // P2-3：注册时只填 nickname + 可选 adb_serial；其余 4 字段由 APK 配对时自动回填
@@ -126,6 +128,8 @@ export interface DevicePairRequest {
 export interface DevicePairResponse {
   key_id: string;
   hmac_key: string;
+  /** admin 重新签发时返回的 8 位配对码（pair 接口消费，不在此下发） */
+  pair_code?: string;
 }
 
 // ---------- Account ----------
@@ -147,7 +151,7 @@ export interface Account {
 export interface AccountCreate {
   handle: string;
   device_id: string;
-  persona_id: string;
+  persona_id?: string;
   /** v0.7+ 业务归属（必填） */
   business_id: string;
 }
@@ -377,17 +381,41 @@ export const STATE_LABELS: Record<AgentState, string> = {
 };
 
 export function formatState(state: string): string {
-  return (STATE_LABELS as Record<string, string>)[state] ?? state;
+  return (
+    (STATE_LABELS as Record<string, string>)[state] ??
+    GOAL_STATE_LABELS[state] ??
+    '未知'
+  );
 }
+
+// GoalPhase / GoalStatus 中文映射：chat 块里目标的 phase/status 也走 formatState，
+// 不补上的话一律显示「未知」。
+export const GOAL_STATE_LABELS: Record<string, string> = {
+  // GoalPhase
+  PENDING: '待启动',
+  PREPARING: '准备中',
+  EXECUTING: '执行中',
+  MONITORING: '监控中',
+  SUMMARIZING: '复盘中',
+  DECIDING: '决策中',
+  DONE: '已完成',
+  // GoalStatus
+  active: '进行中',
+  achieved: '已达成',
+  failed: '已失败',
+  cancelled: '已取消',
+};
 
 export interface AgentRun {
   id: string;
   goal_id?: string;
   current_state: AgentState | string;
   status: AgentRunStatus;
+  round_number?: number;
   started_at: string;
   updated_at?: string;
   ended_at?: string;
+  last_error_snapshot?: Record<string, unknown> | null;
   /** 主题摘要（仅展示用，agent_runs.payload.brief 透传） */
   brief?: ThemeTarget | Record<string, unknown>;
   /** v0.7+ 业务归属 */
@@ -492,6 +520,10 @@ export interface NotificationItem {
   created_at: string;
   /** v0.7+ 业务归属（可选；015/017 migration 加列） */
   business_id?: string;
+  /** v0.7+ 消息可读化：关联实体名称 */
+  goal_name?: string;
+  note_title?: string;
+  device_name?: string;
 }
 
 export interface NotificationListResponse {
@@ -563,6 +595,8 @@ export interface ViralIngestRequest {
   raw_text: string;
   title?: string;
   metrics?: Record<string, number>;
+  /** v0.7+ 业务归属 */
+  business_id?: string;
 }
 
 export interface ViralIngestResponse {

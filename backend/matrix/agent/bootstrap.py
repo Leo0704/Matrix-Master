@@ -42,6 +42,7 @@ def build_agent_services(
     round_allocator: Any | None = None,
     llm_rate_limiter: Any | None = None,
     image_generator: Any | None = None,
+    session_factory: Any | None = None,
 ) -> AgentServices:
     """组装 AgentServices。``device_adapter`` 必传（生产路径 = ``ApkHttpClient``）。
 
@@ -89,6 +90,7 @@ def build_agent_services(
         rate_limiter=rate_limiter,
         llm_rate_limiter=llm_rate_limiter,
         image_generator=image_generator,
+        session_factory=session_factory,
     )
 
 
@@ -159,6 +161,40 @@ async def db_note_writer(record: dict[str, Any]) -> Any:
         return row.id
 
 
+# ---------------------------------------------------------------------------
+# interactions writer（v0.6 互动成功记录落库）
+# ---------------------------------------------------------------------------
+
+
+async def db_interaction_writer(record: dict[str, Any]) -> Any:
+    """生产 interaction_writer：把 INTERACT 成功记录写进 ``interactions`` 表。
+
+    record schema：
+        - ``account_id`` (UUID) — 操作者账号
+        - ``target_note_id`` (UUID | None) — 本地 notes.id（interact 节点已把
+          平台 id 解析成本地 UUID；解析不到时节点不会调到这）
+        - ``type`` — 'like' / 'comment'
+        - ``content`` (str | None)
+        - ``result`` — 缺省 'success'
+        - ``request_id`` (str | None，unique)
+    """
+    from matrix.db.models import Interaction
+    from matrix.db.session import get_session
+
+    async with get_session() as session:
+        row = Interaction(
+            account_id=record["account_id"],
+            target_note_id=record.get("target_note_id"),
+            type=record["type"],
+            content=record.get("content"),
+            result=record.get("result", "success"),
+            request_id=record.get("request_id"),
+        )
+        session.add(row)
+        await session.flush()
+        return row.id
+
+
 def build_run_manager(
     *,
     services: AgentServices,
@@ -177,4 +213,4 @@ def build_run_manager(
     )
 
 
-__all__ = ["build_agent_services", "build_run_manager"]
+__all__ = ["build_agent_services", "build_run_manager", "db_note_writer", "db_interaction_writer"]

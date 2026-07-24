@@ -5,6 +5,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/use-toast';
 import { useIngestViral } from '@/hooks/use-kb';
+import { useActiveBusinessId } from '@/stores/ui-store';
 import type { ViralIngestRequest } from '@/types/api';
 
 interface ViralIngestFormProps {
@@ -18,6 +19,7 @@ interface ViralIngestFormProps {
  * 提交后存一条「历史爆款」记录（已发布）+ 一张「套路卡」（草稿，需人工发布）。
  */
 export function ViralIngestForm({ onDone, onCancel }: ViralIngestFormProps) {
+  const activeBusinessId = useActiveBusinessId();
   const ingestMut = useIngestViral();
   const [rawText, setRawText] = useState('');
   const [title, setTitle] = useState('');
@@ -41,6 +43,7 @@ export function ViralIngestForm({ onDone, onCancel }: ViralIngestFormProps) {
       raw_text: rawText.trim(),
       title: title.trim() || undefined,
       metrics: Object.keys(metrics).length ? metrics : undefined,
+      business_id: activeBusinessId ?? undefined,  // v0.7+ 业务归属
     };
 
     try {
@@ -48,8 +51,8 @@ export function ViralIngestForm({ onDone, onCancel }: ViralIngestFormProps) {
       toast({
         title: '已拆解入库',
         description: res.strategy_card_pending
-          ? '爆款记录已发布；套路卡已生成（草稿），去「套路卡」tab 点发布后 AI 才会用'
-          : '爆款记录已发布，AI 现在能参考',
+          ? '爆款记录已发布；套路卡已生成（草稿），去「套路卡」标签页点发布后人工智能才会用'
+          : '爆款记录已发布，人工智能现在能参考',
       });
       setRawText('');
       setTitle('');
@@ -75,11 +78,11 @@ export function ViralIngestForm({ onDone, onCancel }: ViralIngestFormProps) {
           rows={8}
           value={rawText}
           onChange={(e) => setRawText(e.target.value)}
-          placeholder="把小红书爆款笔记的标题 + 正文整段粘进来，AI 会自动拆解它为什么火"
+          placeholder="把小红书爆款笔记的标题 + 正文整段粘进来，人工智能会自动拆解它为什么火"
         />
       </div>
       <div className="space-y-1">
-        <Label htmlFor="viral-title">标题（可选，留空由 AI 从正文提炼）</Label>
+        <Label htmlFor="viral-title">标题（可选，留空由人工智能从正文提炼）</Label>
         <Input
           id="viral-title"
           value={title}

@@ -125,6 +125,7 @@ object XhsSelectors {
     )
     val EDIT_COMMENT = Selector.fromResourceId(
         "com.xingin.xhs:id/edit_comment",
+        Selector.Text("让大家听到你的声音"),
         Selector.Text("说点什么…"),
     )
     val BTN_COMMENT_SEND = Selector.fromResourceId(

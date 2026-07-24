@@ -10,7 +10,7 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from matrix.agent.summarize import summarize_goal_to_kb
@@ -113,17 +113,25 @@ async def list_learning_documents(
 ) -> KbDocumentListResponse:
     """列历史复盘文档。"""
     stmt = select(KbDocumentORM).where(KbDocumentORM.deleted_at.is_(None))
+    count_stmt = select(func.count(KbDocumentORM.id)).where(
+        KbDocumentORM.deleted_at.is_(None)
+    )
     if type is not None:
         stmt = stmt.where(KbDocumentORM.type == type)
+        count_stmt = count_stmt.where(KbDocumentORM.type == type)
     if is_published is not None:
         stmt = stmt.where(KbDocumentORM.is_published == is_published)
+        count_stmt = count_stmt.where(KbDocumentORM.is_published == is_published)
     if business_id is not None:
         stmt = stmt.where(KbDocumentORM.business_id == business_id)
+        count_stmt = count_stmt.where(KbDocumentORM.business_id == business_id)
     stmt = stmt.order_by(KbDocumentORM.updated_at.desc()).limit(limit).offset(offset)
     rows = (await session.execute(stmt)).scalars().all()
+    # 真实总数（同过滤条件），不是当前页条数
+    total = int((await session.execute(count_stmt)).scalar_one() or 0)
     return KbDocumentListResponse(
         items=[_to_schema(r) for r in rows],
-        total=len(rows),
+        total=total,
     )
 
 

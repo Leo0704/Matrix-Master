@@ -14,7 +14,7 @@ summarize.py 一致），不走 kb_writer。
 
 from __future__ import annotations
 
-from typing import Any
+import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,6 +39,7 @@ async def ingest_viral_text_to_kb(
     raw_text: str,
     title: str | None = None,
     metrics: dict[str, int] | None = None,
+    business_id: uuid.UUID | None = None,
 ) -> tuple[KbDocument, bool]:
     """拆解一篇粘贴的爆款文案，写入 KB。
 
@@ -48,6 +49,7 @@ async def ingest_viral_text_to_kb(
         raw_text: 用户粘贴的爆款原文（必填）
         title: 可选，用户手填标题；为空时由 LLM 从正文提炼
         metrics: 可选，用户手填的数据（点赞/收藏/评论等）；缺失按 0
+        business_id: 可选，业务归属；缺省视为全局共享（NULL）
 
     Returns:
         (history_doc, strategy_card_created)
@@ -102,6 +104,7 @@ async def ingest_viral_text_to_kb(
             "source": "external_paste",
         },
         is_published=True,
+        business_id=business_id,  # 业务归属（None = 全局共享）
     )
 
     # 2) 套路卡 → strategy_card（草稿，待人工发布）
@@ -124,6 +127,7 @@ async def ingest_viral_text_to_kb(
                 "confidence": "low",
             },
             is_published=False,
+            business_id=business_id,  # 业务归属（None = 全局共享）
         )
         created_card = True
 

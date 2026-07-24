@@ -4,8 +4,6 @@ import type {
   KbDocument,
   KbDocumentCreate,
   KbDocumentUpdate,
-  KbSearchRequest,
-  KbSearchHit,
   KbType,
   ViralIngestRequest,
   ViralIngestResponse,
@@ -24,14 +22,6 @@ export function useKbDocuments(params?: KbListParams) {
   return useQuery<{ items: KbDocument[]; total: number }>({
     queryKey: ['kb-documents', params],
     queryFn: () => apiClient.get('/kb/documents', { params }),
-  });
-}
-
-export function useKbDocument(id: string | undefined) {
-  return useQuery<KbDocument>({
-    queryKey: ['kb-document', id],
-    queryFn: () => apiClient.get<KbDocument>(`/kb/documents/${id}`),
-    enabled: !!id,
   });
 }
 
@@ -56,14 +46,17 @@ export function useIngestViral() {
 export function useUploadKbDocument() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ file, type, title, is_published }: {
+    mutationFn: ({ file, type, title, is_published, business_id }: {
       file: File; type: KbType; title?: string; is_published?: boolean;
+      /** v0.7+ 业务归属（后端已支持按业务过滤） */
+      business_id?: string;
     }) => {
       const form = new FormData();
       form.append('file', file);
       form.append('type', type);
       if (title) form.append('title', title);
       form.append('is_published', String(is_published ?? true));
+      if (business_id) form.append('business_id', business_id);
       return apiClient.postForm<KbDocument>('/kb/documents/upload', form);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['kb-documents'] }),
@@ -96,12 +89,5 @@ export function usePublishKbDocument() {
         { reviewer, comment },
       ),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['kb-documents'] }),
-  });
-}
-
-export function useKbSearch() {
-  return useMutation({
-    mutationFn: (body: KbSearchRequest) =>
-      apiClient.post<{ items: KbSearchHit[] }>('/kb/search', body),
   });
 }

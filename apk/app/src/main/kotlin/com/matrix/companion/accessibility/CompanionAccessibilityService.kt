@@ -17,7 +17,6 @@ class CompanionAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         App.accessibilityServiceInstance = this
-        App.get(this).driver.markEventSeen()
         Logx.i("AccessibilityService connected")
     }
 
@@ -33,6 +32,19 @@ class CompanionAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
-        App.get(this).driver.markEventSeen()
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            currentActivity = "${event.packageName}/${event.className}"
+        }
+    }
+
+    companion object {
+        /**
+         * 当前前台 Activity（pkg/class），由 WINDOW_STATE_CHANGED 事件维护。
+         * 用途：小红书笔记详情页的无障碍树对本服务不可见（实测），
+         * 「是否到达详情页」不能靠找节点，只能看 Activity 名。
+         */
+        @Volatile
+        var currentActivity: String? = null
+            private set
     }
 }

@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from matrix.api.deps import filter_derived_by_business, get_db
+from matrix.api.deps import get_db
 from matrix.api.schemas import AgentRun, AgentRunListResponse, OkResponse
 from matrix.db.models import AgentRun as AgentRunORM
 from matrix.monitoring.logging import get_logger
@@ -25,6 +25,7 @@ def _to_schema(r: AgentRunORM) -> AgentRun:
         goal_id=r.goal_id,
         current_state=r.current_state,
         status=r.status,  # type: ignore[arg-type]
+        round_number=r.round_number,
         started_at=r.started_at,
         updated_at=r.updated_at,
         ended_at=r.ended_at,
@@ -35,19 +36,17 @@ def _to_schema(r: AgentRunORM) -> AgentRun:
 @router.get("", response_model=AgentRunListResponse)
 async def list_agent_runs(
     status_filter: Optional[str] = Query(None, alias="status"),
+    goal_id: Optional[uuid.UUID] = Query(None, description="按目标过滤"),
     business_id: Optional[uuid.UUID] = Query(None, description="v0.7+ 业务过滤"),
     limit: int = Query(50, ge=1, le=500),
     session: AsyncSession = Depends(get_db),
 ) -> AgentRunListResponse:
-    from matrix.db.models import Goal
-
     stmt = select(AgentRunORM).order_by(AgentRunORM.started_at.desc())
-    # v0.7+：衍生表业务过滤（通过 Goal.business_id）
-    stmt = filter_derived_by_business(
-        stmt,
-        business_id=business_id,
-        sources=[(AgentRunORM, Goal, "goal_id")],
-    )
+    if goal_id:
+        stmt = stmt.where(AgentRunORM.goal_id == goal_id)
+    # v0.7+ 业务过滤：agent_runs 自带 business_id 列，直查（不再绕 Goal EXISTS）
+    if business_id is not None:
+        stmt = stmt.where(AgentRunORM.business_id == business_id)
     if status_filter:
         stmt = stmt.where(AgentRunORM.status == status_filter)
     stmt = stmt.limit(limit)

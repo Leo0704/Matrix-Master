@@ -44,7 +44,7 @@ const SCENARIOS: Scenario[] = [
     id: 'test',
     icon: FlaskConical,
     title: '内容测试',
-    description: '多轮找爆款：发 N 篇不同角度，KB 自动出爆款模板',
+    description: '多轮找爆款：发 N 篇不同角度，知识库自动出爆款模板',
     themeExample: '夏季男生穿搭种草',
     target_likes: 100,
     notes_per_round: 5,

@@ -11,9 +11,6 @@ import pytest
 from matrix.llm import (
     AnthropicClient,
     AuthError,
-    CachedBlock,
-    CachedMessages,
-    CompletionCache,
     CompletionResult,
     EmbeddingClient,
     InvalidRequestError,
@@ -28,7 +25,6 @@ from matrix.llm import (
     retry_with_backoff,
 )
 from matrix.llm.errors import TimeoutError as ErrorsTimeout
-from matrix.llm.prompt_caching import openai_prompt_caching_enabled
 
 
 # ---------------------------------------------------------------------------
@@ -105,55 +101,6 @@ class TestModelResolution:
 
     def test_unknown_passthrough(self):
         assert resolve_model("custom-model") == "custom-model"
-
-class TestCompletionCache:
-    async def test_set_and_get(self):
-        cache = CompletionCache()
-        result = CompletionResult(
-            text="hi", model="m", prompt_tokens=1, completion_tokens=1,
-            latency_ms=10, provider="p",
-        )
-        key = cache.make_key("hello", model="m", max_tokens=10, temperature=0.5)
-        assert await cache.get(key) is None
-        await cache.set(key, result)
-        got = await cache.get(key)
-        assert got is result
-
-    async def test_key_includes_all_params(self):
-        cache = CompletionCache()
-        k1 = cache.make_key("p", model="m", max_tokens=10, temperature=0.5)
-        k2 = cache.make_key("p", model="m", max_tokens=20, temperature=0.5)
-        k3 = cache.make_key("p", model="m", max_tokens=10, temperature=0.7)
-        k4 = cache.make_key("p", model="m", max_tokens=10, temperature=0.5, system="sys")
-        assert len({k1, k2, k3, k4}) == 4
-
-    async def test_lru_eviction(self):
-        cache = CompletionCache(max_size=2)
-        r1 = CompletionResult(text="1", model="m", prompt_tokens=1, completion_tokens=1, latency_ms=1, provider="p")
-        r2 = CompletionResult(text="2", model="m", prompt_tokens=1, completion_tokens=1, latency_ms=1, provider="p")
-        r3 = CompletionResult(text="3", model="m", prompt_tokens=1, completion_tokens=1, latency_ms=1, provider="p")
-        await cache.set("k1", r1)
-        await cache.set("k2", r2)
-        await cache.set("k3", r3)
-        assert await cache.get("k1") is None  # 被淘汰
-        assert await cache.get("k2") is r2
-        assert await cache.get("k3") is r3
-
-    async def test_ttl_expiry(self):
-        cache = CompletionCache(ttl_seconds=0.05)
-        r = CompletionResult(text="x", model="m", prompt_tokens=1, completion_tokens=1, latency_ms=1, provider="p")
-        await cache.set("k", r)
-        assert await cache.get("k") is r
-        await asyncio.sleep(0.1)
-        assert await cache.get("k") is None
-
-    async def test_clear(self):
-        cache = CompletionCache()
-        r = CompletionResult(text="x", model="m", prompt_tokens=1, completion_tokens=1, latency_ms=1, provider="p")
-        await cache.set("k", r)
-        await cache.clear()
-        assert await cache.get("k") is None
-
 
 # ---------------------------------------------------------------------------
 # 重试
@@ -477,34 +424,6 @@ class TestRouter:
 # ---------------------------------------------------------------------------
 # Prompt Caching helpers
 # ---------------------------------------------------------------------------
-
-
-class TestPromptCaching:
-    def test_cached_block_to_anthropic(self):
-        block = CachedBlock(text="hello", cache_type="ephemeral")
-        payload = block.to_anthropic()
-        assert payload == {
-            "type": "text",
-            "text": "hello",
-            "cache_control": {"type": "ephemeral"},
-        }
-
-    def test_cached_messages_build_with_system(self):
-        msgs = CachedMessages(system="persona")
-        msgs.add_user("hi", cache=True)
-        sys_payload, messages = msgs.build()
-        assert sys_payload[0]["cache_control"] == {"type": "ephemeral"}
-        assert messages[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
-
-    def test_cached_messages_no_system_cache(self):
-        msgs = CachedMessages(system="x", system_cache=False)
-        msgs.add_user("hi")
-        sys_payload, _ = msgs.build()
-        assert sys_payload == "x"
-
-    def test_openai_cache_threshold(self):
-        assert openai_prompt_caching_enabled("a" * 1024) is True
-        assert openai_prompt_caching_enabled("short") is False
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api-client';
-import type { Device, DeviceRegisterRequest } from '@/types/api';
+import type { Device, DevicePairResponse, DeviceRegisterRequest } from '@/types/api';
 
 export function useDevices(params?: {
   status?: string;
@@ -39,15 +39,11 @@ export interface DeviceUpdateBody {
   tags?: string[];
 }
 
-export function useUpdateDevice() {
-  const qc = useQueryClient();
+/** 重新签发配对码：旧码过期/丢失时为已注册设备补发新码（10 分钟有效） */
+export function useIssuePairCode() {
   return useMutation({
-    mutationFn: ({ id, body }: { id: string; body: DeviceUpdateBody }) =>
-      apiClient.patch<Device>(`/devices/${id}`, body),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['devices'] });
-      qc.invalidateQueries({ queryKey: ['device'] });
-    },
+    mutationFn: (id: string) =>
+      apiClient.post<DevicePairResponse>(`/devices/${id}/issue_pair`),
   });
 }
 

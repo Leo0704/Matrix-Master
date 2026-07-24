@@ -28,7 +28,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/use-toast';
-import type { Note, NoteStatus } from '@/types/api';
+import type { Account, Note, NoteStatus } from '@/types/api';
 
 const STATUSES: { value: NoteStatus | 'all'; label: string }[] = [
   { value: 'all', label: '全部' },
@@ -42,6 +42,7 @@ const STATUSES: { value: NoteStatus | 'all'; label: string }[] = [
 function NoteForm({
   initial,
   defaultAccountId,
+  accounts,
   onSubmit,
   onCancel,
   submitting,
@@ -49,6 +50,8 @@ function NoteForm({
   initial?: Note;
   /** v0.7 Phase 5：草稿可能 account_id 为空；空串表示未绑账号 */
   defaultAccountId: string | null | undefined;
+  /** 新建时所属账号下拉选项（GET /accounts） */
+  accounts: Account[];
   onSubmit: (body: NoteCreateBody | NoteUpdateBody) => Promise<void>;
   onCancel?: () => void;
   submitting?: boolean;
@@ -81,8 +84,21 @@ function NoteForm({
       {!initial && (
         <div className="space-y-1">
           <Label htmlFor="note-account">所属账号</Label>
-          <Input id="note-account" value={accountId} onChange={(e) => setAccountId(e.target.value)} />
-          <p className="text-xs text-muted-foreground">填账号 UUID；后续可在账号页选</p>
+          <select
+            id="note-account"
+            className="w-full rounded-md border bg-background px-3 py-1.5 text-sm"
+            value={accountId}
+            onChange={(e) => setAccountId(e.target.value)}
+          >
+            <option value="" disabled>
+              选择账号
+            </option>
+            {accounts.map((a) => (
+              <option key={a.id} value={a.id}>
+                @{a.handle}
+              </option>
+            ))}
+          </select>
         </div>
       )}
       <div className="space-y-1">
@@ -139,7 +155,8 @@ export function Notes() {
   const [editing, setEditing] = useState<Note | null>(null);
 
   const items = data?.items ?? [];
-  const defaultAccountId = accountsQ.data?.items?.[0]?.id;
+  const accounts = accountsQ.data?.items ?? [];
+  const defaultAccountId = accounts[0]?.id;
 
   async function handleCreate(body: NoteCreateBody | NoteUpdateBody) {
     try {
@@ -187,10 +204,11 @@ export function Notes() {
             <DialogContent className="max-w-xl">
               <DialogHeader>
                 <DialogTitle>新建笔记</DialogTitle>
-                <DialogDescription>手动写一条笔记。AI run 也会自动创建。</DialogDescription>
+                <DialogDescription>手动写一条笔记。人工智能运行也会自动创建。</DialogDescription>
               </DialogHeader>
               <NoteForm
                 defaultAccountId={defaultAccountId}
+                accounts={accounts}
                 onSubmit={handleCreate}
                 onCancel={() => setOpen(false)}
                 submitting={createMut.isPending}
@@ -211,13 +229,18 @@ export function Notes() {
         <TabsContent value={status} className="space-y-4">
           {error && <ErrorState error={error} onRetry={() => refetch()} />}
           {!isLoading && items.length === 0 && (
-            <EmptyState title="无笔记" description="目标创建后 AI 会自动生成笔记" />
+            <EmptyState title="无笔记" description="目标创建后人工智能会自动生成笔记" />
           )}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
             {isLoading
               ? Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-40 w-full" />)
               : items.map((n) => (
-                  <NoteCard key={n.id} note={n} onDelete={() => handleDelete(n)} />
+                  <NoteCard
+                    key={n.id}
+                    note={n}
+                    onEdit={() => setEditing(n)}
+                    onDelete={() => handleDelete(n)}
+                  />
                 ))}
           </div>
         </TabsContent>
@@ -227,12 +250,13 @@ export function Notes() {
         <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>编辑笔记</DialogTitle>
-            <DialogDescription>状态改为 published 时自动写 published_at。</DialogDescription>
+            <DialogDescription>状态改为「已发布」时自动记录发布时间。</DialogDescription>
           </DialogHeader>
           {editing && (
             <NoteForm
               initial={editing}
               defaultAccountId={editing.account_id}
+              accounts={accounts}
               onSubmit={handleUpdate}
               onCancel={() => setEditing(null)}
               submitting={updateMut.isPending}

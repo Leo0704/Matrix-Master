@@ -595,3 +595,47 @@ class TestSummarizeGoalToKb:
                     )
         call = instance.create_document.call_args
         assert call.kwargs["is_published"] is False
+
+
+# ---------------------------------------------------------------------------
+# learning_prompt.fetch_relevant_learnings 业务隔离（W5）
+# ---------------------------------------------------------------------------
+
+
+class TestFetchRelevantLearningsBusinessScope:
+    async def test_business_id_filter_in_stmt(self):
+        """传 business_id：SQL 带 (business_id = X OR IS NULL) 过滤。"""
+        captured: list = []
+        session = MagicMock()
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = []
+
+        async def _exec(stmt):
+            captured.append(stmt)
+            return result
+
+        session.execute = _exec
+        bid = uuid.uuid4()
+        await fetch_relevant_learnings(session, "夏季", business_id=bid)
+        assert captured
+        sql = str(captured[0])
+        assert "business_id" in sql
+        assert "IS NULL" in sql
+
+    async def test_no_business_id_no_filter(self):
+        """不传 business_id：保持老行为，SQL 不含业务过滤。"""
+        captured: list = []
+        session = MagicMock()
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = []
+
+        async def _exec(stmt):
+            captured.append(stmt)
+            return result
+
+        session.execute = _exec
+        await fetch_relevant_learnings(session, "夏季")
+        assert captured
+        # SELECT 列清单里本来就有 kb_documents.business_id 列，
+        # 判负要看绑定参数（过滤条件才会产生 :business_id 占位）
+        assert ":business_id" not in str(captured[0])

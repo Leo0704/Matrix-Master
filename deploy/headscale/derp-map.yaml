@@ -1,0 +1,17 @@
+# 自定义 DERP 地图：让客户端用纯 HTTP（InsecureForTests）连内嵌 DERP。
+# 背景：headscale 0.23 内嵌 DERP 节点默认 InsecureForTests=false，
+# 客户端会对纯 HTTP 的 8080 发起 TLS 握手而失败（E2E 实测报错
+# "tls: first record does not look like a TLS handshake"）。
+regions:
+  999:
+    regionid: 999
+    regioncode: local
+    regionname: local-embedded
+    nodes:
+      - name: 999
+        regionid: 999
+        hostname: 127.0.0.1
+        ipv4: 127.0.0.1
+        stunport: 3478
+        derpport: 8443
+        insecurefortests: true

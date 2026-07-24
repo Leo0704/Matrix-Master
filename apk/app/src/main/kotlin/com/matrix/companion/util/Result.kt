@@ -25,8 +25,3 @@ enum class ErrorCode {
     UNAUTHORIZED,
     REPLAY_DETECTED,
 }
-
-inline fun <T, R> ApiResult<T>.map(transform: (T) -> R): ApiResult<R> = when (this) {
-    is ApiResult.Ok -> ApiResult.Ok(transform(value))
-    is ApiResult.Err -> this
-}

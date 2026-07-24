@@ -28,17 +28,3 @@ export interface AccountUpdateBody {
   persona_id?: string;
   device_id?: string;
 }
-
-export function useUpdateAccount() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, body }: { id: string; body: AccountUpdateBody }) =>
-      apiClient.patch<Account>(`/accounts/${id}`, body),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['accounts'] });
-      qc.invalidateQueries({ queryKey: ['account'] });
-      qc.invalidateQueries({ queryKey: ['devices'] });
-      qc.invalidateQueries({ queryKey: ['account-content-stats'] });
-    },
-  });
-}

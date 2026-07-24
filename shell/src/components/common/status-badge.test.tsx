@@ -5,7 +5,7 @@ import { StatusBadge } from './status-badge';
 describe('StatusBadge', () => {
   it('renders the humanized status by default', () => {
     render(<StatusBadge status="tailscale_degraded" />);
-    expect(screen.getByText('Tailscale Degraded')).toBeInTheDocument();
+    expect(screen.getByText('网络降级')).toBeInTheDocument();
   });
 
   it('renders the explicit label when provided', () => {

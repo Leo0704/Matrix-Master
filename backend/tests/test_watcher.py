@@ -19,7 +19,65 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from matrix.agent.watcher import (
     AgentRunWatchdog,
     WatchdogConfig,
+    _is_schedule_exempt,
 )
+
+
+# ---------------------------------------------------------------------------
+# 排期豁免：sleep 等 scheduled_at 的 run 不算卡死（修 watchdog 误杀）
+# ---------------------------------------------------------------------------
+
+
+class TestScheduleExempt:
+    def test_future_scheduled_at_exempts(self):
+        now = datetime.now(timezone.utc)
+        payload = {
+            "preassigned_slot": {
+                "scheduled_at": (now + timedelta(hours=3)).isoformat()
+            }
+        }
+        assert _is_schedule_exempt(payload, now) is True
+
+    def test_past_scheduled_at_beyond_grace_not_exempt(self):
+        now = datetime.now(timezone.utc)
+        payload = {
+            "preassigned_slot": {
+                "scheduled_at": (now - timedelta(hours=1)).isoformat()
+            }
+        }
+        assert _is_schedule_exempt(payload, now) is False
+
+    def test_past_scheduled_at_within_grace_still_exempt(self):
+        now = datetime.now(timezone.utc)
+        payload = {
+            "preassigned_slot": {
+                "scheduled_at": (now - timedelta(minutes=5)).isoformat()
+            }
+        }
+        assert _is_schedule_exempt(payload, now) is True
+
+    def test_z_suffix_parsed(self):
+        now = datetime.now(timezone.utc)
+        payload = {
+            "preassigned_slot": {
+                "scheduled_at": (now + timedelta(hours=2))
+                .isoformat()
+                .replace("+00:00", "Z")
+            }
+        }
+        assert _is_schedule_exempt(payload, now) is True
+
+    def test_missing_or_bad_payload_not_exempt(self):
+        now = datetime.now(timezone.utc)
+        assert _is_schedule_exempt(None, now) is False
+        assert _is_schedule_exempt({}, now) is False
+        assert _is_schedule_exempt({"preassigned_slot": {}}, now) is False
+        assert (
+            _is_schedule_exempt(
+                {"preassigned_slot": {"scheduled_at": "not-a-datetime"}}, now
+            )
+            is False
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +349,82 @@ class TestAgentRunScannerDBIntegration:
         assert run_stale_cp.id in stuck_ids
         assert run_no_cp.id in stuck_ids
         assert run_young.id not in stuck_ids
+
+    @pytest.mark.asyncio
+    async def test_find_stuck_exempts_run_waiting_for_schedule(
+        self, engine, _session_factory
+    ):
+        """修看门狗误杀：checkpoint 停更但 preassigned_slot.scheduled_at 在未来
+        （publish_node 合法 sleep 等错峰发布，最长约 5h）→ 不判 stuck。"""
+        from matrix.agent.watcher import AgentRunScanner
+        from matrix.db.models import AgentCheckpoint, AgentRun, Business
+
+        now = datetime.now(timezone.utc)
+        threshold = 600
+        cutoff = now - timedelta(seconds=threshold)
+
+        scanner = AgentRunScanner(_session_factory)
+
+        async with _session_factory() as session:
+            business = Business(
+                name="测试业务",
+                slug=f"test-{uuid4().hex[:8]}",
+                status="active",
+            )
+            session.add(business)
+            await session.flush()
+
+            # 场景 1：stale checkpoint + scheduled_at 在未来 → 豁免
+            run_waiting = AgentRun(
+                status="running",
+                business_id=business.id,
+                started_at=now - timedelta(hours=2),
+                payload={
+                    "preassigned_slot": {
+                        "scheduled_at": (now + timedelta(hours=3)).isoformat()
+                    }
+                },
+            )
+            session.add(run_waiting)
+            await session.flush()
+            session.add(
+                AgentCheckpoint(
+                    run_id=run_waiting.id,
+                    ts=cutoff - timedelta(seconds=60),  # checkpoint 已超阈值
+                    from_state="IDLE",
+                    to_state="PUBLISH",
+                )
+            )
+
+            # 场景 2：stale checkpoint + scheduled_at 已过（宽限外）→ 仍判 stuck
+            run_overdue = AgentRun(
+                status="running",
+                business_id=business.id,
+                started_at=now - timedelta(hours=6),
+                payload={
+                    "preassigned_slot": {
+                        "scheduled_at": (now - timedelta(hours=2)).isoformat()
+                    }
+                },
+            )
+            session.add(run_overdue)
+            await session.flush()
+            session.add(
+                AgentCheckpoint(
+                    run_id=run_overdue.id,
+                    ts=cutoff - timedelta(seconds=60),
+                    from_state="IDLE",
+                    to_state="PUBLISH",
+                )
+            )
+
+            await session.commit()
+
+        stuck = await scanner.find_stuck_runs(now, threshold)
+        stuck_ids = set(stuck)
+
+        assert run_waiting.id not in stuck_ids
+        assert run_overdue.id in stuck_ids
 
     @pytest.mark.asyncio
     async def test_mark_timeout_updates_status_and_ended_at(

@@ -1,5 +1,6 @@
 package com.matrix.companion.xhs
 
+import com.matrix.companion.accessibility.AccessibilityDriver
 import com.matrix.companion.accessibility.ActionExecutor
 import com.matrix.companion.util.ApiResult
 import com.matrix.companion.util.ErrorCode
@@ -30,6 +31,7 @@ import com.matrix.companion.util.Logx
 class XhsInteractor(
     private val actions: ActionExecutor,
     private val noteOpener: XhsNoteOpener,
+    private val driver: AccessibilityDriver,
 ) {
 
     enum class Action { LIKE, COMMENT, FOLLOW, COLLECT, SHARE }
@@ -73,17 +75,15 @@ class XhsInteractor(
     }
 
     private suspend fun doLike(): ApiResult<Unit> {
-        // Idempotency-lite: detect "已点赞" state via the like button's
-        // selected state. We don't currently have a reliable accessor
-        // for AccessibilityNodeInfo.isSelected across XHS versions, so
-        // we just tap and rely on the master scheduler for rate control.
-        val r = actions.tap(XhsSelectors.BTN_LIKE)
+        // 详情页无障碍树对本服务不可见（实测），选择器找不到点赞按钮；
+        // 底部操作栏位置在 1080x2400 上固定，直接按坐标点。
+        val r = driver.tap(DETAIL_LIKE_X, DETAIL_ACTION_BAR_Y)
         if (r is ApiResult.Ok) Jitter.sleep(400L)
         return r
     }
 
     private suspend fun doCollect(): ApiResult<Unit> {
-        val r = actions.tap(XhsSelectors.BTN_COLLECT)
+        val r = driver.tap(DETAIL_COLLECT_X, DETAIL_ACTION_BAR_Y)
         if (r is ApiResult.Ok) Jitter.sleep(400L)
         return r
     }
@@ -95,11 +95,14 @@ class XhsInteractor(
                 "comment requires content",
                 retryable = false,
             )
-        when (val r = actions.tap(XhsSelectors.EDIT_COMMENT)) {
+        // 1) 点详情页评论图标（坐标）→ 评论输入页（该页界面树可见）
+        when (val r = driver.tap(DETAIL_COMMENT_X, DETAIL_ACTION_BAR_Y)) {
             is ApiResult.Err -> return r
             is ApiResult.Ok -> Unit
         }
-        Jitter.sleep(400L)
+        Jitter.sleep(1_200L)
+        // 2) 评论页打开时输入框自带焦点，直接输入即可；
+        //    输入框提示语挂在 hint 上，Text 选择器匹配不到（实测）。
         when (val r = actions.input(txt)) {
             is ApiResult.Err -> return r
             is ApiResult.Ok -> Unit
@@ -120,10 +123,23 @@ class XhsInteractor(
                 retryable = false,
             )
         }
-        return actions.tap(XhsSelectors.BTN_FOLLOW)
+        // 详情页作者行右侧的「关注」按钮（无障碍树不可见，1080x2400 实测坐标）
+        return driver.tap(DETAIL_FOLLOW_X, DETAIL_FOLLOW_Y)
     }
 
     /** Actions that MUST have a navigation target to be safe. */
     private val Action.requiresNavigation: Boolean
         get() = this == Action.LIKE || this == Action.COLLECT || this == Action.COMMENT
+
+    companion object {
+        // 详情页底部操作栏（1080x2400 实测）：点赞/收藏/评论三个图标的中心坐标
+        private const val DETAIL_LIKE_X = 525
+        private const val DETAIL_COLLECT_X = 741
+        private const val DETAIL_COMMENT_X = 957
+        private const val DETAIL_ACTION_BAR_Y = 2213
+
+        // 详情页顶部作者行的「关注」按钮中心（1080x2400 实测）
+        private const val DETAIL_FOLLOW_X = 804
+        private const val DETAIL_FOLLOW_Y = 194
+    }
 }

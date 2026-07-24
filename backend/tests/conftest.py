@@ -23,7 +23,6 @@ from matrix.db.models import (
     Goal as GoalORM,
     KbDocument as KbDocumentORM,
     Note as NoteORM,
-    Persona as PersonaORM,
 )
 
 
@@ -98,7 +97,7 @@ async def account_fixture(session: AsyncSession, default_business: BusinessORM):
         business_id: Optional[uuid.UUID] = None,
     ) -> AccountORM:
         # 简化：不强求 persona/device FK（测试场景按需补）
-        from matrix.db.models import Device, Persona
+        from matrix.db.models import Device
 
         dev = DeviceORM(
             nickname=f"dev-{uuid.uuid4().hex[:6]}",
@@ -107,18 +106,9 @@ async def account_fixture(session: AsyncSession, default_business: BusinessORM):
         )
         session.add(dev)
         await session.flush()
-        per = PersonaORM(
-            name=f"per-{uuid.uuid4().hex[:6]}",
-            tone="tone",
-            style_guide="sg",
-            business_id=business_id or default_business.id,
-        )
-        session.add(per)
-        await session.flush()
         acct = AccountORM(
             handle=handle,
             device_id=dev.id,
-            persona_id=per.id,
             business_id=business_id or default_business.id,
             status="pending",
             risk_score=0,

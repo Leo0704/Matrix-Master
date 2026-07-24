@@ -103,3 +103,28 @@ def test_logs_route_truncates_oversize_batch(tmp_path: Path):
     resp = client.post("/api/v1/logs", json=oversized)
     assert resp.status_code == 202
     assert resp.json()["received"] == 200  # _MAX_BATCH = 200
+
+
+def test_logs_route_mounted_without_console_auth(tmp_path: Path, monkeypatch):
+    """logs 路由按设计意图不挂控制台 Bearer 鉴权（APK 无 token，
+    靠 Tailscale 网络层隔离）——真实 app 里不带 Authorization 也得 202。
+
+    显式设 MATRIX_API_SECRET 让控制台鉴权真正生效，否则鉴权是放行态、
+    测不出 logs 是否挂在鉴权组里；用 GET /devices 401 做对照。
+    """
+    configure_logging(log_dir=tmp_path, level="INFO", console=False)
+    from matrix.api.app import create_app
+
+    monkeypatch.setenv("MATRIX_API_SECRET", "test-secret")
+    app = create_app(
+        database_url="sqlite+aiosqlite:///:memory:",
+        enable_monitoring_middleware=False,
+    )
+    # 不用 `with TestClient(...)`：context manager 会跑 lifespan startup，
+    # ensure_api_secret 会把生成的 secret 写进进程级 os.environ，
+    # 污染后面所有 create_app 集成测试（notifications 等会集体 401）。
+    client = TestClient(app)
+    # 对照：控制台路由无 token 必须 401（证明鉴权确实生效中）
+    assert client.get("/api/v1/devices").status_code == 401
+    resp = client.post("/api/v1/logs", json={"lines": []})
+    assert resp.status_code == 202

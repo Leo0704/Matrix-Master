@@ -17,7 +17,7 @@ export function DeviceCard({ device }: { device: Device }) {
               {device.nickname}
             </Link>
           </CardTitle>
-          <p className="text-xs text-muted-foreground">{device.model ?? '—'} · Android {device.android_version ?? '—'}</p>
+          <p className="text-xs text-muted-foreground">{device.model ?? '—'} · 安卓 {device.android_version ?? '—'}</p>
         </div>
         <StatusBadge status={device.status} />
       </CardHeader>
@@ -30,6 +30,11 @@ export function DeviceCard({ device }: { device: Device }) {
           <Activity className="h-3.5 w-3.5" />
           <span className="text-xs">心跳 {formatRelative(device.last_heartbeat)}</span>
         </div>
+        {device.business_name && (
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <span className="text-xs">业务：{device.business_name}</span>
+          </div>
+        )}
         {device.tags && device.tags.length > 0 && (
           <div className="flex flex-wrap gap-1">
             {device.tags.map((t) => (
@@ -53,7 +58,7 @@ export function DeviceCard({ device }: { device: Device }) {
           </span>
           <span className="flex items-center gap-1">
             <Battery className="h-3 w-3" />
-            APK v{device.apk_version ?? '—'}
+            客户端 v{device.apk_version ?? '—'}
           </span>
         </div>
         {/* 退役按钮：设备永久下线，清账号绑定 + 撤销密钥 */}

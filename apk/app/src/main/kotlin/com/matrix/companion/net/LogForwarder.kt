@@ -62,6 +62,7 @@ object LogForwarder {
 
     @Volatile private var deviceId: String = "unknown"
     @Volatile private var appVersion: String = BuildConfig.VERSION_NAME
+    @Volatile private var appContext: Context? = null
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
@@ -82,6 +83,7 @@ object LogForwarder {
      */
     @Synchronized
     fun install(context: Context) {
+        appContext = context.applicationContext
         // Capture identity from prefs so we don't re-read on every flush.
         // Use DeviceRegistrar so a fresh UUID is generated on first boot
         // (otherwise we'd ship logs tagged "unknown" until the user pairs).
@@ -124,7 +126,9 @@ object LogForwarder {
             lines = snapshot,
         )
 
-        val url = "${DeviceRegistrar.MASTER_DEFAULT}/api/v1/logs"
+        // 主控地址走运行时 MasterConfig（与其他组件一致），编译期常量只做兜底。
+        val masterUrl = appContext?.let { MasterConfig.get(it) } ?: DeviceRegistrar.MASTER_DEFAULT
+        val url = "$masterUrl/api/v1/logs"
         if (!postOnce(url, batch)) {
             // One retry before dropping.
             delay(1_000)

@@ -66,6 +66,23 @@ def _fake_client(responses: list[_FakeResponse]) -> httpx.AsyncClient:
 
 
 @pytest.mark.asyncio
+async def test_unregistered_code_does_not_write_db():
+    """未注册的 code 宁可不发，也不把 {code}/{payload} 这种程序员内容丢给用户。"""
+    factory, session = _make_session_factory()
+    reader = _make_config_reader(None)
+    client = _fake_client([])
+    notifier = WebhookNotifier(
+        session_factory=factory, config_reader=reader, http_client=client
+    )
+
+    await notifier("NOT_A_REAL_CODE", {"foo": "bar"})
+
+    # DB 不写、webhook 不发
+    assert session.execute.await_count == 0
+    assert client.post.await_count == 0
+
+
+@pytest.mark.asyncio
 async def test_writes_notification_even_when_webhook_url_missing():
     factory, session = _make_session_factory()
     reader = _make_config_reader(None)  # 没配 webhook

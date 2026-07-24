@@ -1,4 +1,4 @@
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, StopCircle } from 'lucide-react';
 import { useAgentRun, useCancelAgentRun } from '@/hooks/use-agent-runs';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -25,16 +25,16 @@ const STATE_ORDER = [
 
 export function AgentRunDetail() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const { data, isLoading, error, refetch } = useAgentRun(id);
   const cancel = useCancelAgentRun();
 
   return (
     <div className="space-y-4">
-      <Button variant="ghost" size="sm" asChild className="-ml-2">
-        <Link to="/agent-runs">
-          <ArrowLeft className="mr-1 h-4 w-4" />
-          返回运行列表
-        </Link>
+      {/* 没有独立的运行列表页（/agent-runs 路由不存在），返回上一页 */}
+      <Button variant="ghost" size="sm" className="-ml-2" onClick={() => navigate(-1)}>
+        <ArrowLeft className="mr-1 h-4 w-4" />
+        返回
       </Button>
 
       {isLoading && <LoadingBlock />}
@@ -111,6 +111,28 @@ export function AgentRunDetail() {
               </div>
             </CardContent>
           </Card>
+
+          {data.last_error_snapshot && (
+            <Card className="border-destructive/40">
+              <CardHeader>
+                <CardTitle className="text-base text-destructive">错误信息</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">错误码</span>
+                  <span className="font-mono">
+                    {String(data.last_error_snapshot.code ?? '未知错误')}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">描述</span>
+                  <p className="mt-1 whitespace-pre-wrap">
+                    {String(data.last_error_snapshot.message ?? '无详细描述')}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </>
       )}
     </div>

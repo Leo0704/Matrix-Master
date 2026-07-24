@@ -36,20 +36,23 @@ async def research_node(state: AgentState) -> dict[str, Any]:
     rules_chunks: list = []
     brand_chunks: list = []
     persona_chunks: list = []
+    # 业务隔离：只检索本业务 + 全局共享（NULL）的 KB 文档
+    _biz = state.get("business_id")
+    business_id = str(_biz) if _biz else None
     try:
         from ..protocols import RetrieveQuery
 
         history_chunks = await services.kb_retriever.retrieve(
-            RetrieveQuery(query=query_text, doc_types=("history",), top_k=5)
+            RetrieveQuery(query=query_text, doc_types=("history",), top_k=5, business_id=business_id)
         )
         rules_chunks = await services.kb_retriever.retrieve(
-            RetrieveQuery(query=query_text, doc_types=("rule",), top_k=3)
+            RetrieveQuery(query=query_text, doc_types=("rule",), top_k=3, business_id=business_id)
         )
         brand_chunks = await services.kb_retriever.retrieve(
-            RetrieveQuery(query=query_text, doc_types=("brand",), top_k=2)
+            RetrieveQuery(query=query_text, doc_types=("brand",), top_k=2, business_id=business_id)
         )
         persona_chunks = await services.kb_retriever.retrieve(
-            RetrieveQuery(query=query_text, doc_types=("persona",), top_k=2)
+            RetrieveQuery(query=query_text, doc_types=("persona",), top_k=2, business_id=business_id)
         )
     except Exception as exc:  # KB 检索失败 → 留 candidates 空，转 ALERT
         logger.exception("research.kb_retrieve failed")

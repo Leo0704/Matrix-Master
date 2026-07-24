@@ -11,11 +11,12 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from matrix.api.deps import get_db
 from matrix.api.schemas import (
+    AlertDeleteResponse,
     AlertItem,
     AlertListResponse,
     AlertResolveRequest,
@@ -113,6 +114,8 @@ async def scan_alerts(
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
     device_payloads = []
+    # 设备/账号 → 业务 映射，写告警时回填 alerts.business_id（修加了列从不写）
+    subject_business: dict[str, uuid.UUID | None] = {}
     for d in devs:
         age = 0.0
         if d.last_heartbeat:
@@ -123,6 +126,7 @@ async def scan_alerts(
         device_payloads.append(
             {"device_id": str(d.id), "last_heartbeat_age_sec": age}
         )
+        subject_business[str(d.id)] = d.business_id
     for a in check_device_offline(device_payloads, heartbeat_threshold_sec=300):
         if (a.code, a.subject_id) not in existing:
             new_alerts.append(a)
@@ -139,6 +143,8 @@ async def scan_alerts(
         {"account_id": str(a.id), "risk_score": float(a.risk_score or 0)}
         for a in accts
     ]
+    for a in accts:
+        subject_business[str(a.id)] = a.business_id
     for a in check_risk_blocked(acct_payloads, risk_threshold=0.7):
         if (a.code, a.subject_id) not in existing:
             new_alerts.append(a)
@@ -154,6 +160,8 @@ async def scan_alerts(
             message=a.message,
             subject_id=a.subject_id,
             resolved=False,
+            # 按设备/账号推导业务归属（subject_id 即 device_id / account_id）
+            business_id=subject_business.get(a.subject_id or ""),
         )
         session.add(row)
         await session.flush()
@@ -181,3 +189,30 @@ async def resolve_alert(
         "alerts.resolve", alert_id=alert_id, resolver=body.resolver
     )
     return AlertResolveResponse(id=a.id, resolved=True)
+
+
+@router.delete("/{alert_id}", response_model=AlertDeleteResponse)
+async def delete_alert(
+    alert_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+) -> AlertDeleteResponse:
+    """删除单条告警。"""
+    stmt = delete(AlertORM).where(AlertORM.id == alert_id)
+    result = await session.execute(stmt)
+    await session.commit()
+    deleted = int(result.rowcount or 0)
+    logger.info("alerts.delete", alert_id=str(alert_id), deleted=deleted)
+    return AlertDeleteResponse(deleted=deleted)
+
+
+@router.post("/clear-resolved", response_model=AlertDeleteResponse)
+async def clear_resolved_alerts(
+    session: AsyncSession = Depends(get_db),
+) -> AlertDeleteResponse:
+    """一键清空所有已处理告警。"""
+    stmt = delete(AlertORM).where(AlertORM.resolved == True)  # noqa: E712
+    result = await session.execute(stmt)
+    await session.commit()
+    deleted = int(result.rowcount or 0)
+    logger.info("alerts.clear_resolved", deleted=deleted)
+    return AlertDeleteResponse(deleted=deleted)

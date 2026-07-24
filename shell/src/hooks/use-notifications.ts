@@ -37,5 +37,23 @@ export function useMarkRead() {
   });
 }
 
+export function useDeleteNotification() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiClient.delete<{ deleted: number }>(`/notifications/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['notifications'] }),
+  });
+}
+
+export function useClearReadNotifications() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiClient.post<{ deleted: number }>('/notifications/clear-read'),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['notifications'] }),
+  });
+}
+
 /** 兼容旧名导出，避免别处已经引用 NotificationItem 类型——实际类型从 @/types/api 走 */
 export type { NotificationItem };

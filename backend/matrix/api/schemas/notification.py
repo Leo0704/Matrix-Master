@@ -29,6 +29,10 @@ class NotificationItem(BaseModel):
     read_at: Optional[datetime] = None
     created_at: datetime
     business_id: Optional[uuid.UUID] = None  # v0.7+ 业务归属（015/017 加列）
+    # v0.7+ 消息可读化：关联实体的名称，减少前端二次查询
+    goal_name: Optional[str] = None
+    note_title: Optional[str] = None
+    device_name: Optional[str] = None
 
 
 class NotificationListResponse(BaseModel):
@@ -40,10 +44,16 @@ class NotificationMarkReadRequest(BaseModel):
     """ids 为 None 表示把所有未读一次性全部标已读。"""
 
     ids: Optional[list[uuid.UUID]] = None
+    # 业务约束（可选）：传了就只动本业务的通知（W5 业务隔离）
+    business_id: Optional[uuid.UUID] = None
 
 
 class NotificationMarkReadResponse(BaseModel):
     marked: int
+
+
+class NotificationDeleteResponse(BaseModel):
+    deleted: int
 
 
 __all__ = [

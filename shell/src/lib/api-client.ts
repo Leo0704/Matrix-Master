@@ -7,6 +7,12 @@ import type { ErrorBody, ErrorResponse } from '@/types/api';
 export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ??
   'http://localhost:8666/api/v1';
 
+/**
+ * 控制台访问密码（= 后端 MATRIX_API_SECRET）在 localStorage 的存放 key。
+ * 后端未配置密码时永远不 401、前端无感；配置后首个 401 会被拦截到 /login。
+ */
+export const AUTH_TOKEN_KEY = 'matrix.api.token';
+
 export class ApiError extends Error {
   readonly code: string;
   readonly retryable: boolean;
@@ -43,22 +49,44 @@ export class ApiClient {
       headers: { 'Content-Type': 'application/json' },
     });
 
-    // Response interceptor: unwrap {ok, data} → data; throw on {ok: false}
-    this.http.interceptors.response.use((resp) => {
-      const body = resp.data;
-      // Pass through raw payloads (numbers, strings) and list envelopes
-      if (body && typeof body === 'object' && 'ok' in body) {
-        if (body.ok === false) {
-          const err = body as ErrorResponse;
-          throw new ApiError(err.error, resp.status);
-        }
-        if ('data' in body) {
-          // Some endpoints wrap under "data" — preserve items/top-level for compatibility
-          return { ...resp, data: body.data ?? body };
-        }
+    // Request interceptor: 带上控制台访问密码（Bearer token）
+    this.http.interceptors.request.use((config) => {
+      const token = localStorage.getItem(AUTH_TOKEN_KEY);
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
       }
-      return resp;
+      return config;
     });
+
+    // Response interceptor: unwrap {ok, data} → data; throw on {ok: false}
+    this.http.interceptors.response.use(
+      (resp) => {
+        const body = resp.data;
+        // Pass through raw payloads (numbers, strings) and list envelopes
+        if (body && typeof body === 'object' && 'ok' in body) {
+          if (body.ok === false) {
+            const err = body as ErrorResponse;
+            throw new ApiError(err.error, resp.status);
+          }
+          if ('data' in body) {
+            // Some endpoints wrap under "data" — preserve items/top-level for compatibility
+            return { ...resp, data: body.data ?? body };
+          }
+        }
+        return resp;
+      },
+      (error) => {
+        // 401 = 密码缺失/错误：清掉本地 token 并整页跳到登录页
+        // （整页跳顺带清空 SPA 内存状态；登录页探活失败时已在 /login，避免循环刷新）
+        if (error instanceof AxiosError && error.response?.status === 401) {
+          localStorage.removeItem(AUTH_TOKEN_KEY);
+          if (location.pathname !== '/login') {
+            location.assign('/login');
+          }
+        }
+        return Promise.reject(error);
+      },
+    );
   }
 
   get<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
