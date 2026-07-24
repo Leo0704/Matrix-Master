@@ -67,6 +67,24 @@ async def publish_node(state: AgentState) -> dict[str, Any]:
                     scheduled_at=scheduled_at.isoformat(),
                 )
                 await asyncio.sleep(wait_sec)
+                # 睡醒后先确认 run 没被判死：watchdog 可能已在 sleep 期间把 run
+                # 标成 timeout/cancelled，此时必须放弃发布，否则"已死 run 照样发笔记"
+                if not await _run_still_running(state.get("run_id")):
+                    logger.warning(
+                        "publish.abort_run_not_running",
+                        run_id=str(state.get("run_id")),
+                    )
+                    return {
+                        "publish_result": {
+                            "ok": False,
+                            "error_code": "RUN_NOT_RUNNING",
+                            "error_message": "run no longer running after schedule wait; abort publish",
+                        },
+                        "last_error": {
+                            "code": "RUN_NOT_RUNNING",
+                            "message": "run no longer running after schedule wait; abort publish",
+                        },
+                    }
         except (ValueError, TypeError) as exc:
             logger.warning(
                 "publish.scheduled_at_parse_failed",
@@ -136,6 +154,71 @@ async def _publish_direct(
     }
 
 
+async def _run_still_running(run_id: Any) -> bool:
+    """查 ``agent_runs.status`` 是否仍 running。
+
+    run_id 缺失 / 行不存在 / DB 异常时 fail-open 返回 True（保持旧行为，
+    不因一次查询失败挡住发布）；只有明确查到非 running 才放弃。
+    """
+    if run_id is None:
+        return True
+    try:
+        from matrix.db.models import AgentRun
+
+        session_factory = get_session_factory()
+        async with session_factory() as session:
+            run = await session.get(AgentRun, _as_uuid(run_id))
+            if run is None:
+                return True
+            return run.status == "running"
+    except Exception:
+        logger.exception("publish.run_status_check_failed", run_id=str(run_id))
+        return True
+
+
+async def _note_already_published(note_id: UUID) -> tuple[str | None, str | None] | None:
+    """幂等检查：note 已 published 且有 platform_note_id → 返回平台回执，否则 None。
+
+    DB 异常时返回 None（fail-open，走正常发布路径）。
+    """
+    try:
+        session_factory = get_session_factory()
+        async with session_factory() as session:
+            note = await session.get(Note, note_id)
+    except Exception:
+        logger.exception("publish.already_published_check_failed", note_id=str(note_id))
+        return None
+    if note is not None and note.status == "published" and note.platform_note_id:
+        return note.platform_note_id, note.platform_url
+    return None
+
+
+async def _find_open_publish_task(note_id: UUID) -> UUID | None:
+    """查该 note 是否已有 pending/running 的 device_publish task（重启复用，不重复发）。
+
+    DB 异常时返回 None（fail-open，按新建处理）。
+    """
+    from sqlalchemy import select
+
+    try:
+        session_factory = get_session_factory()
+        async with session_factory() as session:
+            stmt = (
+                select(Task.id)
+                .where(
+                    Task.action == "device_publish",
+                    Task.status.in_(("pending", "running")),
+                    Task.payload["note_id"].astext == str(note_id),
+                )
+                .order_by(Task.created_at.desc())
+                .limit(1)
+            )
+            return (await session.execute(stmt)).scalars().first()
+    except Exception:
+        logger.exception("publish.find_open_task_failed", note_id=str(note_id))
+        return None
+
+
 async def _publish_via_task_queue(
     state: AgentState, draft: dict, slot: dict, request_id: Any
 ) -> dict[str, Any]:
@@ -149,6 +232,21 @@ async def _publish_via_task_queue(
     account_id = _as_uuid(slot.get("account_id"))
     goal_id = state.get("goal_id")
 
+    # 幂等（重启/重复执行安全）：
+    # 1) 该 note 已发布成功且有平台回执 → 直接成功返回，不再发
+    if note_id is not None:
+        published = await _note_already_published(note_id)
+        if published is not None:
+            logger.info("publish.skip_already_published", note_id=str(note_id))
+            return {
+                "ok": True,
+                "platform_note_id": published[0],
+                "platform_url": published[1],
+                "error_code": None,
+                "error_message": None,
+                "note_id": str(note_id),
+            }
+
     # 复用 goal 维度的 publish plan。
     from ._ensure_publish_plan import ensure_publish_plan_id
 
@@ -156,36 +254,47 @@ async def _publish_via_task_queue(
     async with session_factory() as session:
         plan_id = await ensure_publish_plan_id(session, goal_id)
 
-    task_id = uuid.uuid4()
-    await task_writer(
-        {
-            "id": task_id,
-            "plan_id": plan_id,
-            "device_id": device_id,
-            "account_id": account_id,
-            "action": "device_publish",
-            "payload": {
-                "title": str(draft.get("title", "")),
-                "content": str(draft.get("content", "")),
-                "images": list(draft.get("images") or []),
-                "tags": list(draft.get("tags") or []),
-                "note_id": str(note_id) if note_id else None,
-                "goal_id": str(goal_id) if goal_id else None,
-                "run_id": str(state.get("run_id")) if state.get("run_id") else None,
-                "visibility": "public",
-            },
-            "request_id": str(request_id),
-            "scheduled_at": datetime.now(UTC) + timedelta(
-                seconds=random.uniform(0.0, PUBLISH_STAGGER_SECONDS)
-            ),
-        }
-    )
-    logger.info(
-        "publish.task_enqueued",
-        task_id=str(task_id),
-        device_id=str(device_id),
-        note_id=str(note_id) if note_id else None,
-    )
+    # 幂等 2)：已有该 note 的 pending/running device_publish task → 复用轮询，不新建
+    task_id: UUID | None = None
+    if note_id is not None:
+        task_id = await _find_open_publish_task(note_id)
+    if task_id is not None:
+        logger.info(
+            "publish.reuse_open_task",
+            task_id=str(task_id),
+            note_id=str(note_id),
+        )
+    else:
+        task_id = uuid.uuid4()
+        await task_writer(
+            {
+                "id": task_id,
+                "plan_id": plan_id,
+                "device_id": device_id,
+                "account_id": account_id,
+                "action": "device_publish",
+                "payload": {
+                    "title": str(draft.get("title", "")),
+                    "content": str(draft.get("content", "")),
+                    "images": list(draft.get("images") or []),
+                    "tags": list(draft.get("tags") or []),
+                    "note_id": str(note_id) if note_id else None,
+                    "goal_id": str(goal_id) if goal_id else None,
+                    "run_id": str(state.get("run_id")) if state.get("run_id") else None,
+                    "visibility": "public",
+                },
+                "request_id": str(request_id),
+                "scheduled_at": datetime.now(UTC) + timedelta(
+                    seconds=random.uniform(0.0, PUBLISH_STAGGER_SECONDS)
+                ),
+            }
+        )
+        logger.info(
+            "publish.task_enqueued",
+            task_id=str(task_id),
+            device_id=str(device_id),
+            note_id=str(note_id) if note_id else None,
+        )
 
     # 轮询 task 状态。
     deadline = asyncio.get_event_loop().time() + POLL_TIMEOUT_SECONDS

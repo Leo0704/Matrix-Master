@@ -51,7 +51,7 @@ import java.util.UUID
  * 前台轮询服务：手机主动向后端拉任务并执行。
  *
  * v0.7 Phase 6：替代 HttpServer 成为主要生产路径，解决后端无法直连手机的问题。
- * 当前只实现 device_publish；collect/interact 后续补充。
+ * 后端 /tasks/next 只下发 device_publish；未知 action 以 UNKNOWN_ACTION 兜底上报。
  */
 class TaskPollerService : Service() {
 
@@ -154,7 +154,7 @@ class TaskPollerService : Service() {
 
         val (ok, platformNoteId, platformUrl, errorCode, errorMessage) = when (task.action) {
             "device_publish" -> executePublish(app, task.payload)
-            // TODO: collect / interact
+            // 后端 /tasks/next 只下发 device_publish；其他 action 走 UNKNOWN_ACTION 兜底。
             else -> {
                 Logx.w("TaskPoller.unknown_action: ${task.action}")
                 TaskResult(false, null, null, "UNKNOWN_ACTION", "unknown action ${task.action}")

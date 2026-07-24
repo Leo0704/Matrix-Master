@@ -55,7 +55,7 @@ class Heartbeat(
         val device_id: String,
         val tailscale_ip: String,
         val online: Boolean,
-        val app: String?,
+        val foreground_app: String?,
         val battery: Int,
         val network: String,
     )

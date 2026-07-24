@@ -5,6 +5,7 @@ import { humanizeStatus } from '@/lib/format';
 import { Card, CardContent } from '@/components/ui/card';
 import { LoadingSpinner } from '@/components/common/loading-spinner';
 import { PageHeader } from '@/components/common/page-header';
+import { useActiveBusinessId } from '@/stores/ui-store';
 import type { AccountContentStats } from '@/types/api';
 
 /**
@@ -12,11 +13,13 @@ import type { AccountContentStats } from '@/types/api';
  * 与"内容"页（notes 列表）不重复——这里只展示每个账号的聚合指标。
  */
 export function Data() {
+  const activeBusinessId = useActiveBusinessId();
   const { data, isLoading, error } = useQuery<{ items: AccountContentStats[] }>({
-    queryKey: ['account-content-stats'],
+    queryKey: ['account-content-stats', activeBusinessId],
     queryFn: () =>
       apiClient.get<{ items: AccountContentStats[] }>(
         '/analytics/account-content-stats',
+        { params: activeBusinessId ? { business_id: activeBusinessId } : undefined },
       ),
     refetchInterval: 15_000,
   });

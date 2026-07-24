@@ -1,27 +1,23 @@
-"""FastAPI middleware：HTTP 请求级指标 + trace context 注入。
+"""FastAPI middleware：请求日志上下文注入。
 
 提供：
-- ``MonitoringMiddleware``：每个请求记录 method/path/status/latency_ms，
-  并把 trace_id 写入 response header（便于客户端做关联）
+- ``MonitoringMiddleware``：每个请求把 method/path/trace_id 绑定到 structlog
+  context（让一次请求内的日志可关联），并把 trace_id 写入 response header
+  （便于客户端做关联）
 - 不依赖 ``matrix.api``（避免循环依赖）
 """
 
 from __future__ import annotations
 
 import re
-import time
 from typing import Awaitable, Callable
 
 from fastapi import FastAPI, Request, Response
-from opentelemetry import trace as otel_trace
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from matrix.monitoring.logging import bind_context, clear_context
-from matrix.monitoring.metrics import http_request_latency_seconds, http_requests_total
 
-# 用模板替换高基数 path（UUID 等），避免 Prometheus label 爆炸
-# 按资源类型保留不同的 label 维度（devices/{device_id}, accounts/{account_id} 等），
-# 这样 Prometheus 能按资源类型聚合，又不会因 UUID 基数爆炸。
+# 用模板替换高基数 path（UUID 等），避免日志里的 path/action 字段被 UUID 刷屏
 _UUID_RE = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 _PATH_TEMPLATE_RE = re.compile(r"/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 _PATH_NORMALIZERS: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -58,11 +54,11 @@ def _normalize_trace_id(raw: str | None) -> str:
 
 
 class MonitoringMiddleware(BaseHTTPMiddleware):
-    """记录 HTTP 请求的 method / path / status / latency_ms，并注入 trace context。
+    """把每个请求的 method / path / trace_id 绑定到 structlog context。
 
-    与 metrics 指标联动：
-    - ``matrix_http_requests_total{method,path,status}`` Counter
-    - ``matrix_http_request_latency_seconds{method,path}`` Histogram
+    trace_id 取自 ``X-Request-ID`` header（Web frontend / CLI 工具注入）；
+    客户端在调用前生成 32 位 hex（如 ``crypto.randomUUID()`` 转 32 hex）发此 header，
+    让同一次用户动作的日志能串联同一个 trace_id。
     """
 
     async def dispatch(
@@ -70,18 +66,7 @@ class MonitoringMiddleware(BaseHTTPMiddleware):
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
-        start = time.perf_counter()
-        # 提取 trace_id 作为日志关联 key。
-        # 优先 ``X-Request-ID`` header（Web frontend / CLI 工具注入），其次用 OTel 当前 span。
-        # 客户端在调用前生成 32 位 hex（如 ``crypto.randomUUID()`` 转 32 hex）发此 header，
-        # 让同一次用户动作的日志能串联同一个 trace_id。
         trace_id_hex = _normalize_trace_id(request.headers.get("x-request-id"))
-        if not trace_id_hex:
-            span = otel_trace.get_current_span()
-            ctx = span.get_span_context() if span else None
-            trace_id_hex = (
-                format(ctx.trace_id, "032x") if ctx and ctx.trace_id else ""
-            )
 
         method = request.method
         path = _normalize_path(request.url.path)
@@ -98,26 +83,12 @@ class MonitoringMiddleware(BaseHTTPMiddleware):
         if trace_id_hex:
             request.state.trace_id = trace_id_hex
 
-        status_code = 500
         try:
             response = await call_next(request)
-            status_code = response.status_code
             if trace_id_hex:
                 response.headers["X-Trace-Id"] = trace_id_hex
             return response
         finally:
-            elapsed_ms = (time.perf_counter() - start) * 1000.0
-            try:
-                http_requests_total.labels(
-                    method=method,
-                    path=path,
-                    status=str(status_code),
-                ).inc()
-                http_request_latency_seconds.labels(method=method, path=path).observe(
-                    elapsed_ms / 1000.0
-                )
-            except Exception:  # pragma: no cover - 指标失败不应影响请求
-                pass
             clear_context()
 
 

@@ -1,5 +1,5 @@
 # Matrix Master 开发环境
-# - 常驻服务：PostgreSQL + Headscale + 自建 DERP（+ monitoring 监控栈可选）
+# - 常驻服务：PostgreSQL + Headscale + 自建 DERP
 # - 应用服务：backend (uvicorn) + frontend (vite dev server)，前后端都跑在 docker 里
 # - 测试：test service 在 docker 内跑 pytest
 
@@ -60,27 +60,6 @@ services:
       - "3478:3478/udp"  # STUN
     depends_on:
       - headscale
-
-  # 监控栈（开发用）
-  prometheus:
-    image: prom/prometheus:v2.51.0
-    container_name: matrix-prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    profiles: ["monitoring"]  # 默认不启动，需要时 --profile monitoring
-
-  grafana:
-    image: grafana/grafana:10.4.0
-    container_name: matrix-grafana
-    ports:
-      - "3000:3000"
-    environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin
-    profiles: ["monitoring"]
 
   # 生产 HTTPS 入口（需要域名 + DNS 指向本机）
   caddy:

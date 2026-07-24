@@ -400,3 +400,284 @@ async def test_closed_loop_without_interact_plan_still_works():
 
     # 直接调原闭环测试（re-use 已存在的 happy path）
     await test_closed_loop_runs_end_to_end()
+
+
+# ---------------------------------------------------------------------------
+# W4：skipped 计数口径 / interaction 写库用本地 UUID / 全失败走 ALERT
+# ---------------------------------------------------------------------------
+
+import os  # noqa: E402
+from contextlib import asynccontextmanager  # noqa: E402
+
+
+class _W4Scalars:
+    def __init__(self, value: Any) -> None:
+        self._value = value
+
+    def first(self) -> Any:
+        return self._value
+
+
+class _W4Result:
+    def __init__(self, value: Any) -> None:
+        self._value = value
+
+    def scalars(self) -> _W4Scalars:
+        return _W4Scalars(self._value)
+
+
+class _W4FakeSession:
+    """给 InteractPolicy + interact_node 用的假 session。
+
+    - session.get(Account, ...) → 预设 account
+    - SELECT ... FROM notes → 预设本地 note_id
+    - SELECT ... FROM interactions → 按 interaction_exists 返回
+    """
+
+    def __init__(
+        self,
+        *,
+        account: Any = None,
+        local_note_id: uuid.UUID | None = None,
+        interaction_exists: bool = False,
+    ) -> None:
+        self._account = account
+        self._local_note_id = local_note_id
+        self._interaction_exists = interaction_exists
+
+    async def get(self, model: Any, pk: Any) -> Any:
+        return self._account
+
+    async def execute(self, stmt: Any) -> _W4Result:
+        sql = str(stmt)
+        if "FROM notes" in sql:
+            return _W4Result(self._local_note_id)
+        if "FROM interactions" in sql:
+            return _W4Result(uuid.uuid4() if self._interaction_exists else None)
+        return _W4Result(None)
+
+
+def _w4_factory(session: Any):
+    @asynccontextmanager
+    async def factory():
+        yield session
+
+    return factory
+
+
+def _active_account(account_id: uuid.UUID) -> Any:
+    return SimpleNamespace(
+        id=account_id,
+        handle="h",
+        status="active",
+        risk_score=0.0,
+        deleted_at=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_policy_skip_counted_as_skipped_not_failed():
+    """去重命中 → 计入 skipped（不再 ok:False 却不计数），不算 failed。"""
+    account_id = uuid.uuid4()
+    session = _W4FakeSession(
+        account=_active_account(account_id),
+        local_note_id=uuid.uuid4(),
+        interaction_exists=True,  # 已赞过 → DEDUPED
+    )
+    interactor = FakeDeviceInteractor()
+    services = _make_services(interactor=interactor)
+    services.session_factory = _w4_factory(session)
+    set_services(services)
+    result = await interact_node(
+        {
+            "interact_plan": [{"note_id": "xhs-1", "kind": "like"}],
+            "slot": {"device_id": uuid.uuid4(), "account_id": account_id},
+        }
+    )
+    r = result["interact_results"]
+    assert r["skipped"] == 1
+    assert r["failed"] == 0
+    assert r["succeeded"] == 0
+    assert r["details"][0]["skipped"] is True
+    assert r["details"][0]["error_code"] == "DEDUPED"
+    assert result["last_error"] is None
+    assert interactor.calls == []
+
+
+@pytest.mark.asyncio
+async def test_interaction_writer_receives_local_note_uuid():
+    """修 UUID 外键写入：writer 收到的 target_note_id 是本地 notes.id，不是平台字符串。"""
+    account_id = uuid.uuid4()
+    local_note_id = uuid.uuid4()
+    session = _W4FakeSession(
+        account=_active_account(account_id),
+        local_note_id=local_note_id,
+    )
+    writer, sink = _record_writer()
+    interactor = FakeDeviceInteractor()
+    services = _make_services(interactor=interactor, interaction_writer=writer)
+    services.session_factory = _w4_factory(session)
+    set_services(services)
+    result = await interact_node(
+        {
+            "interact_plan": [{"note_id": "xhs-9", "kind": "like"}],
+            "slot": {"device_id": uuid.uuid4(), "account_id": account_id},
+        }
+    )
+    assert result["interact_results"]["succeeded"] == 1
+    assert len(sink) == 1
+    assert sink[0]["target_note_id"] == local_note_id
+
+
+@pytest.mark.asyncio
+async def test_interaction_record_skipped_when_local_note_missing():
+    """平台 id 查不到本地 Note → 跳过该条写库记录（互动本身仍算成功）。"""
+    account_id = uuid.uuid4()
+    session = _W4FakeSession(
+        account=_active_account(account_id),
+        local_note_id=None,  # 本机没索引过这篇
+    )
+    writer, sink = _record_writer()
+    services = _make_services(
+        interactor=FakeDeviceInteractor(), interaction_writer=writer
+    )
+    services.session_factory = _w4_factory(session)
+    set_services(services)
+    result = await interact_node(
+        {
+            "interact_plan": [{"note_id": "xhs-never-seen", "kind": "like"}],
+            "slot": {"device_id": uuid.uuid4(), "account_id": account_id},
+        }
+    )
+    assert result["interact_results"]["succeeded"] == 1
+    assert sink == [], "本地查不到 note 时不应把平台字符串塞进 UUID 外键"
+
+
+# ---------------------------------------------------------------------------
+# W4：route_after_interact 全失败走 ALERT（修 INTERACT_ALL_FAILED 被吞）
+# ---------------------------------------------------------------------------
+
+
+class TestRouteAfterInteract:
+    def test_all_failed_goes_alert(self):
+        from matrix.agent.guards import route_after_interact
+
+        state = {
+            "interact_results": {
+                "succeeded": 0,
+                "failed": 2,
+                "skipped": 0,
+                "details": [],
+            },
+            "last_error": {"code": "INTERACT_ALL_FAILED", "message": "2/2 failed"},
+        }
+        assert route_after_interact(state, GuardConfig()) == State.ALERT
+
+    def test_all_skipped_goes_idle(self):
+        """全部去重跳过（0 成功 0 失败）不算事故，正常收工。"""
+        from matrix.agent.guards import route_after_interact
+
+        state = {
+            "interact_results": {
+                "succeeded": 0,
+                "failed": 0,
+                "skipped": 2,
+                "details": [],
+            },
+            "last_error": None,
+        }
+        assert route_after_interact(state, GuardConfig()) == State.IDLE
+
+    def test_partial_failure_goes_idle(self):
+        from matrix.agent.guards import route_after_interact
+
+        state = {
+            "interact_results": {
+                "succeeded": 1,
+                "failed": 1,
+                "skipped": 0,
+                "details": [],
+            },
+            "last_error": {"code": "PARTIAL_FAIL", "message": "1/2 failed"},
+        }
+        assert route_after_interact(state, GuardConfig()) == State.IDLE
+
+
+# ---------------------------------------------------------------------------
+# W4：生产 interaction_writer（db_interaction_writer）落库验证
+# ---------------------------------------------------------------------------
+
+
+class TestDbInteractionWriterIntegration:
+    @pytest.fixture(autouse=True)
+    def _require_pg(self):
+        pg_url = os.environ.get("DATABASE_URL", "")
+        if not pg_url.startswith(("postgres", "postgresql")):
+            pytest.skip("requires DATABASE_URL=postgres://...")
+
+    @pytest.mark.asyncio
+    async def test_persists_with_local_note_uuid(self):
+        from sqlalchemy import select
+
+        from matrix.agent.bootstrap import db_interaction_writer
+        from matrix.db.models import Account, Business, Device, Interaction, Note
+        from matrix.db.session import get_session, set_engine
+
+        # test_db.py 用 MagicMock 覆盖过全局 engine 且不还原；先重置回真实连接
+        set_engine(None)
+
+        req_id = f"test-{uuid.uuid4().hex}"
+        async with get_session() as session:
+            biz = Business(
+                name="测试业务", slug=f"test-{uuid.uuid4().hex[:8]}", status="active"
+            )
+            session.add(biz)
+            await session.flush()
+            dev = Device(
+                nickname=f"dev-{uuid.uuid4().hex[:6]}",
+                business_id=biz.id,
+                status="pending",
+            )
+            session.add(dev)
+            await session.flush()
+            acct = Account(
+                handle=f"@t{uuid.uuid4().hex[:6]}",
+                device_id=dev.id,
+                business_id=biz.id,
+                status="active",
+                risk_score=0,
+            )
+            session.add(acct)
+            await session.flush()
+            note = Note(
+                title="t",
+                content="c",
+                business_id=biz.id,
+                status="published",
+                platform_note_id=f"xhs-{uuid.uuid4().hex[:8]}",
+            )
+            session.add(note)
+            await session.flush()
+            acct_id, note_id = acct.id, note.id
+
+        iid = await db_interaction_writer(
+            {
+                "account_id": acct_id,
+                "target_note_id": note_id,
+                "type": "like",
+                "content": None,
+                "result": "success",
+                "request_id": req_id,
+            }
+        )
+        assert iid is not None
+
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(Interaction).where(Interaction.request_id == req_id)
+                )
+            ).scalar_one()
+            assert row.target_note_id == note_id
+            assert row.type == "like"
+            assert row.result == "success"

@@ -4,7 +4,7 @@
 调用方负责把 ``Alert`` 投递到通知渠道（邮件 / 飞书 / Webhook 等）。
 
 设计要点：
-- 纯函数：不直接读 Prometheus client state，参数化输入
+- 纯函数：不读外部状态，参数化输入
 - 易测试：每个判定都接收原始值
 - 覆盖 runbook §3 中已接入扫描器的条目（DEVICE_OFFLINE / RISK_BLOCKED）
 - v0.7+：message 必须是用户看得懂的人话，禁止把原始字段/代码怼脸。

@@ -27,6 +27,7 @@ from matrix.db.models import (
     Account,
     AccountLoginSession,
     Device,
+    DeviceHeartbeat,
     DeviceHmacKey,
     Task,
 )
@@ -691,6 +692,34 @@ class TestDeviceRegistry:
             await registry.update_heartbeat(uuid.uuid4(), DeviceHeartbeatData())
 
     @pytest.mark.asyncio
+    async def test_heartbeat_network_accepts_mobile_vpn_unknown(self) -> None:
+        """网络类型白名单扩展：mobile / vpn / unknown 原样入库；不在名单的仍降级 none。"""
+        device = make_device(status="active")
+        session = FakeSession()
+        session.put(device)
+        registry = DeviceRegistry(session)
+        for net in ("mobile", "vpn", "unknown", "carrier-pigeon"):
+            await registry.update_heartbeat(
+                device.id, DeviceHeartbeatData(network=net)
+            )
+        rows = [o for o in session.added if isinstance(o, DeviceHeartbeat)]
+        assert [r.network for r in rows] == ["mobile", "vpn", "unknown", "none"]
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_tailscale_ip_updates_device(self) -> None:
+        device = make_device(status="active", tailnet_ip="100.64.0.1")
+        session = FakeSession()
+        session.put(device)
+        registry = DeviceRegistry(session)
+        await registry.update_heartbeat(
+            device.id, DeviceHeartbeatData(tailscale_ip="100.64.0.99")
+        )
+        assert device.tailnet_ip == "100.64.0.99"
+        # 不带 tailscale_ip 的心跳不改 IP
+        await registry.update_heartbeat(device.id, DeviceHeartbeatData())
+        assert device.tailnet_ip == "100.64.0.99"
+
+    @pytest.mark.asyncio
     async def test_get_devices_filters_by_tag(self) -> None:
         d1 = make_device(tags=["a"])
         d2 = make_device(tags=["b"])
@@ -1054,30 +1083,112 @@ class TestDeviceAPI:
     """API 路由测试：直接调 endpoint 函数，注入 FakeSession。"""
 
     @pytest.mark.asyncio
-    async def test_list_devices_returns_dict(self) -> None:
-        from matrix.device.api import list_devices
+    async def test_claim_next_task_only_claims_device_publish(self) -> None:
+        """/tasks/next 的 SQL 必须过滤 action='device_publish'：手机只会做发布，
+        不过滤会把 collect 任务抢走判死。"""
+        from matrix.device.api import claim_next_task
 
-        d1 = make_device()
+        captured: dict[str, Any] = {}
+
+        class FakeMappings:
+            def one_or_none(self):
+                return None
+
+        class FakeExecResult:
+            def mappings(self):
+                return FakeMappings()
+
+        class Session:
+            async def execute(self, stmt, params=None):
+                captured["stmt"] = str(stmt)
+                return FakeExecResult()
+
+        result = await claim_next_task(
+            device_id=uuid.uuid4(), _auth=None, session=Session()
+        )
+        assert "action = 'device_publish'" in captured["stmt"]
+        assert result == {"ok": True, "data": None}
+
+    @pytest.mark.asyncio
+    async def test_report_login_state_resolves_account_by_device(self) -> None:
+        """新契约 {platform, state}：不带 account_id，后端按 device_id 找绑定账号。"""
+        from matrix.device.api import LoginStateIn, report_login_state
+
+        device = make_device()
+        account = make_account(device_id=device.id)
         session = FakeSession()
 
         async def execute_fn(stmt):
-            return FakeResult(rows=[d1])
+            return FakeResult(rows=[account])
 
         session.execute_fn = execute_fn
-        result = await list_devices(session=session, status_filter=None, tag=None)
-        assert "items" in result
-        assert len(result["items"]) == 1
-        assert result["items"][0].nickname == "dev1"
+        await report_login_state(
+            device.id,
+            LoginStateIn(platform="xhs", state="success"),
+            session=session,
+        )
+        records = [o for o in session.added if isinstance(o, AccountLoginSession)]
+        assert len(records) == 1
+        assert records[0].account_id == account.id
+        assert records[0].device_id == device.id
+        assert records[0].result == "success"
 
     @pytest.mark.asyncio
-    async def test_get_device_404(self) -> None:
-        from matrix.device.api import get_device
+    async def test_report_login_state_400_when_no_bound_account(self) -> None:
         from fastapi import HTTPException
 
+        from matrix.device.api import LoginStateIn, report_login_state
+
         session = FakeSession()
+
+        async def execute_fn(stmt):
+            return FakeResult(rows=[])
+
+        session.execute_fn = execute_fn
         with pytest.raises(HTTPException) as exc_info:
-            await get_device(uuid.uuid4(), session=session)
-        assert exc_info.value.status_code == 404
+            await report_login_state(
+                uuid.uuid4(),
+                LoginStateIn(platform="xhs", state="failed"),
+                session=session,
+            )
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_report_login_state_400_on_invalid_state(self) -> None:
+        from fastapi import HTTPException
+
+        from matrix.device.api import LoginStateIn, report_login_state
+
+        device = make_device()
+        account = make_account(device_id=device.id)
+        session = FakeSession()
+
+        async def execute_fn(stmt):
+            return FakeResult(rows=[account])
+
+        session.execute_fn = execute_fn
+        with pytest.raises(HTTPException) as exc_info:
+            await report_login_state(
+                device.id,
+                LoginStateIn(platform="xhs", state="bogus"),
+                session=session,
+            )
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_endpoint_passes_tailscale_ip(self) -> None:
+        """心跳带 tailscale_ip 时，devices.tailnet_ip 被更新。"""
+        from matrix.device.api import HeartbeatIn, heartbeat
+
+        device = make_device(status="active", tailnet_ip="100.64.0.1")
+        session = FakeSession()
+        session.put(device)
+        await heartbeat(
+            device.id,
+            HeartbeatIn(tailscale_ip="100.64.0.77", network="mobile"),
+            session=session,
+        )
+        assert device.tailnet_ip == "100.64.0.77"
 
 
 # ---------------------------------------------------------------------------
@@ -1117,6 +1228,42 @@ class TestApkHttpClientCollect:
         endpoint = await resolver(device.id)
 
         assert endpoint.base_url == "http://100.64.0.1:8765"
+        assert endpoint.hmac_key == b"s" * 32
+
+    async def test_endpoint_resolver_decrypts_new_format_secret(
+        self, monkeypatch
+    ) -> None:
+        """新格式 {"v":1,"enc_secret":...}（pair 实际写入的格式）必须能解密，
+        否则后端 push 手机全部失败。"""
+        from types import SimpleNamespace
+
+        from cryptography.fernet import Fernet
+
+        from matrix.device.endpoints import DeviceEndpointResolver
+        from matrix.device.secret_box import encrypt_secret
+
+        monkeypatch.setenv(
+            "MATRIX_SECRET_BOX_KEY", Fernet.generate_key().decode("ascii")
+        )
+        device = make_device(hmac_key_id="hmk_test")
+        enc = encrypt_secret(b"s" * 32)
+
+        class Session:
+            async def get(self, model, key):
+                if model is Device:
+                    return device if key == device.id else None
+                return SimpleNamespace(value={"v": 1, "enc_secret": enc})
+
+        class SessionContext:
+            async def __aenter__(self):
+                return Session()
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                return None
+
+        resolver = DeviceEndpointResolver(lambda: SessionContext())
+        endpoint = await resolver(device.id)
+
         assert endpoint.hmac_key == b"s" * 32
 
     async def test_skips_null_views(self) -> None:

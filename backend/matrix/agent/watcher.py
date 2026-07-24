@@ -35,6 +35,31 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# 排期豁免宽限：publish_node 会 sleep 到 preassigned_slot.scheduled_at（错峰
+# 最长约 5h），期间 checkpoint 停更是合法的。判死前若 scheduled_at + 宽限仍在
+# 未来 → 豁免；宽限覆盖发布后轮询手机 complete（POLL_TIMEOUT 120s）等收尾。
+SCHEDULED_PUBLISH_GRACE = timedelta(minutes=30)
+
+
+def _is_schedule_exempt(payload: Any, now: datetime) -> bool:
+    """run payload 里 preassigned_slot.scheduled_at 在未来（+ 宽限）→ 判死豁免。"""
+    if not isinstance(payload, dict):
+        return False
+    slot = payload.get("preassigned_slot")
+    if not isinstance(slot, dict):
+        return False
+    raw = slot.get("scheduled_at")
+    if not raw:
+        return False
+    try:
+        scheduled_at = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if scheduled_at.tzinfo is None:
+        scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+    return now < scheduled_at + SCHEDULED_PUBLISH_GRACE
+
+
 @dataclass
 class WatchdogConfig:
     """watchdog 阈值集合（产线可在 app_config 调）。"""
@@ -72,6 +97,9 @@ class AgentRunScanner:
     用``最近 checkpoint 的 ts``而非``started_at``是因为活着的 run 每次状态
     转移都会写 ``agent_checkpoints``；只有 checkpoint 停更的 run 才是真正
     卡死。没有 checkpoint 的老 run 才退回 ``started_at`` 兜底。
+
+    豁免：payload.preassigned_slot.scheduled_at 仍在未来（+ 宽限）的 run
+    正在合法 sleep 等发布（错峰最长约 5h），不判 stuck。
     """
 
     def __init__(self, session_factory: Any) -> None:
@@ -97,7 +125,7 @@ class AgentRunScanner:
         try:
             async with self._session_factory() as session:
                 stmt = (
-                    select(AgentRun.id)
+                    select(AgentRun.id, AgentRun.payload)
                     .outerjoin(
                         last_checkpoint,
                         AgentRun.id == last_checkpoint.c.run_id,
@@ -112,10 +140,14 @@ class AgentRunScanner:
                     )
                 )
                 result = await session.execute(stmt)
-                return [row[0] for row in result.all()]
+                rows = result.all()
         except Exception:
             logger.exception("watchdog.find_stuck_runs failed")
             return []
+        # 排期豁免：sleep 等 scheduled_at 的 run 不算卡死（修 watchdog 误杀）
+        return [
+            row[0] for row in rows if not _is_schedule_exempt(row[1], now)
+        ]
 
     async def mark_timeout(
         self, run_id: Any, now: datetime, reason: str

@@ -102,10 +102,10 @@ async def analyze_node(state: AgentState) -> dict[str, Any]:
     rules = ""
     try:
         persona_chunks = await services.kb_retriever.retrieve(
-            RetrieveQuery(query=str(draft.get("title", "")), doc_types=("persona",), top_k=1)
+            RetrieveQuery(query=str(draft.get("title", "")), doc_types=("persona",), top_k=1, business_id=str(business_id) if business_id else None)
         )
         rule_chunks = await services.kb_retriever.retrieve(
-            RetrieveQuery(query=str(draft.get("title", "")), doc_types=("rule",), top_k=2)
+            RetrieveQuery(query=str(draft.get("title", "")), doc_types=("rule",), top_k=2, business_id=str(business_id) if business_id else None)
         )
         persona_style = join_chunks(persona_chunks, limit=1)
         rules = join_chunks(rule_chunks, limit=2)

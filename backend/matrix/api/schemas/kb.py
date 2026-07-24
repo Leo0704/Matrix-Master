@@ -28,7 +28,7 @@ class KbDocument(BaseModel):
     is_published: bool = False
     created_at: datetime
     updated_at: datetime
-    business_id: uuid.UUID  # v0.7+ 业务模型重构：经验卡是业务知识沉淀
+    business_id: Optional[uuid.UUID] = None  # v0.7+ 业务归属（NULL = 全局共享，兼容存量）
 
 
 class KbDocumentCreate(BaseModel):
@@ -59,6 +59,8 @@ class KbSearchRequest(BaseModel):
     type: KbType
     top_k: int = 5
     filters: Optional[dict[str, Any]] = None
+    # 业务隔离（可选）：只命中本业务 + 全局共享（NULL）的文档
+    business_id: Optional[uuid.UUID] = None
 
 
 class KbSearchHit(BaseModel):
@@ -91,6 +93,8 @@ class ViralIngestRequest(BaseModel):
     raw_text: str = Field(..., min_length=1, description="粘贴的爆款原文")
     title: Optional[str] = None
     metrics: Optional[dict[str, int]] = None
+    # 业务归属：必填（kb_documents.business_id 是 NOT NULL，与 KbDocumentCreate 一致）
+    business_id: uuid.UUID
 
 
 class ViralIngestResponse(BaseModel):

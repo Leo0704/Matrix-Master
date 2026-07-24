@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
+import uuid
 
 import pytest
 
@@ -87,7 +88,9 @@ async def test_generates_digest_when_notifications_exist():
 
     def _side_effect(stmt):
         # 简单按语句类型返回：第一次是 businesses，第二次是 notifications
-        if "businesses" in str(stmt) or hasattr(stmt, "froms") and "businesses" in str(stmt.froms):
+        # （不能看 str(stmt.froms)：notifications 表现在有 business_id → businesses 的 FK，
+        #   table repr 里也会出现 "businesses" 字样，会误判）
+        if "FROM businesses" in str(stmt):
             return business_result
         return notif_result
 
@@ -210,3 +213,60 @@ async def test_worker_runs_once_and_stops():
     count = await worker._generator.run_once()
     assert count == 2
     generator.run_once.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_buckets_by_business_id_column():
+    """W5：分桶优先用 notifications.business_id 新列（payload 没有也能归桶），
+    且写入的日报自带 business_id 列。"""
+
+    biz_a = uuid.uuid4()
+    biz_b = uuid.uuid4()
+
+    session = MagicMock()
+    session.execute = AsyncMock()
+    session.add = MagicMock()
+    session.commit = AsyncMock()
+
+    business_result = MagicMock()
+    business_result.all.return_value = [(str(biz_a), "业务A"), (str(biz_b), "业务B")]
+
+    # payload 不带 business_id，只有新列有
+    note_a = Notification(
+        code="note.published", severity="success", title="t", body="b", payload={}
+    )
+    note_a.business_id = biz_a
+    note_a.created_at = datetime.now(UTC)
+    note_b = Notification(
+        code="note.published", severity="success", title="t", body="b", payload={}
+    )
+    note_b.business_id = biz_b
+    note_b.created_at = datetime.now(UTC)
+
+    notif_result = MagicMock()
+    notif_result.scalars.return_value.all.return_value = [note_a, note_b]
+
+    def _side_effect(stmt):
+        if "FROM businesses" in str(stmt):
+            return business_result
+        return notif_result
+
+    session.execute.side_effect = _side_effect
+
+    @asynccontextmanager
+    async def factory():
+        yield session
+
+    generator = DailyDigestGenerator(
+        session_factory=factory,
+        llm_client=_FakeLLMClient("标题\n正文"),
+    )
+    created = await generator.run_once()
+
+    # 两个业务各出一条日报
+    assert created == 2
+    assert session.add.call_count == 2
+    written_bids = {
+        str(c.args[0].business_id) for c in session.add.call_args_list
+    }
+    assert written_bids == {str(biz_a), str(biz_b)}

@@ -184,6 +184,7 @@ class Retriever:
         type: str,
         top_k: int = 5,
         filters: Optional[dict] = None,
+        business_id: Optional[uuid.UUID | str] = None,
     ) -> list[ChunkResult]:
         """混合检索。
 
@@ -192,6 +193,9 @@ class Retriever:
             type: ``kb_documents.type`` 过滤（``brand`` / ``persona`` / ``rule`` / ...）
             top_k: 返回结果数
             filters: metadata 过滤（见 ``META_FILTERABLE_KEYS``）
+            business_id: 业务隔离（可选）。传入后只命中
+                ``business_id == X OR business_id IS NULL`` 的文档
+                （NULL 视为全局共享，兼容存量数据）；不传则不过滤。
 
         Returns:
             按 RRF 分数降序的 ``ChunkResult`` 列表，长度 <= ``top_k``
@@ -214,12 +218,18 @@ class Retriever:
         ]
         if meta_clause:
             common_where.append(meta_clause)
-        common_where_sql = " AND ".join(common_where)
         common_params: dict[str, Any] = {
             "doc_type": type,
             "query_vec_str": _vec_to_pgvector_str(query_vec),
             **meta_params,
         }
+        if business_id is not None:
+            # 业务隔离：本业务的文档 + 全局共享（NULL）文档
+            common_where.append(
+                "(d.business_id = CAST(:business_id AS uuid) OR d.business_id IS NULL)"
+            )
+            common_params["business_id"] = str(business_id)
+        common_where_sql = " AND ".join(common_where)
 
         # 1) 向量检索（kb_chunks 表的 embedding）
         vector_rows = await self._vector_search(common_where_sql, common_params, candidate_k)

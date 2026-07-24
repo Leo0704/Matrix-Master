@@ -292,3 +292,83 @@ class TestAlertScannerWiring:
         result = await scanner._scan_once()
         assert len(result) == 1
         assert result[0].code == "DEVICE_OFFLINE"
+
+class TestAlertScannerBusinessId:
+    @pytest.mark.asyncio
+    async def test_scan_once_fills_business_id(self, monkeypatch):
+        """W5：扫描写 alerts 时按 subject_id（device/account）回填 business_id。"""
+        import uuid as _uuid
+
+        biz_dev = _uuid.uuid4()
+        biz_acct = _uuid.uuid4()
+
+        async def fake_gather_devices(session):
+            return [
+                {
+                    "device_id": "d1",
+                    "last_heartbeat_age_sec": 600,  # 触发 DEVICE_OFFLINE
+                    "business_id": biz_dev,
+                }
+            ]
+
+        async def fake_gather_accounts(session):
+            return [
+                {
+                    "account_id": "a1",
+                    "risk_score": 0.95,  # 触发 RISK_BLOCKED
+                    "business_id": biz_acct,
+                }
+            ]
+
+        async def fake_fetch_existing_pairs(session):
+            return set()
+
+        async def fake_config_reader(key: str, default: Any) -> Any:
+            return default
+
+        written: list[Any] = []
+
+        class _FakeSession:
+            async def flush(self):
+                pass
+
+            async def commit(self):
+                pass
+
+            def add(self, row):
+                written.append(row)
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+        class _FakeFactory:
+            def __call__(self):
+                return _FakeSession()
+
+        scanner = AlertScanner(
+            session_factory=_FakeFactory(),  # type: ignore[arg-type]
+            config_reader=fake_config_reader,
+            config=AlertScannerConfig(),
+        )
+        import matrix.monitoring.alert_scanner as scanner_mod
+
+        monkeypatch.setattr(
+            scanner_mod.AlertScanner, "_gather_devices",
+            staticmethod(fake_gather_devices),
+        )
+        monkeypatch.setattr(
+            scanner_mod.AlertScanner, "_gather_accounts",
+            staticmethod(fake_gather_accounts),
+        )
+        monkeypatch.setattr(
+            scanner_mod.AlertScanner, "_fetch_existing_pairs",
+            staticmethod(fake_fetch_existing_pairs),
+        )
+
+        rows = await scanner._scan_once()
+        by_subject = {r.subject_id: r for r in rows}
+        assert by_subject["d1"].business_id == biz_dev
+        assert by_subject["a1"].business_id == biz_acct

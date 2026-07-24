@@ -61,10 +61,7 @@ _LATEST_METRIC_PER_NOTE = (
 async def account_content_stats(
     business_id: Optional[uuid.UUID] = Query(
         None,
-        description=(
-            "v0.7+ 业务过滤（schema 占位，暂未实际过滤；"
-            "聚合查询 JOIN 多表，TODO 后续重构）"
-        ),
+        description="v0.7+ 业务过滤：只统计该业务的账号与未分配草稿",
     ),
     session: AsyncSession = Depends(get_db),
 ) -> AccountContentStatsResponse:
@@ -133,6 +130,9 @@ async def account_content_stats(
             Account.handle.asc(),
         )
     )
+    if business_id is not None:
+        # v0.7+ 业务过滤：只看本业务的账号
+        assigned_stmt = assigned_stmt.where(Account.business_id == business_id)
     assigned_rows = (await session.execute(assigned_stmt)).all()
 
     items: list[AccountContentStats] = [
@@ -156,6 +156,9 @@ async def account_content_stats(
     unassigned_stmt = select(func.count(Note.id)).where(
         Note.account_id.is_(None), Note.deleted_at.is_(None)
     )
+    if business_id is not None:
+        # v0.7+ 业务过滤：未分配草稿也按 notes.business_id 收敛
+        unassigned_stmt = unassigned_stmt.where(Note.business_id == business_id)
     unassigned_total = int((await session.execute(unassigned_stmt)).scalar_one() or 0)
     if unassigned_total > 0:
         items.append(

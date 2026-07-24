@@ -128,6 +128,8 @@ export interface DevicePairRequest {
 export interface DevicePairResponse {
   key_id: string;
   hmac_key: string;
+  /** admin 重新签发时返回的 8 位配对码（pair 接口消费，不在此下发） */
+  pair_code?: string;
 }
 
 // ---------- Account ----------
@@ -379,8 +381,30 @@ export const STATE_LABELS: Record<AgentState, string> = {
 };
 
 export function formatState(state: string): string {
-  return (STATE_LABELS as Record<string, string>)[state] ?? '未知';
+  return (
+    (STATE_LABELS as Record<string, string>)[state] ??
+    GOAL_STATE_LABELS[state] ??
+    '未知'
+  );
 }
+
+// GoalPhase / GoalStatus 中文映射：chat 块里目标的 phase/status 也走 formatState，
+// 不补上的话一律显示「未知」。
+export const GOAL_STATE_LABELS: Record<string, string> = {
+  // GoalPhase
+  PENDING: '待启动',
+  PREPARING: '准备中',
+  EXECUTING: '执行中',
+  MONITORING: '监控中',
+  SUMMARIZING: '复盘中',
+  DECIDING: '决策中',
+  DONE: '已完成',
+  // GoalStatus
+  active: '进行中',
+  achieved: '已达成',
+  failed: '已失败',
+  cancelled: '已取消',
+};
 
 export interface AgentRun {
   id: string;
@@ -571,6 +595,8 @@ export interface ViralIngestRequest {
   raw_text: string;
   title?: string;
   metrics?: Record<string, number>;
+  /** v0.7+ 业务归属 */
+  business_id?: string;
 }
 
 export interface ViralIngestResponse {

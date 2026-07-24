@@ -216,6 +216,7 @@ class WebhookNotifier:
                     severity=severity,
                     title=title[:256],  # 列宽 256，截断防超长
                     body=body,
+                    business_id=_opt_uuid(payload.get("business_id")),
                     goal_id=_opt_uuid(payload.get("goal_id")),
                     run_id=_opt_uuid(payload.get("run_id")),
                     note_id=_opt_uuid(payload.get("note_id")),

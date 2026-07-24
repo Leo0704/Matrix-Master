@@ -905,6 +905,13 @@ class Notification(Base):
     device_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey('devices.id', ondelete='SET NULL'), nullable=True
     )
+    # v0.7+ 业务归属（019 migration 加列）：查询过滤优先用该列，
+    # 老数据（NULL）回退到 4 个 typed FK 的 EXISTS 推导
+    business_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey('businesses.id', ondelete='SET NULL'),
+        nullable=True,
+    )
     goal: Mapped[Optional["Goal"]] = relationship("Goal", lazy="raise")
     note: Mapped[Optional["Note"]] = relationship("Note", lazy="raise")
     device: Mapped[Optional["Device"]] = relationship("Device", lazy="raise")

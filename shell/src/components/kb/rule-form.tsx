@@ -5,6 +5,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import type { KbDocument, KbDocumentCreate } from '@/types/api';
 import { useActiveBusinessId } from '@/stores/ui-store';
+import { toast } from '@/components/ui/use-toast';
 
 interface RuleFormProps {
   initial?: KbDocument;
@@ -55,12 +56,20 @@ export function RuleForm({ initial, onSubmit, onCancel, submitting }: RuleFormPr
       .filter((l) => l.trim() && !/^\[(禁|forbidden)\]\s*/i.test(l));
     const finalContent = [...forbiddenLines, ...baseContent].join('\n').trim();
     if (!finalContent) return;
-    if (!activeBusinessId) return;
+    if (!activeBusinessId) {
+      toast({
+        title: '请先在顶栏选择业务',
+        description: '规则必须归属到一个业务才能保存',
+        variant: 'destructive',
+      });
+      return;
+    }
     await onSubmit({
       type: 'rule',
       title: title.trim(),
       content: finalContent,
-      is_published: false,
+      // 编辑时保持原发布状态，避免把已发布规则静默下架
+      is_published: initial ? initial.is_published : false,
       business_id: activeBusinessId,  // v0.7+ 业务归属
     });
   }

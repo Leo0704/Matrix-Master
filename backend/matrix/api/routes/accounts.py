@@ -182,6 +182,15 @@ async def update_account(
         persona_doc = await session.get(KbDocument, body.persona_id)
         if persona_doc is None or persona_doc.type != "persona":
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "persona document not found")
+        # W5 业务隔离：persona 绑了别的业务就拒绝（NULL = 全局共享，允许）
+        if (
+            persona_doc.business_id is not None
+            and persona_doc.business_id != a.business_id
+        ):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "persona document belongs to another business",
+            )
         a.persona_id = body.persona_id
     if body.device_id is not None and body.device_id != a.device_id:
         # 一机一账号预检（migration 007 partial unique index 兜底）

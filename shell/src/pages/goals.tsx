@@ -126,7 +126,9 @@ export function Goals() {
                     <span>编号：{g.id.slice(0, 8)}…</span>
                   </div>
                   {g.status === 'active' && (
-                    <p className="text-xs text-muted-foreground">最近更新 {formatRelative(g.deadline)}</p>
+                    <p className="text-xs text-muted-foreground">
+                      最近更新 {g.phase_updated_at ? formatRelative(g.phase_updated_at) : '—'}
+                    </p>
                   )}
                 </CardContent>
               </Card>

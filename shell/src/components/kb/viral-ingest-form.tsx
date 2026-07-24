@@ -5,6 +5,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/use-toast';
 import { useIngestViral } from '@/hooks/use-kb';
+import { useActiveBusinessId } from '@/stores/ui-store';
 import type { ViralIngestRequest } from '@/types/api';
 
 interface ViralIngestFormProps {
@@ -18,6 +19,7 @@ interface ViralIngestFormProps {
  * 提交后存一条「历史爆款」记录（已发布）+ 一张「套路卡」（草稿，需人工发布）。
  */
 export function ViralIngestForm({ onDone, onCancel }: ViralIngestFormProps) {
+  const activeBusinessId = useActiveBusinessId();
   const ingestMut = useIngestViral();
   const [rawText, setRawText] = useState('');
   const [title, setTitle] = useState('');
@@ -41,6 +43,7 @@ export function ViralIngestForm({ onDone, onCancel }: ViralIngestFormProps) {
       raw_text: rawText.trim(),
       title: title.trim() || undefined,
       metrics: Object.keys(metrics).length ? metrics : undefined,
+      business_id: activeBusinessId ?? undefined,  // v0.7+ 业务归属
     };
 
     try {

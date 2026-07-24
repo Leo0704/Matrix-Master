@@ -23,7 +23,8 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Sibling foreground service that does nothing except poll
- * [CompanionService] liveness every 30 s. If the companion dies, relaunch it.
+ * [CompanionService] and [TaskPollerService] liveness every 30 s.
+ * If either dies, relaunch it.
  */
 class WatchdogService : Service() {
 
@@ -54,9 +55,13 @@ class WatchdogService : Service() {
         scope.launch {
             while (isActive) {
                 delay(TimeUnit.SECONDS.toMillis(30))
-                if (!isCompanionAlive()) {
+                if (!isServiceAlive(CompanionService::class.java.name)) {
                     Logx.w("Watchdog: CompanionService missing, relaunching")
                     CompanionService.start(this@WatchdogService)
+                }
+                if (!isServiceAlive(TaskPollerService::class.java.name)) {
+                    Logx.w("Watchdog: TaskPollerService missing, relaunching")
+                    TaskPollerService.start(this@WatchdogService)
                 }
             }
         }
@@ -67,10 +72,10 @@ class WatchdogService : Service() {
         super.onDestroy()
     }
 
-    private fun isCompanionAlive(): Boolean = try {
+    private fun isServiceAlive(className: String): Boolean = try {
         val am = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
         am.getRunningServices(Int.MAX_VALUE)
-            .any { it.service.className == CompanionService::class.java.name && it.started }
+            .any { it.service.className == className && it.started }
     } catch (_: Throwable) { true } // if we can't tell, don't kill it
 
     companion object {

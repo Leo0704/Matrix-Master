@@ -92,3 +92,39 @@ async def test_clear_resolved_alerts(client: AsyncClient, fake_db: FakeDB) -> No
     assert body["deleted"] == 1
     assert (AlertORM, resolved_id) not in fake_db.store
     assert (AlertORM, unresolved_id) in fake_db.store
+
+
+@pytest.mark.asyncio
+async def test_scan_fills_business_id(client: AsyncClient, fake_db: FakeDB) -> None:
+    """W5：手动扫描写 alerts 时按设备/账号推导 business_id 回填。"""
+    from datetime import UTC, datetime, timedelta
+
+    from matrix.db.models import Account as AccountORM
+    from matrix.db.models import Device as DeviceORM
+
+    biz = uuid.uuid4()
+    dev = DeviceORM(
+        id=uuid.uuid4(),
+        nickname="手机1",
+        tags=[],
+        status="active",
+        last_heartbeat=datetime.now(UTC) - timedelta(seconds=600),  # 触发离线
+        business_id=biz,
+    )
+    acct = AccountORM(
+        id=uuid.uuid4(),
+        handle=f"acct-{uuid.uuid4().hex[:8]}",
+        status="active",
+        risk_score=0.95,  # 触发风控
+        business_id=biz,
+    )
+    fake_db.store[(DeviceORM, dev.id)] = dev
+    fake_db.store[(AccountORM, acct.id)] = acct
+
+    r = await client.post("/api/v1/alerts/scan")
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert len(items) == 2
+    by_code = {i["code"]: i for i in items}
+    assert by_code["DEVICE_OFFLINE"]["business_id"] == str(biz)
+    assert by_code["RISK_BLOCKED"]["business_id"] == str(biz)

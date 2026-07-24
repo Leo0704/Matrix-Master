@@ -33,22 +33,25 @@ async def draft_node(state: AgentState) -> dict[str, Any]:
     # 2. 取历史复盘经验卡（analyze 节点提炼写入），优先于 raw history
     strategy_card_chunks = []
     history_chunks = []
+    # 业务隔离：只检索本业务 + 全局共享（NULL）的 KB 文档
+    _biz = state.get("business_id")
+    business_id = str(_biz) if _biz else None
     try:
         persona_chunks = await services.kb_retriever.retrieve(
-            RetrieveQuery(query=topic_title, doc_types=("persona",), top_k=2)
+            RetrieveQuery(query=topic_title, doc_types=("persona",), top_k=2, business_id=business_id)
         )
         rule_chunks = await services.kb_retriever.retrieve(
-            RetrieveQuery(query=topic_title, doc_types=("rule",), top_k=3)
+            RetrieveQuery(query=topic_title, doc_types=("rule",), top_k=3, business_id=business_id)
         )
         brand_chunks = await services.kb_retriever.retrieve(
-            RetrieveQuery(query=topic_title, doc_types=("brand",), top_k=1)
+            RetrieveQuery(query=topic_title, doc_types=("brand",), top_k=1, business_id=business_id)
         )
         # 自我进化闭环：先取提炼好的 strategy_card，再辅以 history 原文
         strategy_card_chunks = await services.kb_retriever.retrieve(
-            RetrieveQuery(query=topic_title, doc_types=("strategy_card",), top_k=5)
+            RetrieveQuery(query=topic_title, doc_types=("strategy_card",), top_k=5, business_id=business_id)
         )
         history_chunks = await services.kb_retriever.retrieve(
-            RetrieveQuery(query=topic_title, doc_types=("history",), top_k=3)
+            RetrieveQuery(query=topic_title, doc_types=("history",), top_k=3, business_id=business_id)
         )
     except Exception:
         logger.exception("draft.kb_retrieve failed")
@@ -110,8 +113,6 @@ async def draft_node(state: AgentState) -> dict[str, Any]:
             prompts.DRAFT_SYSTEM.format(persona_name=persona_name or "default"),
             user,
             call_type="draft",
-            # Phase 2a B：把 goal_id 透传给 cost_guard，按 goal 维度计 token
-            goal_id=str(state.get("goal_id") or "") or None,
         )
     except Exception as exc:
         logger.exception("draft.llm failed")

@@ -26,7 +26,9 @@ class JitterTest {
         repeat(5_000) {
             val v = Jitter.nextDelay(1_000L, random)
             assertTrue("out of lower bound: $v", v >= 500L)
-            assertTrue("out of upper bound: $v", v <= 2_500L)
+            // 上限不是 2.5×base：5% 的样本会叠加 500–2000ms think pause，
+            // 绝对上限 = 2500(clamp) + 1499 + 500 ≈ 4500。
+            assertTrue("out of upper bound: $v", v <= 4_500L)
         }
     }
 

@@ -29,11 +29,12 @@ class DeviceHeartbeatData:
     """APK 端上报的心跳数据。"""
 
     battery: Optional[int] = None
-    network: Optional[str] = None  # "4G" / "5G" / "none"
+    network: Optional[str] = None  # "4G" / "5G" / "wifi" / "ethernet" / "mobile" / "vpn" / "unknown" / "none"
     signal_dbm: Optional[int] = None
     foreground_app: Optional[str] = None
     errors: Optional[dict] = None
     tailscale_state: Optional[str] = None
+    tailscale_ip: Optional[str] = None  # 心跳携带时同步更新 devices.tailnet_ip
 
 
 class DeviceNotFound(LookupError):
@@ -141,7 +142,16 @@ class DeviceRegistry:
 
         ts = datetime.now(timezone.utc)
         # 验证 network 取值在 DeviceHeartbeat 允许范围内
-        if data.network and data.network not in ("4G", "5G", "none", "wifi", "ethernet"):
+        if data.network and data.network not in (
+            "4G",
+            "5G",
+            "none",
+            "wifi",
+            "ethernet",
+            "mobile",
+            "vpn",
+            "unknown",
+        ):
             data.network = "none"
 
         hb = DeviceHeartbeat(
@@ -157,6 +167,9 @@ class DeviceRegistry:
         self.session.add(hb)
 
         device.last_heartbeat = ts
+        # 心跳携带 tailscale_ip 时同步 devices.tailnet_ip（DHCP/重连后 IP 可能变）
+        if data.tailscale_ip:
+            device.tailnet_ip = data.tailscale_ip
         # tailscale_state=disconnected 时降级状态（不直接 offline）
         if data.tailscale_state == "disconnected" and device.status == "active":
             device.status = "tailscale_degraded"

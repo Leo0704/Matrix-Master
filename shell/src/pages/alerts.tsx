@@ -22,6 +22,7 @@ import { EmptyState } from '@/components/common/empty-state';
 import { formatRelative } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { toast } from '@/components/ui/use-toast';
+import { useActiveBusinessId } from '@/stores/ui-store';
 
 const ALERT_CODE_LABEL: Record<string, string> = {
   DEVICE_OFFLINE: '设备离线',
@@ -32,7 +33,10 @@ const ALERT_CODE_LABEL: Record<string, string> = {
 };
 
 export function Alerts() {
-  const { data, isLoading, error, refetch } = useAlerts();
+  const activeBusinessId = useActiveBusinessId();
+  const { data, isLoading, error, refetch } = useAlerts(
+    activeBusinessId ? { business_id: activeBusinessId } : undefined,
+  );
   const scanMut = useScanAlerts();
   const resolveMut = useResolveAlert();
   const deleteMut = useDeleteAlert();

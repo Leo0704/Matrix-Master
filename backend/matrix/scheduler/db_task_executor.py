@@ -22,6 +22,11 @@ from typing import Any
 
 from matrix.monitoring.logging import get_logger
 
+from matrix.scheduler.circuit_breaker import (
+    CircuitBreaker,
+    CircuitOpen,
+    PerDeviceCircuitBreaker,
+)
 from matrix.scheduler.scheduler import TaskLike
 
 logger = get_logger(__name__)
@@ -52,18 +57,26 @@ class DeviceTaskExecutor:
         # （保留向后兼容，测试场景可省）
         self._session_factory = session_factory
         self._notifier = notifier
-        # Phase 2a #7：滑动窗口熔断器。None → 不熔断（向后兼容 dev/test）。
-        # 生产路径在 app.py lifespan 注入一个进程级实例。
-        self._breaker = breaker
+        # Phase 2a #7 → W3：按 device_id 分桶的熔断器（每台设备独立计数/冷却，
+        # 不再进程级单例全设备连坐）。None → 不熔断（向后兼容 dev/test）。
+        # 兼容旧的调用方（app.py）传入单个 CircuitBreaker：当作参数模板
+        # 包装成 PerDeviceCircuitBreaker。
+        if isinstance(breaker, CircuitBreaker):
+            breaker = PerDeviceCircuitBreaker(
+                window=breaker.window,
+                threshold=breaker.threshold,
+                cool_off=breaker.cool_off,
+            )
+        self._breaker: PerDeviceCircuitBreaker | None = breaker
 
     async def execute(self, task: TaskLike) -> bool:
-        # Phase 2a #7：熔断期间直接放弃，避免在风控/账号封禁/网络全挂时反复重试
-        if self._breaker is not None and self._breaker.is_open():
+        # W3：该设备熔断打开时不算任务失败——抛 CircuitOpen 让调度器把任务
+        # 退回 pending 并推迟到冷却结束后再执行（不 mark_failed）。
+        if self._breaker is not None and self._breaker.is_open(task.device_id):
             logger.warning(
                 "executor.circuit_open", task_id=task.id, action=task.action
             )
-            await self._notify_circuit_open(task)
-            return False
+            raise CircuitOpen(self._breaker.retry_after(task.device_id))
 
         action = task.action
         ok = False
@@ -84,14 +97,22 @@ class DeviceTaskExecutor:
             logger.exception(
                 "executor.unhandled_exception", task_id=task.id, action=action
             )
-            if self._breaker is not None:
-                self._breaker.record_failure()
+            await self._record_failure(task)
             await self._notify_executor_failed(task, action, str(exc))
             return False
 
-        if not ok and self._breaker is not None:
-            self._breaker.record_failure()
+        if not ok:
+            await self._record_failure(task)
         return ok
+
+    # ---- 熔断辅助（W3：按设备计数，closed→open 边界才告警） ----------------
+
+    async def _record_failure(self, task: TaskLike) -> None:
+        """给该设备记一次失败；触发 closed→open 边界时每设备告警一次。"""
+        if self._breaker is None:
+            return
+        if self._breaker.record_failure(task.device_id):
+            await self._notify_circuit_open(task)
 
     # ---- action handlers ------------------------------------------------
 
@@ -288,6 +309,7 @@ class DeviceTaskExecutor:
                     "note_id": payload.get("note_id", ""),
                     "goal_id": payload.get("goal_id", ""),
                     "run_id": payload.get("run_id", ""),
+                    "business_id": payload.get("business_id", ""),
                     "device_id": str(task.device_id) if task.device_id else "",
                     "platform_note_id": platform_note_id,
                     "short_id": short_id,
@@ -315,6 +337,7 @@ class DeviceTaskExecutor:
                     "note_id": payload.get("note_id", ""),
                     "goal_id": payload.get("goal_id", ""),
                     "run_id": payload.get("run_id", ""),
+                    "business_id": payload.get("business_id", ""),
                     "device_id": str(task.device_id) if task.device_id else "",
                     "platform_note_id": platform_note_id,
                     "short_id": short_id,
@@ -327,10 +350,11 @@ class DeviceTaskExecutor:
     # ---- Phase 2a #7：熔断器相关通知 ----
 
     async def _notify_circuit_open(self, task: TaskLike) -> None:
-        """熔断打开时丢一个 warning 通知（限流：只在 open→closed 边界发，不每次都发）。"""
+        """熔断 closed→open 边界告警（每设备每次打开只发一条，不刷屏）。"""
         if self._notifier is None:
             return
         # 用 device_id 作为 subject；不带 goal/run（熔断是全局的，不是某条 task）
+        payload = task.payload or {}
         try:
             await self._notifier(
                 "agent.alert",
@@ -339,6 +363,7 @@ class DeviceTaskExecutor:
                     "severity": "warning",
                     "title": "设备任务熔断中",
                     "body": "近期失败率过高，调度器暂停派发新任务，等冷却结束再恢复。",
+                    "business_id": payload.get("business_id", ""),
                     "device_id": str(task.device_id) if task.device_id else "",
                     "action": task.action,
                 },
@@ -364,6 +389,7 @@ class DeviceTaskExecutor:
                     "note_id": payload.get("note_id", ""),
                     "goal_id": payload.get("goal_id", ""),
                     "run_id": payload.get("run_id", ""),
+                    "business_id": payload.get("business_id", ""),
                     "device_id": str(task.device_id) if task.device_id else "",
                     "action": action,
                 },

@@ -163,6 +163,12 @@ class AlertScanner:
                 )
             )
             written: list[Alert] = []
+            # 设备/账号 → 业务 映射（payloads 里带了 business_id），
+            # 写告警时按 subject_id（device_id / account_id）回填 alerts.business_id
+            subject_business: dict[str, Any] = {
+                str(p.get("device_id") or p.get("account_id")): p.get("business_id")
+                for p in (*device_payloads, *account_payloads)
+            }
             for a in alerts:
                 if (a.code, a.subject_id) in existing_pairs:
                     continue
@@ -172,6 +178,7 @@ class AlertScanner:
                     message=a.message,
                     subject_id=a.subject_id,
                     resolved=False,
+                    business_id=subject_business.get(a.subject_id or ""),
                 )
                 session.add(row)
                 await session.flush()
@@ -227,7 +234,11 @@ class AlertScanner:
                 except Exception:  # pragma: no cover
                     age = 0.0
             payloads.append(
-                {"device_id": str(d.id), "last_heartbeat_age_sec": age}
+                {
+                    "device_id": str(d.id),
+                    "last_heartbeat_age_sec": age,
+                    "business_id": d.business_id,
+                }
             )
         return payloads
 
@@ -237,7 +248,11 @@ class AlertScanner:
         stmt = select(Account).where(Account.deleted_at.is_(None))
         rows = (await session.execute(stmt)).scalars().all()
         return [
-            {"account_id": str(a.id), "risk_score": float(a.risk_score or 0)}
+            {
+                "account_id": str(a.id),
+                "risk_score": float(a.risk_score or 0),
+                "business_id": a.business_id,
+            }
             for a in rows
         ]
 

@@ -8,7 +8,6 @@
 """
 from __future__ import annotations
 
-import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator
@@ -16,9 +15,6 @@ from typing import Any, AsyncIterator
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-
-# 测试时禁用监控中间件（避免 prometheus 全局状态污染）
-os.environ.setdefault("OTLP_ENDPOINT", "")
 
 from matrix.api import deps
 from matrix.api.app import create_app
@@ -60,6 +56,10 @@ class _ScalarResult:
         self._rows = rows
 
     def scalars(self) -> "_ScalarResult":
+        return self
+
+    def unique(self) -> "_ScalarResult":
+        # 真实 Result.unique() 用于 joinedload 去重；fake 无需去重，原样返回
         return self
 
     def all(self) -> list[Any]:
@@ -105,6 +105,12 @@ class FakeAsyncSession:
         for obj in self.added:
             if getattr(obj, "id", None) is None and hasattr(obj, "id"):
                 obj.id = uuid.uuid4()
+            # 真实 DB 的 server_default(NOW()) 在 fake 里不会生效，
+            # 响应 schema 的 created_at 是必填 datetime，这里补一个
+            if hasattr(obj, "created_at") and getattr(obj, "created_at", None) is None:
+                from datetime import UTC, datetime
+
+                obj.created_at = datetime.now(UTC)
             key = _store_key(obj)
             if key[1] is not None:
                 self._db.store[key] = obj

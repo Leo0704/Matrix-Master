@@ -193,6 +193,80 @@ class TestCircuitBreaker:
         with pytest.raises(ValueError):
             CircuitBreaker(window=1, threshold=1, cool_off=-1)
 
+    def test_record_failure_returns_true_only_on_transition(self, monkeypatch):
+        """closed→open 边界返回 True；打开后继续失败返回 False。"""
+        cb = CircuitBreaker(window=600, threshold=2, cool_off=60)
+        now = 1000.0
+        monkeypatch.setattr("matrix.scheduler.circuit_breaker.monotonic", lambda: now)
+        assert cb.record_failure() is False  # 未到阈值
+        assert cb.record_failure() is True  # 触发 closed→open
+        assert cb.record_failure() is False  # 已打开，不再算边界
+
+    def test_retry_after(self, monkeypatch):
+        cb = CircuitBreaker(window=600, threshold=1, cool_off=60)
+        now = 1000.0
+        monkeypatch.setattr("matrix.scheduler.circuit_breaker.monotonic", lambda: now)
+        assert cb.retry_after() == 0.0
+        cb.record_failure()
+        assert cb.retry_after() == pytest.approx(60.0)
+        now += 30
+        assert cb.retry_after() == pytest.approx(30.0)
+        now += 31
+        assert cb.retry_after() == 0.0
+
+
+# ---------------------------------------------------------------------------
+# PerDeviceCircuitBreaker（W3：按设备分桶）
+# ---------------------------------------------------------------------------
+
+
+class TestPerDeviceCircuitBreaker:
+    def test_buckets_are_independent(self):
+        from matrix.scheduler.circuit_breaker import PerDeviceCircuitBreaker
+
+        cb = PerDeviceCircuitBreaker(window=600, threshold=2, cool_off=60)
+        a, b = uuid4(), uuid4()
+        cb.record_failure(a)
+        cb.record_failure(a)
+        assert cb.is_open(a) is True
+        assert cb.is_open(b) is False
+        # B 的一次失败不影响 A 的计数
+        assert cb.record_failure(b) is False
+        assert cb.is_open(b) is False
+
+    def test_transition_flag_per_device(self):
+        from matrix.scheduler.circuit_breaker import PerDeviceCircuitBreaker
+
+        cb = PerDeviceCircuitBreaker(window=600, threshold=1, cool_off=60)
+        a, b = uuid4(), uuid4()
+        assert cb.record_failure(a) is True  # A 熔断
+        assert cb.record_failure(b) is True  # B 也独立触发自己的边界
+        assert cb.record_failure(a) is False
+
+    def test_retry_after_per_device(self, monkeypatch):
+        from matrix.scheduler.circuit_breaker import PerDeviceCircuitBreaker
+
+        cb = PerDeviceCircuitBreaker(window=600, threshold=1, cool_off=120)
+        now = 1000.0
+        monkeypatch.setattr("matrix.scheduler.circuit_breaker.monotonic", lambda: now)
+        a = uuid4()
+        cb.record_failure(a)
+        assert 0 < cb.retry_after(a) <= 120
+        assert cb.retry_after(uuid4()) == 0.0
+
+    def test_reset(self):
+        from matrix.scheduler.circuit_breaker import PerDeviceCircuitBreaker
+
+        cb = PerDeviceCircuitBreaker(window=600, threshold=1, cool_off=60)
+        a, b = uuid4(), uuid4()
+        cb.record_failure(a)
+        cb.record_failure(b)
+        cb.reset(a)
+        assert cb.is_open(a) is False
+        assert cb.is_open(b) is True
+        cb.reset()
+        assert cb.is_open(b) is False
+
 
 # ---------------------------------------------------------------------------
 # jitter
@@ -467,6 +541,34 @@ class TestRateLimiter:
         assert d.ok
         assert d.jitter_seconds >= 0
 
+    @pytest.mark.asyncio
+    async def test_throttle_does_not_sleep_jitter_itself(self):
+        """W3：throttle 只返回 jitter_seconds，不自己 sleep（否则调用方再睡=双重睡眠）。"""
+        rl = RateLimiter(
+            bucket_capacity=30,
+            bucket_refill_rate=1 / 30,
+            jitter_base=50.0,  # 若内部 sleep 会阻塞 ~50s
+            jitter_sigma=0.1,
+        )
+        noon = datetime(2026, 7, 8, 12, 0)
+        rl._clock = fixed_clock(noon)  # type: ignore[assignment]
+        start = time.monotonic()
+        d = await rl.throttle(make_task())
+        elapsed = time.monotonic() - start
+        assert d.ok
+        assert d.jitter_seconds > 1.0
+        assert elapsed < 1.0
+
+    def test_default_clock_is_utc_aware(self):
+        """W3：默认 clock 必须返回 UTC aware 时间（naive 与 aware 比较会 TypeError）。"""
+        rl = RateLimiter(jitter_base=0.0, jitter_sigma=0.0)
+        assert rl._clock().tzinfo is not None
+
+    def test_default_bucket_capacity_matches_account_interact_cap(self):
+        """W3：令牌桶默认容量与账号日互动上限（20）一致，不再用矛盾的 30。"""
+        rl = RateLimiter(jitter_base=0.0, jitter_sigma=0.0)
+        assert rl.bucket_capacity == rl.account_interact_per_day == 20
+
 
 # ---------------------------------------------------------------------------
 # Scheduler
@@ -490,6 +592,7 @@ class _RecorderWriter(TaskStatusWriter):
         self.running: list[object] = []
         self.success: list[object] = []
         self.failed: list[tuple[object, dict]] = []
+        self.pending: list[tuple[object, datetime]] = []
 
     async def mark_running(self, task: TaskLike) -> None:
         self.running.append(task.id)
@@ -499,6 +602,9 @@ class _RecorderWriter(TaskStatusWriter):
 
     async def mark_failed(self, task: TaskLike, error: dict, executed_at: datetime) -> None:
         self.failed.append((task.id, error))
+
+    async def mark_pending(self, task: TaskLike, scheduled_at: datetime) -> None:
+        self.pending.append((task.id, scheduled_at))
 
 
 class _RecorderExecutor(TaskExecutor):
@@ -627,6 +733,115 @@ class TestScheduler:
         # 跑过至少一帧，writer 没收到任何东西
         assert writer.running == []
         assert writer.success == []
+
+    @pytest.mark.asyncio
+    async def test_circuit_open_reschedules_to_pending(self):
+        """W3：执行器抛 CircuitOpen → 任务回 pending 并推迟 scheduled_at，不 mark_failed。"""
+        from matrix.scheduler.circuit_breaker import CircuitOpen
+
+        class OpenExecutor(TaskExecutor):
+            async def execute(self, task: TaskLike) -> bool:
+                raise CircuitOpen(retry_after=120.0)
+
+        now = datetime(2026, 7, 8, 12, 0, tzinfo=timezone.utc)
+        tasks = [make_task(action="device_collect_metrics")]
+        loader = _RecorderLoader([tasks])
+        writer = _RecorderWriter()
+        rl = _no_jitter_limiter()
+
+        s = Scheduler(
+            loader=loader,  # type: ignore[arg-type]
+            writer=writer,  # type: ignore[arg-type]
+            executor=OpenExecutor(),  # type: ignore[arg-type]
+            rate_limiter=rl,
+            poll_interval=0.01,
+            clock=fixed_clock(now),
+        )
+
+        async def trigger_stop():
+            for _ in range(50):
+                if writer.pending:
+                    s.stop()
+                    return
+                await asyncio.sleep(0.005)
+
+        await asyncio.gather(s.run(), trigger_stop())
+
+        assert writer.failed == []
+        assert writer.success == []
+        assert len(writer.pending) == 1
+        task_id, scheduled_at = writer.pending[0]
+        assert task_id == tasks[0].id
+        # 推迟到冷却结束（120s）之后
+        assert (scheduled_at - now).total_seconds() == pytest.approx(120.0)
+
+    @pytest.mark.asyncio
+    async def test_sweep_reclaims_stale_running(self):
+        """W3：主循环定期调用 loader.reclaim_stale_running 回收卡死任务。"""
+        calls: list[dict] = []
+
+        class SweepLoader(_RecorderLoader):
+            async def reclaim_stale_running(
+                self, now, *, stale_after_seconds, max_attempts
+            ) -> int:
+                calls.append(
+                    {
+                        "stale_after_seconds": stale_after_seconds,
+                        "max_attempts": max_attempts,
+                    }
+                )
+                return 0
+
+        loader = SweepLoader([])
+        writer = _RecorderWriter()
+        executor = _RecorderExecutor([])
+        rl = _no_jitter_limiter()
+
+        s = Scheduler(
+            loader=loader,  # type: ignore[arg-type]
+            writer=writer,  # type: ignore[arg-type]
+            executor=executor,  # type: ignore[arg-type]
+            rate_limiter=rl,
+            poll_interval=0.01,
+            sweep_interval=0.02,
+            stale_running_seconds=1800.0,
+            max_attempts=5,
+        )
+
+        async def trigger_stop():
+            await asyncio.sleep(0.06)
+            s.stop()
+
+        await asyncio.gather(s.run(), trigger_stop())
+
+        # 0.06s / 0.02s 间隔 → 至少扫 2 次
+        assert len(calls) >= 2
+        assert calls[0]["stale_after_seconds"] == 1800.0
+        assert calls[0]["max_attempts"] == 5
+
+    @pytest.mark.asyncio
+    async def test_sweep_skipped_when_loader_has_no_reclaim(self):
+        """loader 没有 reclaim_stale_running（如测试假 loader）时主循环不受影响。"""
+        loader = _RecorderLoader([])
+        writer = _RecorderWriter()
+        executor = _RecorderExecutor([])
+        rl = _no_jitter_limiter()
+
+        s = Scheduler(
+            loader=loader,  # type: ignore[arg-type]
+            writer=writer,  # type: ignore[arg-type]
+            executor=executor,  # type: ignore[arg-type]
+            rate_limiter=rl,
+            poll_interval=0.01,
+            sweep_interval=0.01,
+        )
+
+        async def trigger_stop():
+            await asyncio.sleep(0.03)
+            s.stop()
+
+        await asyncio.gather(s.run(), trigger_stop())
+        assert loader.calls >= 1
 
     @pytest.mark.asyncio
     async def test_stop_event_halts(self):

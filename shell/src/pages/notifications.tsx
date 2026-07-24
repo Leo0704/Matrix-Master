@@ -26,6 +26,7 @@ import { EmptyState } from '@/components/common/empty-state';
 import { formatRelative } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { toast } from '@/components/ui/use-toast';
+import { useActiveBusinessId } from '@/stores/ui-store';
 import type { NotificationSeverity, NotificationItem } from '@/types/api';
 
 const SEVERITY_ICON: Record<NotificationSeverity, typeof Info> = {
@@ -271,7 +272,12 @@ function NotificationCard({
 export function Notifications() {
   const [tab, setTab] = useState<'all' | 'unread'>('all');
   const unread = tab === 'unread';
-  const { data, isLoading, error, refetch } = useNotifications({ unread, limit: 100 });
+  const activeBusinessId = useActiveBusinessId();
+  const { data, isLoading, error, refetch } = useNotifications({
+    unread,
+    limit: 100,
+    business_id: activeBusinessId ?? undefined,  // v0.7+ 业务过滤
+  });
   const markMut = useMarkRead();
   const deleteMut = useDeleteNotification();
   const clearMut = useClearReadNotifications();

@@ -76,9 +76,6 @@ class Settings(BaseSettings):
     ts_api_url: Optional[str] = None
     ts_api_key: Optional[str] = None
 
-    # ===== 监控 =====
-    otlp_endpoint: Optional[str] = None
-
 
 @lru_cache
 def get_settings() -> Settings:

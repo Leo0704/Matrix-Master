@@ -1,5 +1,6 @@
 package com.matrix.companion.auth
 
+import com.matrix.companion.util.Clock
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
@@ -18,7 +19,11 @@ class HmacSignerTest {
 
     @Test
     fun `signed body verifies against the same canonical message`() {
-        val verifier = HmacVerifier(provider)
+        // verify 会校验时间戳新鲜度（±300s），测试用的是固定历史时间戳，
+        // 注入固定时钟避免 EXPIRED_TIMESTAMP 掩盖签名 round-trip 的验证。
+        val verifier = HmacVerifier(provider, clock = object : Clock {
+            override fun nowSeconds(): Long = 1_700_000_000L
+        })
         val signer = HmacSigner(provider)
 
         val body = """{"device_id":"abc","tailscale_ip":"100.1.2.3","online":true,"app":null,"battery":80}""".toByteArray()

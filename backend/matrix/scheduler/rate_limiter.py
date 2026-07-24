@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Awaitable, Callable, Protocol
 
 from sqlalchemy import select
@@ -34,6 +34,11 @@ INTERACT_ACTIONS = {
     "device_collect",
     "device_follow",
 }
+
+
+def _utcnow() -> datetime:
+    """默认时钟：UTC aware（naive datetime.now 与 aware 时间比较会直接 TypeError）。"""
+    return datetime.now(UTC)
 
 
 @dataclass
@@ -114,10 +119,7 @@ class DbDailyCounter:
         day: date,
         amount: int = 1,
     ) -> int:
-        """原子自增 ``count += amount``（默认 1，保持 rate_limiter 旧行为）。
-
-        Phase 2a B：cost_guard 一次记 N 个 token（不再是 1 个事件），amount>1。
-        """
+        """原子自增 ``count += amount``（默认 1，保持 rate_limiter 旧行为）。"""
         if amount < 1:
             amount = 1
         async with self._factory() as session:
@@ -147,7 +149,9 @@ class RateLimiter:
     def __init__(
         self,
         *,
-        bucket_capacity: int = 30,
+        # W3：桶按 account 分，capacity 与账号日互动上限（20）对齐；
+        # 之前的 30 会让单账号瞬时突发超过自己的日互动上限。
+        bucket_capacity: int = 20,
         bucket_refill_rate: float = 1 / 30,
         device_publish_per_day: int = 5,
         device_interact_per_day: int = 30,
@@ -156,7 +160,7 @@ class RateLimiter:
         jitter_base: float = 1.0,
         jitter_sigma: float = 0.5,
         breaker: CircuitBreaker | None = None,
-        clock: Callable[[], datetime] = datetime.now,
+        clock: Callable[[], datetime] = _utcnow,
         daily_counter: DailyCounterBackend | None = None,
     ) -> None:
         self._buckets: dict[object, TokenBucket] = {}
@@ -249,10 +253,8 @@ class RateLimiter:
         except RateLimitTimeout:
             return RateLimitDecision(ok=False, reason="rate_limit_timeout")
 
-        # 5. 抖动（成功路径返回 sleep 时长）
+        # 5. 抖动（只返回建议 sleep 时长，由调用方睡——这里再睡就是双重睡眠）
         jitter = jitter_delay(self.jitter_base, self.jitter_sigma)
-        if jitter > 0:
-            await asyncio.sleep(jitter)
         return RateLimitDecision(ok=True, jitter_seconds=jitter)
 
     async def execute(

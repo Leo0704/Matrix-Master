@@ -12,7 +12,11 @@ from typing import Any, Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from matrix.agent.bootstrap import build_agent_services, db_note_writer
+from matrix.agent.bootstrap import (
+    build_agent_services,
+    db_interaction_writer,
+    db_note_writer,
+)
 from matrix.agent._services import AgentServices
 from matrix.agent.llm_rate_limiter import LLMRateLimiter
 from matrix.kb.embedding import EmbeddingService
@@ -39,13 +43,19 @@ class _LazyRetriever:
                 text = query.query
                 type_ = kwargs.pop("type", getattr(query, "doc_type", None) or _doc_type_from_doc_types(getattr(query, "doc_types", None)))
                 top_k = kwargs.pop("top_k", getattr(query, "top_k", 5))
+                business_id = kwargs.pop("business_id", getattr(query, "business_id", None))
             elif isinstance(query, dict):
                 text = query.get("query", "")
                 type_ = kwargs.pop("type", query.get("type") or _doc_type_from_doc_types(query.get("doc_types")))
                 top_k = kwargs.pop("top_k", query.get("top_k", 5))
+                business_id = kwargs.pop("business_id", query.get("business_id"))
             else:
                 text, type_, top_k = query, kwargs.pop("type", ""), kwargs.pop("top_k", 5)
-            return await r.retrieve(text, type=type_ or "history", top_k=top_k, **kwargs)
+                business_id = kwargs.pop("business_id", None)
+            return await r.retrieve(
+                text, type=type_ or "history", top_k=top_k,
+                business_id=business_id, **kwargs,
+            )
 
 
 def _doc_type_from_doc_types(doc_types: Any) -> str:
@@ -166,6 +176,15 @@ async def build_runtime_services(
     sem_size = int(os.environ.get("MATRIX_LLM_CONCURRENCY", "8"))
     llm_rate_limiter = LLMRateLimiter(semaphore=asyncio.Semaphore(sem_size))
 
+    # 互动限速器：与 app.py 调度器同规格（DB 日上限跨进程共享，抖动由 executor 负责）
+    from matrix.scheduler.rate_limiter import DbDailyCounter, RateLimiter
+
+    rate_limiter = RateLimiter(
+        jitter_base=0.0,
+        jitter_sigma=0.0,
+        daily_counter=DbDailyCounter(session_factory),
+    )
+
     if notifier is None:
         # Phase 1：替换原 _noop_notifier。WebhookNotifier 内部持长生命周期 httpx 客户端，
         # lifespan 收尾需 aclose()（app.py 处理）。
@@ -187,11 +206,14 @@ async def build_runtime_services(
         config=_LazyConfigReader(session_factory),
         task_writer=task_writer,
         note_writer=db_note_writer,  # v0.7 Phase 5：DRAFT 草稿直接落 notes 表
+        interaction_writer=db_interaction_writer,  # 修断线：互动成功记录落 interactions 表
+        rate_limiter=rate_limiter,  # 修断线：interact 节点的限速器此前永远是 None
         scheduler=scheduler,
         notifier=notifier,
         llm_rate_limiter=llm_rate_limiter,
         round_allocator=round_allocator,  # 第 1 期：注入 DefaultRoundSlotAllocator
         image_generator=get_image_gen_client(),  # v0.7 Phase 3 补接线：IMAGE_GEN 节点此前永远 NO_CLIENT
+        session_factory=session_factory,  # 修断线：interact 去重/平台 id → 本地 UUID 解析都要 DB
     )
     # 默认 1024 对"返回 3 个选题 + 长 rationale / 800 字正文 + JSON 外壳"太短，
     # 输出截断 → json_parse_fail → 整条 run 进 ALERT（E2E 实测复现）。提到 4096。

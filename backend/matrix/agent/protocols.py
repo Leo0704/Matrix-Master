@@ -37,6 +37,8 @@ class RetrieveQuery:
     doc_types: tuple[str, ...] = ()
     top_k: int = 5
     filters: dict[str, Any] | None = None
+    # 业务隔离（可选）：传入后只命中 business_id == X 或 NULL（全局共享）的文档
+    business_id: str | None = None
 
 
 @runtime_checkable

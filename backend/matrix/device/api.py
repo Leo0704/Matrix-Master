@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Annotated, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,7 +35,7 @@ from matrix.device.hmac import (
     verify_signature,
 )
 from matrix.device.key_manager import KeyManager
-from matrix.device.login_state import LoginStateMonitor, LoginStateReport
+from matrix.device.login_state import LoginStateError, LoginStateMonitor
 
 from matrix.device.registry import (
     DeviceHeartbeatData,
@@ -51,19 +51,6 @@ router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
 # ---------------------------------------------------------------------------
 
 
-class DeviceOut(BaseModel):
-    id: UUID
-    nickname: str
-    model: str
-    android_version: str
-    apk_version: str
-    tailnet_ip: Optional[str] = None
-    status: str
-    tags: list[str] = Field(default_factory=list)
-    last_heartbeat: Optional[str] = None
-    bound_accounts: int = 0
-
-
 class HeartbeatIn(BaseModel):
     battery: Optional[int] = Field(default=None, ge=0, le=100)
     network: Optional[str] = None
@@ -71,6 +58,7 @@ class HeartbeatIn(BaseModel):
     foreground_app: Optional[str] = None
     errors: Optional[dict] = None
     tailscale_state: Optional[str] = None
+    tailscale_ip: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -187,47 +175,6 @@ async def _load_secret_for_verify(session: AsyncSession, key_id: str) -> Optiona
 # ---------------------------------------------------------------------------
 
 
-def _to_out(device: Device, bound_accounts: int = 0) -> DeviceOut:
-    return DeviceOut(
-        id=device.id,
-        nickname=device.nickname,
-        model=device.model,
-        android_version=device.android_version,
-        apk_version=device.apk_version,
-        tailnet_ip=str(device.tailnet_ip) if device.tailnet_ip else None,
-        status=device.status,
-        tags=list(device.tags or []),
-        last_heartbeat=device.last_heartbeat.isoformat() if device.last_heartbeat else None,
-        bound_accounts=bound_accounts,
-    )
-
-
-@router.get("", response_model=dict)
-async def list_devices(
-    session: Annotated[AsyncSession, Depends(get_session)],
-    status_filter: Annotated[Optional[str], Query(alias="status")] = None,
-    tag: Annotated[Optional[str], Query()] = None,
-) -> dict:
-    """设备列表（master-rest.openapi.yaml ``GET /devices``）。"""
-    registry = DeviceRegistry(session)
-    devices = await registry.get_devices(status=status_filter, tag=tag)
-    return {"items": [_to_out(d) for d in devices]}
-
-
-@router.get("/{device_id}", response_model=DeviceOut)
-async def get_device(
-    device_id: UUID,
-    session: Annotated[AsyncSession, Depends(get_session)],
-) -> DeviceOut:
-    """设备详情（master-rest.openapi.yaml ``GET /devices/{id}``）。"""
-    registry = DeviceRegistry(session)
-    device = await registry.get_device(device_id)
-    if device is None or device.deleted_at is not None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="device not found")
-    bound = await registry.get_bound_account_count(device_id)
-    return _to_out(device, bound_accounts=bound)
-
-
 @router.post("/{device_id}/heartbeat", status_code=status.HTTP_204_NO_CONTENT)
 async def heartbeat(
     device_id: UUID,
@@ -244,6 +191,7 @@ async def heartbeat(
         foreground_app=payload.foreground_app,
         errors=payload.errors,
         tailscale_state=payload.tailscale_state,
+        tailscale_ip=payload.tailscale_ip,
     )
     try:
         await registry.update_heartbeat(device_id, data)
@@ -251,26 +199,34 @@ async def heartbeat(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
 
 
+class LoginStateIn(BaseModel):
+    """APK 登录态上报体（新契约）：不带 account_id——APK 无权访问控制台鉴权的
+    GET /accounts，账号由后端按 ``accounts.device_id`` 解析。"""
+
+    platform: Optional[str] = None  # 目前仅 xhs；accounts 表尚无 platform 列，仅作契约透传
+    state: str  # 取值同 VALID_RESULTS：success / failed / captcha / logout / expired
+    risk_signal: Optional[str] = None
+    error_message: Optional[str] = None
+
+
 @router.post("/{device_id}/login_state", status_code=status.HTTP_204_NO_CONTENT)
 async def report_login_state(
     device_id: UUID,
-    payload: dict,
+    payload: LoginStateIn,
     session: Annotated[AsyncSession, Depends(get_session)],
     _auth: Annotated[HmacAuthResult, Depends(verify_hmac)] = None,
 ) -> None:
-    """APK 上报 XHS 登录态。"""
+    """APK 上报 XHS 登录态。绑定账号由后端按 device_id 解析。"""
     monitor = LoginStateMonitor(session)
     try:
-        report = LoginStateReport(
-            account_id=UUID(str(payload["account_id"])),
-            device_id=device_id,
-            result=str(payload["result"]),
-            risk_signal=payload.get("risk_signal"),
-            error_message=payload.get("error_message"),
+        await monitor.report_for_device(
+            device_id,
+            payload.state,
+            risk_signal=payload.risk_signal,
+            error_message=payload.error_message,
         )
-    except (KeyError, ValueError) as e:
+    except LoginStateError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
-    await monitor.report(report)
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +259,8 @@ async def claim_next_task(
 
     原子语义：用 CTE + FOR UPDATE SKIP LOCKED 选一条 pending task，
     同一台设备并发请求不会重复消费同一条任务。
+    只认领 ``action='device_publish'``：手机只会执行发布，collect 等
+    其他动作由后端 worker 处理，被手机抢走只会判死。
     """
     from datetime import UTC, datetime
 
@@ -313,6 +271,7 @@ async def claim_next_task(
             SELECT id FROM tasks
             WHERE device_id = :device_id
               AND status = 'pending'
+              AND action = 'device_publish'
               AND scheduled_at <= :now
             ORDER BY scheduled_at ASC
             FOR UPDATE SKIP LOCKED
@@ -402,7 +361,6 @@ __all__ = [
     "router",
     "verify_hmac",
     "HmacAuthResult",
-    "DeviceOut",
     "claim_next_task",
     "complete_task",
 ]

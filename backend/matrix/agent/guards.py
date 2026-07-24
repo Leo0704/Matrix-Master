@@ -203,6 +203,19 @@ def interact_to_collect(state: AgentState, cfg: GuardConfig) -> bool:
     return interact_has_results(state)
 
 
+def interact_all_failed(state: AgentState) -> bool:
+    """INTERACT 全部失败（有失败且 0 成功）→ 应走 ALERT 而不是默默收工。
+
+    全部 skipped（去重/风险跳过）不算失败：succeeded=0 且 failed=0 → False。
+    """
+    if not interact_has_results(state):
+        return False
+    results: dict[str, Any] = state.get("interact_results") or {}
+    failed = int(results.get("failed", 0) or 0)
+    succeeded = int(results.get("succeeded", 0) or 0)
+    return failed > 0 and succeeded == 0
+
+
 # ---------------------------------------------------------------------------
 # COLLECT → ANALYZE / ALERT
 # ---------------------------------------------------------------------------
@@ -290,10 +303,13 @@ def route_after_publish(state: AgentState, cfg: GuardConfig) -> State:
 
 
 def route_after_interact(state: AgentState, cfg: GuardConfig) -> State:
-    if interact_to_collect(state, cfg):
-        # v0.7+：互动完成即收工（同 route_after_publish，不再去 COLLECT）
-        return State.IDLE
-    return State.ALERT
+    if not interact_to_collect(state, cfg):
+        return State.ALERT
+    if interact_all_failed(state):
+        # 修 INTERACT_ALL_FAILED 被吞：全失败不能回 IDLE 装没事，走 ALERT
+        return State.ALERT
+    # v0.7+：互动完成即收工（同 route_after_publish，不再去 COLLECT）
+    return State.IDLE
 
 
 def route_after_collect(state: AgentState, cfg: GuardConfig) -> State:
@@ -330,6 +346,7 @@ __all__ = [
     # Interact (v0.6)
     "interact_has_results",
     "interact_to_collect",
+    "interact_all_failed",
     # Collect
     "collect_has_metrics",
     "collect_no_metrics_to_alert",

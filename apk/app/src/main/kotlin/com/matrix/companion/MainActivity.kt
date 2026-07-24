@@ -73,6 +73,7 @@ class MainActivity : AppCompatActivity() {
         if (hasMediaPermission()) {
             CompanionService.start(this)
             WatchdogService.start(this)
+            TaskPollerService.start(this)
         } else {
             // 没权限时提示并请求
             Toast.makeText(

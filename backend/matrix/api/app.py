@@ -63,9 +63,8 @@ from matrix.api.schemas import ErrorDetail, ErrorResponse
 from matrix.db import create_engine
 from matrix.llm.embeddings import EmbeddingClient
 from matrix.llm.router import get_default_client
-from matrix.monitoring import setup_monitoring, shutdown_tracing
 from matrix.monitoring.alert_scanner import AlertScanner
-from matrix.monitoring.logging import get_logger
+from matrix.monitoring.logging import configure_logging, get_logger
 from matrix.monitoring.middleware import install_middleware
 from matrix.agent.daily_digest import DailyDigestWorker
 
@@ -389,10 +388,6 @@ def create_app(
                 await digest_worker.stop()
             except Exception:  # pragma: no cover
                 logger.warning("daily_digest worker stop failed", exc_info=True)
-        try:
-            shutdown_tracing()
-        except Exception:  # pragma: no cover
-            logger.exception("shutdown_tracing failed")
         if app.state.db_engine is not None:
             try:
                 await app.state.db_engine.dispose()
@@ -433,10 +428,11 @@ def create_app(
     # ---- 路由 ----
     API_PREFIX = "/api/v1"
     # 控制台统一鉴权：Bearer token（MATRIX_API_SECRET，未配置时启动自动生成，
-    # 见 deps.ensure_api_secret）。豁免仅三处：
+    # 见 deps.ensure_api_secret）。豁免仅四处：
     # - health：docker 健康检查 / Caddy 探活不该要 token；
     # - device_router：APK 设备侧，生效端点均以端点级 Depends(verify_hmac) 保护；
-    # - pair_router：APK 首次配对尚无凭证，由一次性配对码 + 失败限流保护。
+    # - pair_router：APK 首次配对尚无凭证，由一次性配对码 + 失败限流保护；
+    # - logs_router：APK 日志 ingest，靠 Tailscale 网络层隔离（见 routes/logs.py）。
     _console_auth = [Depends(get_current_user)]
     app.include_router(health_routes.router, prefix=API_PREFIX)
     app.include_router(
@@ -445,9 +441,6 @@ def create_app(
     app.include_router(devices_routes.pair_router, prefix=API_PREFIX)
     # 设备侧路由（heartbeat / login_state / tasks 等）。该 router 自带
     # prefix="/api/v1/devices"，故此处不再传 prefix 以免路径重复。
-    # 必须在 devices_routes 之后挂载：两者均有 `GET ""`/`GET /{id}`，
-    # Starlette 按注册顺序首匹配，devices_routes 在前 → 其 list/get 优先生效；
-    # device_router 仅贡献独有的 heartbeat/login_state/tasks。
     app.include_router(device_router)
     app.include_router(
         accounts_routes.router, prefix=API_PREFIX, dependencies=_console_auth
@@ -489,9 +482,10 @@ def create_app(
     app.include_router(
         interactions_routes.router, prefix=API_PREFIX, dependencies=_console_auth
     )  # v0.6
-    app.include_router(
-        logs_routes.router, prefix=API_PREFIX, dependencies=_console_auth
-    )  # PR 6
+    # APK 日志 ingest：不挂控制台鉴权（Bearer）。设计意图见 routes/logs.py：
+    # APK 无控制台 token，靠 Tailscale / adb-reverse 网络层隔离做访问控制；
+    # 端点自身保留批量条数上限等校验。
+    app.include_router(logs_routes.router, prefix=API_PREFIX)  # PR 6
 
     return app
 
@@ -581,7 +575,7 @@ def _install_exception_handlers(app: FastAPI) -> None:
 
 
 def _extract_trace_id(request: Request) -> str:
-    """从 request.state（middleware 注入）/ X-Request-ID header / OTel context 取 trace_id。
+    """从 request.state（middleware 注入）/ X-Request-ID header 取 trace_id。
 
     不依赖 ``X-Trace-Id`` response header（那是给客户端读的，handler 在它之前）。
     """
@@ -593,15 +587,6 @@ def _extract_trace_id(request: Request) -> str:
         candidate = raw.strip().lower()
         if len(candidate) == 32 and all(c in "0123456789abcdef" for c in candidate):
             return candidate
-    try:
-        from opentelemetry import trace as otel_trace
-
-        span = otel_trace.get_current_span()
-        ctx = span.get_span_context() if span else None
-        if ctx and ctx.trace_id:
-            return format(ctx.trace_id, "032x")
-    except Exception:  # pragma: no cover
-        pass
     return ""
 
 
@@ -609,11 +594,11 @@ def _extract_trace_id(request: Request) -> str:
 # 默认 app（供 uvicorn ``matrix.api.app:app`` 加载）
 # ---------------------------------------------------------------------------
 
-# 初始化 monitoring（tracing + logging），失败也不阻塞启动
+# 初始化 structlog logging，失败也不阻塞启动
 try:
-    setup_monitoring("matrix-api", otlp_endpoint=None)
+    configure_logging()
 except Exception:  # pragma: no cover
-    logging.getLogger(__name__).warning("setup_monitoring failed", exc_info=True)
+    logging.getLogger(__name__).warning("configure_logging failed", exc_info=True)
 
 app = create_app()
 

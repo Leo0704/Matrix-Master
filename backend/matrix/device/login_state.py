@@ -59,6 +59,38 @@ class LoginStateMonitor:
     # 上报
     # ------------------------------------------------------------------
 
+    async def report_for_device(
+        self,
+        device_id: UUID,
+        state: str,
+        *,
+        risk_signal: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> AccountLoginSession:
+        """APK 新契约：不带 account_id，按 ``accounts.device_id`` 解析绑定账号后记录。
+
+        APK 无权访问控制台鉴权的 GET /accounts，故由后端解析；未绑定账号或
+        state 非法时抛 ``LoginStateError``（API 层转 400）。
+        """
+        result = await self.session.execute(
+            select(Account).where(
+                Account.device_id == device_id,
+                Account.deleted_at.is_(None),
+            )
+        )
+        accounts = list(result.scalars().all())
+        if not accounts:
+            raise LoginStateError(f"no account bound to device {device_id}")
+        return await self.report(
+            LoginStateReport(
+                account_id=accounts[0].id,
+                device_id=device_id,
+                result=state,
+                risk_signal=risk_signal,
+                error_message=error_message,
+            )
+        )
+
     async def report(self, report: LoginStateReport) -> AccountLoginSession:
         """记录一次登录态变化。"""
         if report.result not in VALID_RESULTS:

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -156,12 +157,14 @@ class DailyDigestGenerator:
             .order_by(Notification.created_at.desc())
             .limit(self._config.max_notifications)
         )
-        # notifications 表目前没有 business_id 列；用 payload 里的 business_id 过滤
+        # W5：优先用 notifications.business_id 新列分桶；
+        # 老数据（列为 NULL）回退 payload 里的 business_id
         rows = (await session.execute(stmt)).scalars().all()
         filtered: list[Notification] = []
         for r in rows:
+            col_bid = str(r.business_id) if r.business_id else None
             payload_bid = (r.payload or {}).get("business_id")
-            row_bid = str(payload_bid) if payload_bid else None
+            row_bid = col_bid or (str(payload_bid) if payload_bid else None)
             if row_bid == business_id:
                 filtered.append(r)
         return filtered
@@ -204,6 +207,8 @@ class DailyDigestGenerator:
             title=title,
             body=body,
             payload=payload,
+            # W5：业务归属写 notifications.business_id 新列
+            business_id=_as_uuid(business_id),
         )
         session.add(notification)
         logger.info(
@@ -212,6 +217,16 @@ class DailyDigestGenerator:
             title=title,
             tokens=result.completion_tokens,
         )
+
+
+def _as_uuid(value: str | None) -> uuid.UUID | None:
+    """business_id（str）→ UUID；空/非法 → None（写全局共享桶）。"""
+    if not value:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError):
+        return None
 
 
 def _default_model() -> str:

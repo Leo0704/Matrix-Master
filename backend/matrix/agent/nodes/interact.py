@@ -72,11 +72,43 @@ async def _gen_comment_text(
         return None
 
 
+async def _resolve_local_note_id(
+    session_factory: Any, platform_note_id: str
+) -> UUID | None:
+    """把平台笔记 id（XHS 字符串）解析成本地 ``notes.id``（UUID）。
+
+    interactions.target_note_id 是本地 UUID 外键，直接塞平台字符串必失败；
+    查不到（本机没索引过这篇）或 DB 异常 → 返回 None，由 caller 跳过该条记录。
+    """
+    if session_factory is None or not platform_note_id:
+        return None
+    try:
+        from sqlalchemy import select
+
+        from matrix.db.models import Note
+
+        async with session_factory() as session:
+            return (
+                await session.execute(
+                    select(Note.id).where(
+                        Note.platform_note_id == platform_note_id,
+                        Note.deleted_at.is_(None),
+                    )
+                )
+            ).scalars().first()
+    except Exception:
+        logger.exception(
+            "interact.resolve_local_note_failed", target_note_id=platform_note_id
+        )
+        return None
+
+
 async def interact_node(state: AgentState) -> dict[str, Any]:
     """按 plan 逐条做 like / comment，聚合 results。
 
     Returns:
-        ``{"interact_results": {"succeeded": int, "failed": int, "details": [...]},
+        ``{"interact_results": {"succeeded": int, "failed": int, "skipped": int,
+           "details": [...]},
            "interact_attempts": int, "last_error": None | {"code": "PARTIAL_FAIL", ...}}``
     """
     services = get_services()
@@ -93,12 +125,14 @@ async def interact_node(state: AgentState) -> dict[str, Any]:
     details: list[dict[str, Any]] = []
     succeeded = 0
     failed = 0
+    skipped = 0
 
     if not plan:
         return {
             "interact_results": {
                 "succeeded": 0,
                 "failed": 0,
+                "skipped": 0,
                 "details": [],
             },
             "interact_attempts": int(state.get("interact_attempts", 0)),
@@ -137,7 +171,9 @@ async def interact_node(state: AgentState) -> dict[str, Any]:
                 kind=kind,
             )
             if decision.skip:
-                # 跳过不算 failed（不是设备问题），但要记一条 details 让上层看见
+                # 跳过计入 skipped（既不算 failed 也不算 succeeded），
+                # details 里带 skipped=True 让上层看见原因
+                skipped += 1
                 details.append(
                     {
                         "kind": kind,
@@ -256,20 +292,33 @@ async def interact_node(state: AgentState) -> dict[str, Any]:
                 logger.exception("interact.rate_record_failed")
 
         if services.interaction_writer is not None:
-            try:
-                await services.interaction_writer(
-                    {
-                        "account_id": account_id,
-                        "target_note_id": target_note_id,
-                        "type": kind,
-                        "content": content,
-                        "result": "success",
-                        "request_id": request_id,
-                    }
+            # interactions.target_note_id 是本地 notes.id（UUID 外键），
+            # 平台字符串直接写入必失败 → 先解析本地 UUID；查不到就跳过该条记录
+            target_id: Any = target_note_id
+            if services.session_factory is not None:
+                target_id = await _resolve_local_note_id(
+                    services.session_factory, target_note_id
                 )
-            except Exception:
-                # 写库失败不阻塞后续 plan
-                logger.exception("interact.write_failed")
+                if target_id is None:
+                    logger.warning(
+                        "interact.interaction_record_skipped_no_local_note",
+                        target_note_id=target_note_id,
+                    )
+            if target_id is not None:
+                try:
+                    await services.interaction_writer(
+                        {
+                            "account_id": account_id,
+                            "target_note_id": target_id,
+                            "type": kind,
+                            "content": content,
+                            "result": "success",
+                            "request_id": request_id,
+                        }
+                    )
+                except Exception:
+                    # 写库失败不阻塞后续 plan
+                    logger.exception("interact.write_failed")
 
         succeeded += 1
         details.append(
@@ -299,6 +348,7 @@ async def interact_node(state: AgentState) -> dict[str, Any]:
         "interact_results": {
             "succeeded": succeeded,
             "failed": failed,
+            "skipped": skipped,
             "details": details,
         },
         "interact_attempts": int(state.get("interact_attempts", 0)) + 1,

@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -20,7 +20,10 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from matrix.db.models import Task
+from matrix.monitoring.logging import get_logger
 from matrix.scheduler.scheduler import TaskLike
+
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +161,61 @@ class DbTaskLoader:
             rows = result.scalars().all()
             return [_DbTaskAdapter.from_orm(r) for r in rows]
 
+    async def reclaim_stale_running(
+        self,
+        now: datetime,
+        *,
+        stale_after_seconds: float = 1800.0,
+        max_attempts: int = 5,
+    ) -> int:
+        """回收卡死在 running 的任务（W3）。
+
+        ``status='running'`` 且 ``updated_at`` 超过 ``stale_after_seconds``
+        没动的任务（tasks 表有 set_updated_at trigger，updated_at 即进入
+        running 的时刻）：
+        - ``attempts >= max_attempts`` → 标 failed（收尸，error=STALE_RUNNING）
+        - 否则退回 pending 立即重排（attempts 在 mark_running 时已自增，保留）
+
+        返回被回收（重置 + 判死）的行数。
+        """
+        cutoff = now - timedelta(seconds=stale_after_seconds)
+        async with self._factory() as session:
+            try:
+                base = update(Task).where(
+                    Task.status == "running",
+                    Task.updated_at < cutoff,
+                )
+                failed_result = await session.execute(
+                    base.where(Task.attempts >= max_attempts).values(
+                        status="failed",
+                        last_error={
+                            "code": "STALE_RUNNING",
+                            "message": (
+                                f"running 超过 {int(stale_after_seconds)}s 且 "
+                                f"attempts 达到上限 {max_attempts}，判定失败"
+                            ),
+                        },
+                    )
+                )
+                pending_result = await session.execute(
+                    base.where(Task.attempts < max_attempts).values(
+                        status="pending",
+                        scheduled_at=now,
+                    )
+                )
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+        reclaimed = (failed_result.rowcount or 0) + (pending_result.rowcount or 0)
+        if reclaimed:
+            logger.warning(
+                "scheduler.reclaim_stale_running",
+                failed=failed_result.rowcount or 0,
+                requeued=pending_result.rowcount or 0,
+            )
+        return reclaimed
+
 
 # ---------------------------------------------------------------------------
 # DbTaskStatusWriter：mark_running / mark_success / mark_failed
@@ -194,6 +252,14 @@ class DbTaskStatusWriter:
             last_error=error,
         )
 
+    async def mark_pending(self, task: TaskLike, scheduled_at: datetime) -> None:
+        """退回 pending 并重排（W3：熔断打开时推迟到冷却结束后再执行）。"""
+        await self._update(
+            task.id,
+            status="pending",
+            scheduled_at=scheduled_at,
+        )
+
     async def _update(
         self,
         task_id: Any,
@@ -202,6 +268,7 @@ class DbTaskStatusWriter:
         executed_at: datetime | None = None,
         last_error: dict | None = None,
         attempts: int | None = None,
+        scheduled_at: datetime | None = None,
     ) -> None:
         values: dict[str, Any] = {"status": status}
         if executed_at is not None:
@@ -210,6 +277,8 @@ class DbTaskStatusWriter:
             values["last_error"] = last_error
         if attempts is not None:
             values["attempts"] = attempts
+        if scheduled_at is not None:
+            values["scheduled_at"] = scheduled_at
 
         async with self._factory() as session:
             try:

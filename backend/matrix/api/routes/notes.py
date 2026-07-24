@@ -135,6 +135,15 @@ async def update_note(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "note not found")
 
     data = body.model_dump(exclude_unset=True)
+    # W5 状态流转校验：手动 PATCH 不允许把笔记置为 published（防造假），
+    # 除非笔记已有 platform_note_id（即确由设备发布链路发出去的）；
+    # 其他状态流转保持原有自由编辑语义。
+    if data.get("status") == "published" and n.status != "published":
+        if not (n.platform_note_id or "").strip():
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "cannot manually set status to 'published' without platform_note_id",
+            )
     for key, val in data.items():
         setattr(n, key, val)
     n.updated_at = datetime.now(timezone.utc)

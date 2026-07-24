@@ -208,6 +208,48 @@ class TestDbTaskLoader:
         loader = DbTaskLoader(factory)
         assert await loader.load_pending(datetime.now(timezone.utc), 10) == []
 
+    @pytest.mark.asyncio
+    async def test_reclaim_stale_running_requeues_and_fails(self):
+        """W3：卡死 running 回收——attempts 到上限的标 failed，其余回 pending。"""
+        factory, session = _build_mock_session_factory()
+        failed_result = MagicMock()
+        failed_result.rowcount = 1
+        pending_result = MagicMock()
+        pending_result.rowcount = 2
+        session.execute.side_effect = [failed_result, pending_result]
+
+        loader = DbTaskLoader(factory)
+        now = datetime.now(timezone.utc)
+        reclaimed = await loader.reclaim_stale_running(
+            now, stale_after_seconds=1800, max_attempts=5
+        )
+
+        assert reclaimed == 3
+        assert session.execute.await_count == 2
+        # 第一条：attempts 到上限 → failed + STALE_RUNNING
+        failed_stmt = session.execute.await_args_list[0].args[0]
+        failed_params = failed_stmt.compile().params
+        assert failed_params.get("status") == "failed"
+        assert failed_params["last_error"]["code"] == "STALE_RUNNING"
+        compiled_failed = str(failed_stmt.compile())
+        assert "updated_at" in compiled_failed
+        assert "attempts" in compiled_failed
+        # 第二条：未到上限 → pending + 重排 scheduled_at
+        pending_stmt = session.execute.await_args_list[1].args[0]
+        pending_params = pending_stmt.compile().params
+        assert pending_params.get("status") == "pending"
+        assert pending_params.get("scheduled_at") == now
+        session.commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_reclaim_stale_running_rollback_on_error(self):
+        factory, session = _build_mock_session_factory()
+        session.execute.side_effect = RuntimeError("db down")
+        loader = DbTaskLoader(factory)
+        with pytest.raises(RuntimeError, match="db down"):
+            await loader.reclaim_stale_running(datetime.now(timezone.utc))
+        session.rollback.assert_awaited_once()
+
 
 # ---------------------------------------------------------------------------
 # DbTaskStatusWriter
@@ -256,6 +298,20 @@ class TestDbTaskStatusWriter:
         params = stmt.compile().params
         assert params.get("status") == "failed"
         assert params.get("last_error") == {"code": "EXECUTOR_FALSE", "message": "x"}
+
+    @pytest.mark.asyncio
+    async def test_mark_pending_reschedules(self):
+        """W3：mark_pending 把任务退回 pending 并推迟 scheduled_at。"""
+        factory, session = _build_mock_session_factory()
+        writer = DbTaskStatusWriter(factory)
+        task = _make_task_like()
+        retry_at = datetime.now(timezone.utc)
+        await writer.mark_pending(task, retry_at)
+        stmt = session.execute.call_args.args[0]
+        params = stmt.compile().params
+        assert params.get("status") == "pending"
+        assert params.get("scheduled_at") == retry_at
+        session.commit.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -505,28 +561,26 @@ class TestDeviceTaskExecutor:
         # 没 session_factory → 不写 DB → 不发通知
         assert notifier_calls == []
 
-    # ---- Phase 2a #7：熔断器 ----
+    # ---- Phase 2a #7 → W3：按设备分桶熔断器 ----
 
     @pytest.mark.asyncio
-    async def test_circuit_open_skips_dispatch_and_notifies(self):
-        """熔断打开时直接 return False，且发 agent.alert 通知。"""
-        from matrix.scheduler.circuit_breaker import CircuitBreaker
+    async def test_circuit_open_raises_circuit_open(self):
+        """该设备熔断打开时抛 CircuitOpen（由调度器退回 pending），不发告警、不调适配器。"""
+        from matrix.scheduler.circuit_breaker import (
+            CircuitOpen,
+            PerDeviceCircuitBreaker,
+        )
 
-        breaker = CircuitBreaker(window=600, threshold=2, cool_off=60)
-        breaker.record_failure()
-        breaker.record_failure()  # 触发熔断
-        assert breaker.is_open() is True
-
+        breaker = PerDeviceCircuitBreaker(window=600, threshold=2, cool_off=60)
         notifier_calls: list[tuple[str, dict]] = []
 
         async def fake_notifier(code: str, payload: dict) -> None:
             notifier_calls.append((code, payload))
 
         pub = _FakePublisher(ok=True)
-        col = _FakeCollector(metrics={"views": 10})
         executor = DeviceTaskExecutor(
             device_publisher=pub,
-            device_collector=col,
+            device_collector=_FakeCollector(),
             notifier=fake_notifier,
             breaker=breaker,
         )
@@ -534,21 +588,101 @@ class TestDeviceTaskExecutor:
             action="device_publish",
             payload={"title": "t", "content": "c", "images": [], "tags": []},
         )
-        # publisher/collector 不应被调用
-        assert await executor.execute(task) is False
+        # 把该设备熔断（threshold=2）
+        breaker.record_failure(task.device_id)
+        breaker.record_failure(task.device_id)
+        assert breaker.is_open(task.device_id) is True
+
+        with pytest.raises(CircuitOpen) as exc_info:
+            await executor.execute(task)
+        # 携带冷却剩余秒数，供调度器推迟 scheduled_at
+        assert 0 < exc_info.value.retry_after <= 60
+        # publisher 不应被调用；打开期间不刷告警
         assert pub.calls == []
-        # 发了熔断告警
-        assert len(notifier_calls) == 1
-        assert notifier_calls[0][0] == "agent.alert"
-        assert notifier_calls[0][1]["code"] == "CIRCUIT_OPEN"
-        assert notifier_calls[0][1]["severity"] == "warning"
+        assert notifier_calls == []
+
+    @pytest.mark.asyncio
+    async def test_circuit_is_per_device(self):
+        """A 设备熔断不连坐 B 设备。"""
+        from matrix.scheduler.circuit_breaker import (
+            CircuitOpen,
+            PerDeviceCircuitBreaker,
+        )
+
+        breaker = PerDeviceCircuitBreaker(window=600, threshold=2, cool_off=60)
+        pub = _FakePublisher(ok=True)
+        executor = DeviceTaskExecutor(
+            device_publisher=pub,
+            device_collector=_FakeCollector(),
+            breaker=breaker,
+        )
+        task_a = _make_task_like(action="device_publish", payload={"title": "t"})
+        task_b = _make_task_like(action="device_publish", payload={"title": "t"})
+        assert task_a.device_id != task_b.device_id
+
+        breaker.record_failure(task_a.device_id)
+        breaker.record_failure(task_a.device_id)
+
+        with pytest.raises(CircuitOpen):
+            await executor.execute(task_a)
+        # B 设备正常执行
+        assert await executor.execute(task_b) is True
+        assert len(pub.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_circuit_open_alert_only_on_transition(self):
+        """closed→open 边界每设备只告警一次；打开后继续失败不再刷。"""
+        from matrix.scheduler.circuit_breaker import PerDeviceCircuitBreaker
+
+        breaker = PerDeviceCircuitBreaker(window=600, threshold=2, cool_off=60)
+        notifier_calls: list[tuple[str, dict]] = []
+
+        async def fake_notifier(code: str, payload: dict) -> None:
+            notifier_calls.append((code, payload))
+
+        executor = DeviceTaskExecutor(
+            device_publisher=_FakePublisher(ok=False, error_code="RISK_BLOCKED"),
+            device_collector=_FakeCollector(),
+            notifier=fake_notifier,
+            breaker=breaker,
+        )
+        task = _make_task_like(action="device_publish", payload={"title": "t"})
+        # 第 1 次失败：未熔断，无告警
+        assert await executor.execute(task) is False
+        assert notifier_calls == []
+        # 第 2 次失败：触发熔断 → 恰好一条 CIRCUIT_OPEN 告警
+        assert await executor.execute(task) is False
+        alerts = [c for c in notifier_calls if c[1].get("code") == "CIRCUIT_OPEN"]
+        assert len(alerts) == 1
+        assert alerts[0][0] == "agent.alert"
+        assert alerts[0][1]["severity"] == "warning"
+        assert alerts[0][1]["device_id"] == str(task.device_id)
+
+    @pytest.mark.asyncio
+    async def test_plain_circuit_breaker_wrapped_as_template(self):
+        """向后兼容：传单个 CircuitBreaker 时按其参数包装成按设备分桶。"""
+        from matrix.scheduler.circuit_breaker import (
+            CircuitBreaker,
+            PerDeviceCircuitBreaker,
+        )
+
+        template = CircuitBreaker(window=300, threshold=10, cool_off=1800)
+        executor = DeviceTaskExecutor(
+            device_publisher=_FakePublisher(),
+            device_collector=_FakeCollector(),
+            breaker=template,
+        )
+        assert isinstance(executor._breaker, PerDeviceCircuitBreaker)
+        assert executor._breaker.window == 300
+        assert executor._breaker.threshold == 10
+        assert executor._breaker.cool_off == 1800
 
     @pytest.mark.asyncio
     async def test_failure_records_to_breaker(self):
-        """publish 失败要喂给 breaker。"""
-        from matrix.scheduler.circuit_breaker import CircuitBreaker
+        """publish 失败要喂给该设备的 breaker 分桶。"""
+        from matrix.scheduler.circuit_breaker import PerDeviceCircuitBreaker
 
-        breaker = CircuitBreaker(window=600, threshold=10, cool_off=60)
+        breaker = PerDeviceCircuitBreaker(window=600, threshold=10, cool_off=60)
         executor = DeviceTaskExecutor(
             device_publisher=_FakePublisher(ok=False, error_code="RISK_BLOCKED"),
             device_collector=_FakeCollector(),
@@ -559,16 +693,17 @@ class TestDeviceTaskExecutor:
             payload={"title": "t", "content": "c", "images": [], "tags": []},
         )
         assert await executor.execute(task) is False
-        assert len(breaker.failures) == 1
+        bucket = breaker._bucket(task.device_id)
+        assert len(bucket.failures) == 1
         # 没到 threshold → 还没熔
-        assert breaker.is_open() is False
+        assert breaker.is_open(task.device_id) is False
 
     @pytest.mark.asyncio
     async def test_success_does_not_record_to_breaker(self):
         """成功不喂 breaker。"""
-        from matrix.scheduler.circuit_breaker import CircuitBreaker
+        from matrix.scheduler.circuit_breaker import PerDeviceCircuitBreaker
 
-        breaker = CircuitBreaker(window=600, threshold=10, cool_off=60)
+        breaker = PerDeviceCircuitBreaker(window=600, threshold=10, cool_off=60)
         executor = DeviceTaskExecutor(
             device_publisher=_FakePublisher(ok=True),
             device_collector=_FakeCollector(),
@@ -579,12 +714,12 @@ class TestDeviceTaskExecutor:
             payload={"title": "t", "content": "c", "images": [], "tags": []},
         )
         assert await executor.execute(task) is True
-        assert breaker.failures == []
+        assert breaker._bucket(task.device_id).failures == []
 
     @pytest.mark.asyncio
     async def test_unhandled_exception_records_failure_and_notifies(self):
         """适配器抛异常 → 记录失败 + 发 ERROR 通知，绝不传给 worker。"""
-        from matrix.scheduler.circuit_breaker import CircuitBreaker
+        from matrix.scheduler.circuit_breaker import PerDeviceCircuitBreaker
 
         class BoomPublisher:
             def __init__(self):
@@ -594,7 +729,7 @@ class TestDeviceTaskExecutor:
                 self.calls += 1
                 raise RuntimeError("apk timed out")
 
-        breaker = CircuitBreaker(window=600, threshold=10, cool_off=60)
+        breaker = PerDeviceCircuitBreaker(window=600, threshold=10, cool_off=60)
         notifier_calls: list[tuple[str, dict]] = []
 
         async def fake_notifier(code: str, payload: dict) -> None:
@@ -609,8 +744,8 @@ class TestDeviceTaskExecutor:
         )
         task = _make_task_like(action="device_publish", payload={"title": "t"})
         assert await executor.execute(task) is False
-        # 喂给 breaker 一次
-        assert len(breaker.failures) == 1
+        # 喂给该设备分桶一次
+        assert len(breaker._bucket(task.device_id).failures) == 1
         # 发了一条 EXECUTOR_EXCEPTION 告警
         assert len(notifier_calls) == 1
         assert notifier_calls[0][0] == "agent.alert"

@@ -1,14 +1,14 @@
 """生产 APK endpoint 解析与主控侧 HMAC 密钥读取。"""
 from __future__ import annotations
 
-import base64
 import os
 from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from matrix.db.models import AppConfig, Device
+from matrix.db.models import Device
+from matrix.device.api import _load_secret_for_verify
 
 
 @dataclass(frozen=True)
@@ -36,16 +36,11 @@ class DeviceEndpointResolver:
             if not device.hmac_key_id:
                 raise RuntimeError(f"device {device_id} has no active HMAC key")
 
-            secret_row = await session.get(AppConfig, f"hmac_secret:{device.hmac_key_id}")
-            secret_b64 = (secret_row.value or {}).get("secret") if secret_row else None
-            if not isinstance(secret_b64, str):
+            # 与 verify_hmac 共用同一份解密逻辑：新格式信封加密
+            # （{"v":1,"enc_secret":...}），旧格式明文读到时懒迁移。
+            secret = await _load_secret_for_verify(session, device.hmac_key_id)
+            if secret is None:
                 raise RuntimeError(f"device {device_id} HMAC secret is unavailable")
-            try:
-                secret = base64.b64decode(secret_b64, validate=True)
-            except (ValueError, TypeError) as exc:
-                raise RuntimeError(f"device {device_id} HMAC secret is invalid") from exc
-            if not secret:
-                raise RuntimeError(f"device {device_id} HMAC secret is empty")
 
             # dev 环境（macOS Docker Desktop）下容器无法直连手机 WiFi IP；
             # 经 adb forward + host.docker.internal 才可达。设环境变量

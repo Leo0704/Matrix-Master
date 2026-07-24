@@ -11,7 +11,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { QrCode, Copy } from 'lucide-react';
+import { Copy, KeyRound } from 'lucide-react';
 import { useRegisterDevice } from '@/hooks/use-devices';
 import { useActiveBusinessId } from '@/stores/ui-store';
 import { toast } from '@/components/ui/use-toast';
@@ -122,13 +122,10 @@ export function AddDeviceDialog({ trigger }: { trigger?: React.ReactNode }) {
             <DialogHeader>
               <DialogTitle>手机端配对</DialogTitle>
               <DialogDescription>
-                在 companion 客户端中输入 6 位配对码，或扫描下方二维码。10 分钟内有效。
+                在 companion 客户端里手动输入下方 8 位配对码。10 分钟内有效。
               </DialogDescription>
             </DialogHeader>
             <div className="flex flex-col items-center gap-4 py-4">
-              <div className="flex h-32 w-32 items-center justify-center rounded-md border-2 border-dashed bg-muted">
-                <QrCode className="h-16 w-16 text-muted-foreground" />
-              </div>
               <div className="flex items-center gap-2 rounded-md border bg-muted px-4 py-2 font-mono text-2xl tracking-widest">
                 {pairCode}
                 <Button
@@ -142,7 +139,10 @@ export function AddDeviceDialog({ trigger }: { trigger?: React.ReactNode }) {
                   <Copy className="h-4 w-4" />
                 </Button>
               </div>
-              <p className="text-xs text-muted-foreground">等待手机端确认…</p>
+              <p className="flex items-center text-xs text-muted-foreground">
+                <KeyRound className="mr-1 h-3 w-3" />
+                把这串数字输进手机客户端，等待手机端确认…
+              </p>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setOpen(false)}>

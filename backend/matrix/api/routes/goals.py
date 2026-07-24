@@ -27,7 +27,6 @@ from matrix.api.schemas import (
 )
 from matrix.db.models import Goal as GoalORM, GoalRound as GoalRoundORM
 from matrix.monitoring.logging import get_logger
-from matrix.monitoring.tracing import trace_agent_run
 
 logger = get_logger(__name__)
 
@@ -249,11 +248,5 @@ async def create_goal(
         type=g.type,
         notes_per_round=g.notes_per_round,
     )
-    # 包裹一个 trace span（不阻塞主流程，失败仅记录）
-    try:
-        with trace_agent_run(str(g.id), goal=f"{g.type}:{g.id}"):
-            pass
-    except Exception:  # pragma: no cover - tracing 失败不影响业务
-        logger.exception("trace_agent_run failed")
 
     return _to_schema(g)

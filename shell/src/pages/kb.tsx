@@ -29,6 +29,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/use-toast';
+import { useActiveBusinessId } from '@/stores/ui-store';
 import type { KbDocument, KbDocumentCreate, KbType } from '@/types/api';
 
 const KB_TYPE_LABEL: Record<KbType, string> = {
@@ -417,6 +418,7 @@ function TypeForm({ ktype, onCancel }: {
   ktype: 'brand' | 'persona' | 'history';
   onCancel: () => void;
 }) {
+  const activeBusinessId = useActiveBusinessId();
   const uploadMut = useUploadKbDocument();
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState<string>('');
@@ -436,7 +438,13 @@ function TypeForm({ ktype, onCancel }: {
   async function handleUpload() {
     if (!file) return;
     try {
-      const doc = await uploadMut.mutateAsync({ file, type: ktype, title: title || undefined, is_published: true });
+      const doc = await uploadMut.mutateAsync({
+        file,
+        type: ktype,
+        title: title || undefined,
+        is_published: true,
+        business_id: activeBusinessId ?? undefined,  // v0.7+ 业务归属
+      });
       toast({ title: '上传成功', description: `${doc.title} 已发布，人工智能现在能用` });
       setFile(null); setTitle(''); onCancel();
     } catch (e) {

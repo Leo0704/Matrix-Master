@@ -33,8 +33,6 @@ from matrix.device.pair_codes import (
     finalize_pair_code as _finalize_pair_code,
     issue_pair_code as _issue_pair_code,
     restore_pair_code as _restore_pair_code,
-    _codes,
-    _purge_expired,
 )
 from matrix.monitoring.logging import get_logger
 
@@ -188,33 +186,14 @@ async def issue_pair_code_endpoint(
     if d is None or d.deleted_at is not None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
     code = _issue_pair_code(device_id)
-    logger.info("admin.issue_pair_code", device_id=str(device_id), code=code)
+    # 配对码本身不落日志（码=可领取 HMAC 密钥的凭证），只记设备维度
+    logger.info("admin.issue_pair_code", device_id=str(device_id))
     return DevicePairResponse(
         device_id=device_id,
-        key_id=f"admin-issued-{code}",
+        key_id="admin-issued",  # 真 key_id 在 pair 时才签发；此处不嵌配对码
         hmac_key="",  # 不下发 secret，等 pair 时真发
         pair_code=code,
     )
-
-
-@router.get("/{device_id}/_debug_pair_codes", response_model=dict)
-async def debug_pair_codes(device_id: uuid.UUID) -> dict:
-    """P2-1 测试期：返回当前磁盘上的配对码内容（_codes 现为每次重读磁盘）。
-
-    历史：曾返回 uvicorn 进程内 _pair_codes_cache，但该缓存从不刷新
-    导致新生成的码在同进程里不可见；现已移除进程内缓存、以文件为唯一源。
-    """
-    cache = _codes()
-    purged = _purge_expired(cache)
-    return {
-        "device_id": str(device_id),
-        "cache_size": len(cache),
-        "cache_after_purge_size": len(purged),
-        "cache_keys": list(cache.keys()),
-        "file_exists": _PAIR_CODES_PATH.exists(),
-        "file_content": _PAIR_CODES_PATH.read_text() if _PAIR_CODES_PATH.exists() else None,
-        "now_wall": time.time(),
-    }
 
 
 @router.post("", response_model=Device, status_code=status.HTTP_201_CREATED)
